@@ -26,6 +26,7 @@
     </form>
     <select id="layer-select" title="Map layer"></select>
     <button class="btn" id="layer-settings-btn" title="API keys for keyed map layers">Keys</button>
+    <button class="btn" id="offline-btn" title="Download visible map area for offline use">Offline</button>
     <button class="btn swatch-btn" id="accent-settings-btn" title="Accent colour"><span id="accent-swatch"></span>Accent</button>
     <a class="btn" href="/api/export/geojson" target="_blank" rel="noopener">Export</a>
   </header>
@@ -135,6 +136,33 @@
       <div class="dialog-actions">
         <button class="btn" id="app-dialog-cancel" value="cancel">Cancel</button>
         <button class="btn primary" id="app-dialog-ok" value="default">OK</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="offline-dialog">
+    <form method="dialog" id="offline-form">
+      <h2>Download Offline Map</h2>
+      <p class="dialog-note">Downloads the current visible map area into a local MBTiles file under <code>/home/slofi/maps/mbtiles</code>.</p>
+      <label>Name
+        <input id="offline-name" maxlength="90" value="Current view">
+      </label>
+      <div class="split-fields">
+        <label>Min zoom
+          <input id="offline-min-zoom" type="number" min="0" max="22" value="10">
+        </label>
+        <label>Max zoom
+          <input id="offline-max-zoom" type="number" min="0" max="22" value="14">
+        </label>
+      </div>
+      <div id="offline-estimate" class="field-help">Estimate unavailable.</div>
+      <div id="offline-progress" class="progress-wrap" hidden>
+        <div id="offline-progress-bar"></div>
+      </div>
+      <div id="offline-status"></div>
+      <div class="dialog-actions">
+        <button class="btn" value="cancel">Close</button>
+        <button class="btn primary" id="offline-download-btn" type="button">Download</button>
       </div>
     </form>
   </dialog>

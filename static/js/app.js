@@ -16,6 +16,7 @@ const state = {
   magnifierRaf: 0,
   magnifierLastUpdate: 0,
   searchMarker: null,
+  offlinePoll: 0,
 };
 
 const el = (id) => document.getElementById(id);
@@ -697,6 +698,126 @@ function resetAccent() {
   applyAccentColor(DEFAULT_ACCENT);
 }
 
+function currentLayerOption() {
+  return [...el("layer-select").options].find((o) => o.value === state.activeLayerValue);
+}
+
+function currentLayerDownloadDef() {
+  const opt = currentLayerOption();
+  if (!opt || state.activeLayerValue.startsWith("local:")) return null;
+  const rawUrl = opt.dataset.url || "";
+  return {
+    name: opt.textContent || "Map layer",
+    url: resolveTileUrl(rawUrl, opt.textContent || "selected layer"),
+    attribution: opt.dataset.attr || "",
+    maxzoom: Number(opt.dataset.maxzoom || 19),
+    format: rawUrl.includes(".jpg") || rawUrl.includes(".jpeg") ? "jpg" : "png",
+  };
+}
+
+function currentBoundsPayload() {
+  const b = state.map.getBounds();
+  return {
+    south: b.getSouth(),
+    west: b.getWest(),
+    north: b.getNorth(),
+    east: b.getEast(),
+  };
+}
+
+async function updateOfflineEstimate() {
+  const layer = currentLayerDownloadDef();
+  const estimate = el("offline-estimate");
+  if (!layer) {
+    estimate.textContent = "Select an online layer first. Local MBTiles do not need downloading again.";
+    el("offline-download-btn").disabled = true;
+    return;
+  }
+  const minZoom = Number(el("offline-min-zoom").value || state.map.getZoom());
+  const maxZoom = Number(el("offline-max-zoom").value || state.map.getZoom());
+  try {
+    const data = await api("/api/download-estimate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...currentBoundsPayload(), min_zoom: minZoom, max_zoom: maxZoom }),
+    });
+    estimate.textContent = `${data.tiles.toLocaleString()} tiles selected. Limit: ${data.limit.toLocaleString()}.`;
+    el("offline-download-btn").disabled = !data.ok;
+  } catch (err) {
+    estimate.textContent = err.message;
+    el("offline-download-btn").disabled = true;
+  }
+}
+
+function openOfflineDialog() {
+  const zoom = Math.round(state.map.getZoom());
+  el("offline-min-zoom").value = Math.max(0, zoom - 1);
+  el("offline-max-zoom").value = Math.min(18, zoom + 2);
+  el("offline-name").value = `Map ${new Date().toISOString().slice(0, 10)}`;
+  el("offline-status").textContent = "";
+  el("offline-progress").hidden = true;
+  el("offline-progress-bar").style.width = "0";
+  el("offline-dialog").showModal();
+  updateOfflineEstimate();
+}
+
+async function pollOfflineJob(jobId) {
+  const job = await api(`/api/downloads/${jobId}`);
+  const pct = job.total ? Math.round((job.done / job.total) * 100) : 0;
+  el("offline-progress").hidden = false;
+  el("offline-progress-bar").style.width = `${pct}%`;
+  el("offline-status").textContent = `${job.status}: ${job.done}/${job.total} tiles, ${job.saved} saved, ${job.failed} failed`;
+  if (job.status === "done") {
+    clearInterval(state.offlinePoll);
+    state.offlinePoll = 0;
+    el("offline-download-btn").disabled = false;
+    await loadLayers();
+    el("offline-status").textContent = `Done. Saved ${job.saved} tiles. Local layer list refreshed.`;
+  } else if (job.status === "error") {
+    clearInterval(state.offlinePoll);
+    state.offlinePoll = 0;
+    el("offline-download-btn").disabled = false;
+    el("offline-status").textContent = `Failed: ${job.error || "unknown error"}`;
+  }
+}
+
+async function startOfflineDownload() {
+  const layer = currentLayerDownloadDef();
+  if (!layer) {
+    await appAlert("Select an online map layer before downloading.", "Offline Maps");
+    return;
+  }
+  el("offline-download-btn").disabled = true;
+  const minZoom = Number(el("offline-min-zoom").value || state.map.getZoom());
+  const maxZoom = Number(el("offline-max-zoom").value || state.map.getZoom());
+  try {
+    const job = await api("/api/downloads", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...currentBoundsPayload(),
+        min_zoom: minZoom,
+        max_zoom: maxZoom,
+        name: el("offline-name").value.trim() || "Offline map",
+        layer_name: layer.name,
+        url: layer.url,
+        attribution: layer.attribution,
+        format: layer.format,
+      }),
+    });
+    el("offline-progress").hidden = false;
+    el("offline-status").textContent = `Started: ${job.total} tiles.`;
+    if (state.offlinePoll) clearInterval(state.offlinePoll);
+    state.offlinePoll = setInterval(() => pollOfflineJob(job.id).catch((err) => {
+      el("offline-status").textContent = err.message;
+    }), 1000);
+    await pollOfflineJob(job.id);
+  } catch (err) {
+    el("offline-download-btn").disabled = false;
+    await appAlert(err.message, "Download Failed");
+  }
+}
+
 function hideSearchResults() {
   const box = el("search-results");
   box.hidden = true;
@@ -807,6 +928,10 @@ function bindUi() {
   el("accent-settings-btn").onclick = openAccentSettings;
   el("accent-form").onsubmit = saveAccent;
   el("accent-reset-btn").onclick = resetAccent;
+  el("offline-btn").onclick = openOfflineDialog;
+  el("offline-min-zoom").onchange = updateOfflineEstimate;
+  el("offline-max-zoom").onchange = updateOfflineEstimate;
+  el("offline-download-btn").onclick = startOfflineDownload;
   el("search-form").onsubmit = runSearch;
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && state.tool) clearTool();

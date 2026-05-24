@@ -32,6 +32,11 @@ Initial scaffold built. The app runs independently on Flask and stores its own d
   - backend proxies OpenStreetMap Nominatim with a Map App User-Agent
   - results are app-native and selecting a result pans/zooms the map
 - Local MBTiles catalog and tile endpoint: `/tiles/<layer>/<z>/<x>/<y>.png`.
+- Offline map downloader:
+  - toolbar `Offline` dialog downloads the current visible map area from the selected online base layer
+  - writes standard MBTiles into `/home/slofi/maps/mbtiles/`
+  - exposes completed downloads through `/api/tile-layers` and `/tiles/<layer>/<z>/<x>/<y>.png`
+  - adds CORS headers so local OM can consume the catalog and tile endpoint on the CD
 - Custom markers owned by Map App:
   - add
   - edit
@@ -55,13 +60,12 @@ Initial scaffold built. The app runs independently on Flask and stores its own d
 
 ## Pending
 
-- Add real offline map download/import UI.
 - Decide whether to use MBTiles only or also support PMTiles.
 - Add GPX/KML import/export.
 - Add marker categories, filters, and styling.
 - Add route profile / segment list for ruler paths.
 - Add optional GPS marker endpoint/client once CD/HD GPS source is decided.
-- Later: make OM consume Map App markers and tiles read-only.
+- Later: make OM consume Map App markers read-only.
 - Later: implement "Share via OM" by calling OM's waypoint API from Map App controls.
 
 ## Design Rule

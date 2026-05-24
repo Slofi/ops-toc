@@ -330,6 +330,31 @@ textarea { resize: vertical; }
   color: var(--muted);
   font-size: 11px;
 }
+.split-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+#offline-status {
+  min-height: 18px;
+  color: var(--accent);
+  font-size: 12px;
+  margin-top: 8px;
+}
+.progress-wrap {
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  margin-top: 10px;
+}
+#offline-progress-bar {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.2s;
+}
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 
 @media (max-width: 760px) {
