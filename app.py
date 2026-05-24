@@ -28,6 +28,7 @@ PORT = int(os.environ.get("MAP_APP_PORT", "8090"))
 app = Flask(__name__)
 download_jobs: dict[str, dict[str, Any]] = {}
 download_lock = threading.Lock()
+_cancelled_jobs: set[str] = set()
 
 
 @app.after_request
@@ -191,6 +192,9 @@ def list_mbtiles() -> list[dict[str, Any]]:
                 "maxzoom": int(meta.get("maxzoom") or 18),
                 "bounds": meta.get("bounds") or "",
                 "size": path.stat().st_size if path.exists() else 0,
+                "source_url": meta.get("source_url") or "",
+                "source_layer_name": meta.get("source_layer_name") or "",
+                "mtime": path.stat().st_mtime if path.exists() else 0,
             }
         )
     return layers
@@ -349,6 +353,12 @@ def run_download_job(job_id: str, payload: dict[str, Any]) -> None:
                 if idx % 25 == 0:
                     conn.commit()
                 update_job(job_id, done=idx, saved=saved, failed=failed)
+                if job_id in _cancelled_jobs:
+                    conn.commit()
+                    tmp_path.replace(path)
+                    _cancelled_jobs.discard(job_id)
+                    update_job(job_id, status="cancelled", finished_at=now_ts())
+                    return
             conn.commit()
         tmp_path.replace(path)
         update_job(job_id, status="done", done=len(tiles), saved=saved, failed=failed, path=str(path), finished_at=now_ts())
@@ -739,6 +749,10 @@ def api_create_download():
         "maxzoom": str(max_zoom),
         "bounds": f"{bounds['west']},{bounds['south']},{bounds['east']},{bounds['north']}",
         "attribution": _clean_text(payload.get("attribution"), 260),
+        "source_url": url,
+        "source_min_zoom": str(min_zoom),
+        "source_max_zoom": str(max_zoom),
+        "source_layer_name": layer_name,
     }
     job_id = uuid.uuid4().hex[:12]
     job = {
@@ -992,6 +1006,75 @@ def api_om_share_marker(marker_id: int):
 
 init_db()
 
+
+
+@app.route("/api/downloads/<job_id>/cancel", methods=["POST"])
+def api_cancel_download(job_id):
+    with download_lock:
+        job = download_jobs.get(job_id)
+        if not job:
+            return jsonify({"error": "Job not found"}), 404
+        if job.get("status") != "running":
+            return jsonify({"error": "Job not running"}), 400
+    _cancelled_jobs.add(job_id)
+    return jsonify({"ok": True})
+
+@app.route("/api/tile-layers/<layer_id>", methods=["DELETE"])
+def api_delete_tile_layer(layer_id):
+    layer = find_mbtiles(layer_id)
+    if not layer:
+        return jsonify({"error": "Tileset not found"}), 404
+    path = Path(layer["path"])
+    if MBTILES_DIR not in path.parents:
+        return jsonify({"error": "Cannot delete this tileset"}), 403
+    path.unlink(missing_ok=True)
+    return jsonify({"ok": True})
+
+@app.route("/api/tile-layers/<layer_id>/refresh", methods=["POST"])
+def api_refresh_tile_layer(layer_id):
+    layer = find_mbtiles(layer_id)
+    if not layer:
+        return jsonify({"error": "Tileset not found"}), 404
+    path = Path(layer["path"])
+    if MBTILES_DIR not in path.parents:
+        return jsonify({"error": "Cannot refresh this tileset"}), 403
+    url = layer.get("source_url", "")
+    if not url or "{z}" not in url:
+        return jsonify({"error": "No source URL stored for this tileset"}), 400
+    bounds_str = layer.get("bounds", "")
+    try:
+        west, south, east, north = [float(v) for v in bounds_str.split(",")]
+    except Exception:
+        return jsonify({"error": "No bounds stored for this tileset"}), 400
+    bounds = {"south": south, "west": west, "north": north, "east": east}
+    min_zoom = int(layer.get("minzoom", 0))
+    max_zoom = int(layer.get("maxzoom", 14))
+    tiles = tiles_for_bounds(bounds, min_zoom, max_zoom)
+    if not tiles:
+        return jsonify({"error": "No tiles in area"}), 400
+    name = layer.get("name", "Offline map")
+    layer_name = layer.get("source_layer_name", "Map layer")
+    fmt = layer.get("format", "png")
+    metadata = {
+        "name": name, "type": "baselayer", "version": "1",
+        "description": f"{layer_name} offline tiles from Map App",
+        "format": fmt, "minzoom": str(min_zoom), "maxzoom": str(max_zoom),
+        "bounds": bounds_str, "source_url": url,
+        "source_min_zoom": str(min_zoom), "source_max_zoom": str(max_zoom),
+        "source_layer_name": layer_name,
+    }
+    job_id = uuid.uuid4().hex[:12]
+    job = {"id": job_id, "status": "running", "name": name, "layer_name": layer_name,
+           "total": len(tiles), "done": 0, "saved": 0, "failed": 0, "created_at": now_ts()}
+    with download_lock:
+        download_jobs[job_id] = job
+    thread = threading.Thread(
+        target=run_download_job,
+        args=(job_id, {"tiles": tiles, "path": str(path), "url": url, "metadata": metadata}),
+        daemon=True,
+    )
+    thread.start()
+    return jsonify(job)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT, debug=False)

@@ -439,3 +439,14 @@ textarea { resize: vertical; }
     box-shadow: 4px 0 16px rgba(0,0,0,0.45);
   }
 }
+
+.tileset-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border, rgba(255,255,255,0.08));
+}
+.tileset-row:last-child { border-bottom: none; }
+.tileset-info { flex: 1; min-width: 0; }

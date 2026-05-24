@@ -61,6 +61,27 @@ Initial scaffold built. The app runs independently on Flask and stores its own d
 - Future OM hook:
   - `POST /api/om/share-marker/<id>` exists as a placeholder and intentionally returns `501` until OM integration is designed.
 
+## Local CD Changes (not yet pushed to GitHub)
+
+The following changes exist on CD (`~/Projects/map-app/`) but have NOT been committed/pushed. Codex manages this repo — sync before it makes changes or they will be overwritten.
+
+- **Offline download UX overhaul:**
+  - Layer dropdown in Offline dialog (instead of using whatever's active on map)
+  - Cancel button — appears during download, calls `/api/downloads/<id>/cancel`
+  - "Downloaded Tilesets" section with Refresh and Delete per tileset
+  - `pollOfflineJob` handles `done`/`error`/`cancelled` — hides cancel btn, calls `loadTilesets()`
+- **Zoom section redesign:**
+  - Range clamped to z1–18 (was 0–22)
+  - Guide text: `6=country · 9=city/region · 12=streets · 14=detailed streets · 16=buildings`
+  - Preset buttons: Country (z6–10), Region (z9–14), Local (z12–16), Detail (z14–17)
+  - Live estimate update on `oninput` (was only `onchange`)
+- **Backend additions** (`app.py`):
+  - `POST /api/downloads/<id>/cancel`
+  - `DELETE /api/tile-layers/<id>`
+  - `POST /api/tile-layers/<id>/refresh`
+  - `source_url`, `source_layer_name`, `mtime` added to tile-layers response
+- **CSS:** `.tileset-row` styles added to `static/css/app.css`
+
 ## Pending
 
 - Decide whether to use MBTiles only or also support PMTiles.

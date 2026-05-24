@@ -18,6 +18,7 @@ const state = {
   searchMarker: null,
   offlinePoll: 0,
   offlineBounds: null,
+  offlineJobId: null,
 };
 
 const el = (id) => document.getElementById(id);
@@ -703,9 +704,13 @@ function currentLayerOption() {
 }
 
 function currentLayerDownloadDef() {
-  const opt = currentLayerOption();
-  if (!opt || state.activeLayerValue.startsWith("local:")) return null;
+  const offlineSel = el("offline-layer-select");
+  const opt = (offlineSel && offlineSel.options.length)
+    ? [...offlineSel.options].find((o) => o.value === offlineSel.value) || offlineSel.options[0]
+    : currentLayerOption();
+  if (!opt) return null;
   const rawUrl = opt.dataset.url || "";
+  if (!rawUrl || opt.value.startsWith("local:")) return null;
   return {
     name: opt.textContent || "Map layer",
     url: resolveTileUrl(rawUrl, opt.textContent || "selected layer"),
@@ -756,6 +761,23 @@ function prepareOfflineSection() {
   el("offline-max-zoom").value = Math.min(18, zoom + 2);
   el("offline-name").value = `Map ${new Date().toISOString().slice(0, 10)}`;
   el("offline-status").textContent = "";
+  const offlineSel = el("offline-layer-select");
+  if (offlineSel) {
+    const mainSel = el("layer-select");
+    offlineSel.innerHTML = "";
+    [...mainSel.options].forEach((opt) => {
+      if (opt.value.startsWith("local:") || !opt.dataset.url) return;
+      const o = document.createElement("option");
+      o.value = opt.value;
+      o.textContent = opt.textContent;
+      o.dataset.url = opt.dataset.url || "";
+      o.dataset.attr = opt.dataset.attr || "";
+      o.dataset.maxzoom = opt.dataset.maxzoom || "19";
+      if (opt.value === state.activeLayerValue) o.selected = true;
+      offlineSel.appendChild(o);
+    });
+  }
+  loadTilesets();
   el("offline-progress").hidden = true;
   el("offline-progress-bar").style.width = "0";
   useCurrentViewForOffline(false);
@@ -828,21 +850,26 @@ function selectOfflineRegion(result) {
 
 async function pollOfflineJob(jobId) {
   const job = await api(`/api/downloads/${jobId}`);
+  const cancelBtn = el("offline-cancel-btn");
   const pct = job.total ? Math.round((job.done / job.total) * 100) : 0;
   el("offline-progress").hidden = false;
   el("offline-progress-bar").style.width = `${pct}%`;
   el("offline-status").textContent = `${job.status}: ${job.done}/${job.total} tiles, ${job.saved} saved, ${job.failed} failed`;
-  if (job.status === "done") {
+  if (job.status === "done" || job.status === "error" || job.status === "cancelled") {
     clearInterval(state.offlinePoll);
     state.offlinePoll = 0;
+    state.offlineJobId = null;
     el("offline-download-btn").disabled = false;
-    await loadLayers();
-    el("offline-status").textContent = `Done. Saved ${job.saved} tiles. Local layer list refreshed.`;
-  } else if (job.status === "error") {
-    clearInterval(state.offlinePoll);
-    state.offlinePoll = 0;
-    el("offline-download-btn").disabled = false;
-    el("offline-status").textContent = `Failed: ${job.error || "unknown error"}`;
+    cancelBtn.hidden = true;
+    cancelBtn.disabled = false;
+    if (job.status === "done") {
+      el("offline-status").textContent = `Done. Saved ${job.saved} tiles.`;
+    } else if (job.status === "cancelled") {
+      el("offline-status").textContent = "Download cancelled.";
+    } else {
+      el("offline-status").textContent = `Failed: ${job.error || "unknown error"}`;
+    }
+    await loadTilesets();
   }
 }
 
@@ -872,6 +899,9 @@ async function startOfflineDownload() {
     });
     el("offline-progress").hidden = false;
     el("offline-status").textContent = `Started: ${job.total} tiles.`;
+    state.offlineJobId = job.id;
+    const cancelBtn = el("offline-cancel-btn");
+    if (cancelBtn) { cancelBtn.hidden = false; cancelBtn.disabled = false; }
     if (state.offlinePoll) clearInterval(state.offlinePoll);
     state.offlinePoll = setInterval(() => pollOfflineJob(job.id).catch((err) => {
       el("offline-status").textContent = err.message;
@@ -1060,7 +1090,10 @@ function bindUi() {
   el("accent-reset-btn").onclick = resetAccent;
   el("offline-min-zoom").onchange = updateOfflineEstimate;
   el("offline-max-zoom").onchange = updateOfflineEstimate;
+  el("offline-min-zoom").oninput = updateOfflineEstimate;
+  el("offline-max-zoom").oninput = updateOfflineEstimate;
   el("offline-download-btn").onclick = startOfflineDownload;
+  el("offline-cancel-btn").onclick = cancelOfflineDownload;
   el("offline-use-view-btn").onclick = () => useCurrentViewForOffline(true);
   el("offline-region-search-btn").onclick = searchOfflineRegions;
   el("offline-region-search").addEventListener("keydown", (event) => {
@@ -1093,3 +1126,76 @@ async function boot() {
 }
 
 boot().catch((err) => appAlert(err.message, "Startup Failed"));
+
+// ===== TILESET MANAGEMENT =====
+
+async function cancelOfflineDownload() {
+  if (!state.offlineJobId) return;
+  try {
+    await api(`/api/downloads/${state.offlineJobId}/cancel`, { method: "POST" });
+    el("offline-status").textContent = "Cancelling...";
+    el("offline-cancel-btn").disabled = true;
+  } catch (e) {
+    el("offline-status").textContent = "Cancel failed.";
+  }
+}
+
+async function loadTilesets() {
+  const list = el("tilesets-list");
+  if (!list) return;
+  try {
+    const layers = await api("/api/tile-layers");
+    const local = layers.filter((l) => l.source_url);
+    if (!local.length) {
+      list.innerHTML = '<p class="field-help" style="color:var(--muted)">No tilesets downloaded yet.</p>';
+      return;
+    }
+    list.innerHTML = local.map((l) => {
+      const mb = (l.size / 1024 / 1024).toFixed(1);
+      const date = l.mtime ? new Date(l.mtime * 1000).toLocaleDateString() : "—";
+      const zoom = `z${l.minzoom}–${l.maxzoom}`;
+      const sub = [l.source_layer_name, zoom, `${mb} MB`, date].filter(Boolean).join(" · ");
+      return `<div class="tileset-row">
+        <div class="tileset-info">
+          <div style="font-weight:600;font-size:13px">${l.name}</div>
+          <div class="field-help">${sub}</div>
+        </div>
+        <div style="display:flex;gap:6px;flex-shrink:0">
+          <button class="btn small" onclick="refreshTileset('${l.id}','${l.name.replace(/'/g,"\'")}')">Refresh</button>
+          <button class="btn small danger" onclick="deleteTileset('${l.id}','${l.name.replace(/'/g,"\'")}')">Delete</button>
+        </div>
+      </div>`;
+    }).join("");
+  } catch (e) {
+    list.innerHTML = '<p class="field-help" style="color:var(--muted)">Failed to load tilesets.</p>';
+  }
+}
+
+async function deleteTileset(layerId, name) {
+  const ok = await appConfirm(`Delete "${name}"? This cannot be undone.`, "Delete Tileset");
+  if (!ok) return;
+  try {
+    await api(`/api/tile-layers/${layerId}`, { method: "DELETE" });
+    await loadTilesets();
+    await loadMapAppTileLayers({ force: true });
+  } catch (e) {
+    await appAlert(`Delete failed: ${e.message}`, "Error");
+  }
+}
+
+async function refreshTileset(layerId, name) {
+  const ok = await appConfirm(`Re-download all tiles for "${name}"? This will overwrite the existing file.`, "Refresh Tileset");
+  if (!ok) return;
+  try {
+    const job = await api(`/api/tile-layers/${layerId}/refresh`, { method: "POST" });
+    await appAlert(`Refresh started: ${job.total} tiles. Close this dialog and re-open Offline Maps to monitor progress.`, "Refresh Started");
+  } catch (e) {
+    await appAlert(`Refresh failed: ${e.message}`, "Error");
+  }
+}
+
+function setZoomPreset(minZ, maxZ) {
+  el("offline-min-zoom").value = minZ;
+  el("offline-max-zoom").value = maxZ;
+  updateOfflineEstimate();
+}
