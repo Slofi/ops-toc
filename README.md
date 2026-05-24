@@ -33,12 +33,15 @@ Default data paths:
 
 - `GET /api/markers` - read custom markers for OM overlay.
 - `GET /api/tile-layers` - list local MBTiles and online layers.
-- `GET /tiles/<layer>/<z>/<x>/<y>.png` - shared local tile endpoint.
+- `GET /tiles/<layer>/<z>/<x>/<y>.png` - Map App's built-in local tile endpoint.
 - `GET /api/export/geojson` - export markers and drawings.
 - `POST /api/om/share-marker/<id>` - placeholder for later OM waypoint sharing.
 
-OM should initially consume markers and tiles read-only. Marker creation, editing,
-deletion, drawing, measurement, and export controls stay in Map App.
+Shared CD tiles are served for other apps by `mbtileserver` on port `8092`, reading
+the same `/home/slofi/maps/mbtiles/` directory Map App writes to. OM consumes that
+shared server only when its `Use shared local tile DB` setting is enabled.
+Marker creation, editing, deletion, drawing, measurement, and export controls stay
+in Map App.
 
 ## Online Layers
 

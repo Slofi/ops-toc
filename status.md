@@ -4,6 +4,9 @@ Standalone Leaflet map app for Cyberdeck, Hand-Deck, and future OverMesh integra
 
 ## Current State
 
+App running on CD as `map-app.service` (user systemd, NOT enabled — started via dashboard tile).
+Port 8090. venv at ~/Projects/map-app/venv. Data dir: ~/maps/.
+
 Initial scaffold built. The app runs independently on Flask and stores its own data in a shared map directory by default:
 
 - DB: `/home/slofi/maps/map_app.db`
@@ -36,7 +39,7 @@ Initial scaffold built. The app runs independently on Flask and stores its own d
   - toolbar `Offline` dialog downloads the current visible map area from the selected online base layer
   - writes standard MBTiles into `/home/slofi/maps/mbtiles/`
   - exposes completed downloads through `/api/tile-layers` and `/tiles/<layer>/<z>/<x>/<y>.png`
-  - adds CORS headers so local OM can consume the catalog and tile endpoint on the CD
+  - adds CORS headers for local app integration and diagnostics
 - Custom markers owned by Map App:
   - add
   - edit
@@ -67,6 +70,41 @@ Initial scaffold built. The app runs independently on Flask and stores its own d
 - Add optional GPS marker endpoint/client once CD/HD GPS source is decided.
 - Later: make OM consume Map App markers read-only.
 - Later: implement "Share via OM" by calling OM's waypoint API from Map App controls.
+
+## Shared Tile Server
+
+**Goal:** One tile DB for all CD apps — download once, use everywhere.
+
+**Current CD architecture:**
+```
+Map App (port 8090)             mbtileserver (port 8092)
+  Offline downloader       →    Reads /home/slofi/maps/mbtiles/
+  Tile manager                  Serves /services/<id>/tiles/{z}/{x}/{y}.png
+  Marker/drawing owner          user systemd, enabled on CD
+                                      ↓
+                         Sonde App, OM opt-in, future apps
+```
+
+**Implemented on CD:**
+- `mbtileserver` v0.11.0 installed at `~/.local/bin/mbtileserver`.
+- `mbtileserver.service` is a user systemd service, enabled, port `8092`, watching `/home/slofi/maps/mbtiles/`.
+- Map App downloads write MBTiles directly into `/home/slofi/maps/mbtiles/`.
+- Sonde App has a Local tile picker that reads `mbtileserver`.
+- OM has `Settings -> App -> Offline Maps -> Use shared local tile DB`.
+  - Default is off for GitHub/production safety.
+  - Enabled on the CD.
+  - When enabled, OM reads `mbtileserver` on the same host, port `8092`.
+  - When disabled, OM stays standalone with built-in layers and browser IndexedDB cache.
+
+**Key rule:** OM must stay fully standalone. Shared tile server is opt-in, not required.
+
+**Tile freshness:**
+- Map App tracks "downloaded on" timestamp per tileset
+- Local layers list shows age (e.g. "Slovenia · 47 days ago")
+- Refresh button per tileset re-downloads same area + zoom levels
+- "Refresh all" button with data estimate shown before confirming
+- Refresh is always manual — never automatic (data cap protection)
+- All apps pick up refreshed tiles immediately (shared DB)
 
 ## Design Rule
 
