@@ -20,6 +20,7 @@
     <button class="btn danger" id="cancel-tool-btn" hidden>Cancel</button>
     <span class="spacer"></span>
     <select id="layer-select" title="Map layer"></select>
+    <button class="btn" id="layer-settings-btn" title="API keys for keyed map layers">Keys</button>
     <a class="btn" href="/api/export/geojson" target="_blank" rel="noopener">Export</a>
   </header>
 
@@ -75,6 +76,26 @@
       <div class="dialog-actions">
         <button class="btn" value="cancel">Cancel</button>
         <button class="btn primary" id="marker-save-btn" value="default">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="layer-settings-dialog">
+    <form method="dialog" id="layer-settings-form">
+      <h2>Map Layer Keys</h2>
+      <p class="dialog-note">Keys are saved in this browser profile and use the same storage names as OverMesh.</p>
+      <label>Thunderforest API key
+        <input id="tf-api-key-input" autocomplete="off" spellcheck="false">
+      </label>
+      <p class="field-help">Used by TF Landscape, TF Outdoors, TF Pioneer, and TF Atlas.</p>
+      <label>MapTiler API key
+        <input id="mt-api-key-input" autocomplete="off" spellcheck="false">
+      </label>
+      <p class="field-help">Used by MT Satellite Hybrid, MT Topo, MT Streets, and MT Winter.</p>
+      <div id="layer-key-status"></div>
+      <div class="dialog-actions">
+        <button class="btn" value="cancel">Cancel</button>
+        <button class="btn primary" id="layer-key-save-btn" value="default">Save</button>
       </div>
     </form>
   </dialog>

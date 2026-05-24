@@ -14,6 +14,15 @@ Initial scaffold built. The app runs independently on Flask and stores its own d
 
 - Standalone Leaflet UI.
 - Online layers: Voyager, OpenStreetMap, Esri satellite, Positron.
+- Expanded online layer catalog copied from OM:
+  - OSM, CARTO Voyager/No Labels, Positron, Dark Matter/No Labels
+  - Esri Dark Gray, Satellite, Streets, Topo, Hillshade
+  - Stadia/Stamen Toner Lite, Toner Dark, Terrain, Stadia Outdoors
+  - Thunderforest Landscape/Outdoors/Pioneer/Atlas with API key support
+  - MapTiler Satellite Hybrid/Topo/Streets/Winter with API key support
+- API-key dialog in Map App stores keys in browser localStorage using the same keys as OM:
+  - `thunderforestApiKey`
+  - `mapTilerApiKey`
 - Local MBTiles catalog and tile endpoint: `/tiles/<layer>/<z>/<x>/<y>.png`.
 - Custom markers owned by Map App:
   - add

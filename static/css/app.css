@@ -210,6 +210,17 @@ input, textarea {
 }
 textarea { resize: vertical; }
 #marker-status { min-height: 18px; color: var(--red); font-size: 12px; margin-top: 8px; }
+#layer-key-status { min-height: 18px; color: var(--accent); font-size: 12px; margin-top: 8px; }
+.dialog-note {
+  margin: -4px 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.field-help {
+  margin: 4px 0 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 
 @media (max-width: 760px) {

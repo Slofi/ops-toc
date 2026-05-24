@@ -39,3 +39,15 @@ Default data paths:
 
 OM should initially consume markers and tiles read-only. Marker creation, editing,
 deletion, drawing, measurement, and export controls stay in Map App.
+
+## Online Layers
+
+Map App mirrors the OM online layer catalog, including CARTO, Esri, Stadia/Stamen,
+Thunderforest, and MapTiler layers. Thunderforest and MapTiler layers need API
+keys; use the `Keys` button in the toolbar. Keys are saved in browser
+localStorage with the same names OM uses:
+
+```text
+thunderforestApiKey
+mapTilerApiKey
+```

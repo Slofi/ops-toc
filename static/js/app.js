@@ -386,6 +386,7 @@ async function loadLayers() {
     opt.dataset.url = layer.url;
     opt.dataset.attr = layer.attribution;
     opt.dataset.maxzoom = layer.maxzoom;
+    opt.dataset.keyProvider = layer.key_provider || "";
     select.appendChild(opt);
   }
   const saved = localStorage.getItem("mapAppLayer");
@@ -393,6 +394,24 @@ async function loadLayers() {
     ? saved
     : (select.options[0]?.value || "online:voyager");
   setLayer(select.value);
+}
+
+function resolveTileUrl(url, layerName = "selected layer") {
+  if (url.includes("{apikey}")) {
+    const key = localStorage.getItem("thunderforestApiKey") || "";
+    if (!key) {
+      alert(`${layerName} needs a Thunderforest API key. Open Keys and save one first.`);
+    }
+    url = url.replace("{apikey}", encodeURIComponent(key));
+  }
+  if (url.includes("{mtapikey}")) {
+    const key = localStorage.getItem("mapTilerApiKey") || "";
+    if (!key) {
+      alert(`${layerName} needs a MapTiler API key. Open Keys and save one first.`);
+    }
+    url = url.replace("{mtapikey}", encodeURIComponent(key));
+  }
+  return url;
 }
 
 function setLayer(value) {
@@ -405,12 +424,31 @@ function setLayer(value) {
     }).addTo(state.map);
   } else {
     const opt = [...el("layer-select").options].find((o) => o.value === value);
-    state.baseLayer = L.tileLayer(opt?.dataset.url || "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png", {
+    const rawUrl = opt?.dataset.url || "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
+    state.baseLayer = L.tileLayer(resolveTileUrl(rawUrl, opt?.textContent || "selected layer"), {
       maxZoom: Number(opt?.dataset.maxzoom || 19),
       attribution: opt?.dataset.attr || "",
     }).addTo(state.map);
   }
   localStorage.setItem("mapAppLayer", value);
+}
+
+function openLayerSettings() {
+  el("tf-api-key-input").value = localStorage.getItem("thunderforestApiKey") || "";
+  el("mt-api-key-input").value = localStorage.getItem("mapTilerApiKey") || "";
+  el("layer-key-status").textContent = "";
+  el("layer-settings-dialog").showModal();
+}
+
+function saveLayerKeys(event) {
+  event.preventDefault();
+  localStorage.setItem("thunderforestApiKey", el("tf-api-key-input").value.trim());
+  localStorage.setItem("mapTilerApiKey", el("mt-api-key-input").value.trim());
+  el("layer-key-status").textContent = "Saved.";
+  setTimeout(() => {
+    el("layer-settings-dialog").close();
+    setLayer(el("layer-select").value);
+  }, 250);
 }
 
 function initMap() {
@@ -443,6 +481,8 @@ function bindUi() {
   el("cancel-tool-btn").onclick = clearTool;
   el("marker-form").onsubmit = saveMarker;
   el("layer-select").onchange = (event) => setLayer(event.target.value);
+  el("layer-settings-btn").onclick = openLayerSettings;
+  el("layer-settings-form").onsubmit = saveLayerKeys;
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && state.tool) clearTool();
     if (event.key === "Enter" && state.tool && state.toolPoints.length >= 2) finishTool();
