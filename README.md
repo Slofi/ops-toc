@@ -62,3 +62,9 @@ mapAppAccentColor
 ```
 
 Map App derives readable accent and dim active-state colours the same way OM does.
+
+## Place Search
+
+The toolbar search box calls Map App's backend `/api/search` route. The backend
+queries OpenStreetMap Nominatim with a Map App User-Agent and returns app-native
+results; choosing a result pans/zooms the map and drops a temporary search marker.

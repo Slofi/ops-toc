@@ -27,6 +27,10 @@ Initial scaffold built. The app runs independently on Flask and stores its own d
   - toolbar `Accent` button opens a colour picker dialog
   - stored in browser localStorage as `mapAppAccentColor`
   - uses OM-style HSL normalization for readable `--accent` and dim active-state background
+- Place search:
+  - toolbar search calls `/api/search`
+  - backend proxies OpenStreetMap Nominatim with a Map App User-Agent
+  - results are app-native and selecting a result pans/zooms the map
 - Local MBTiles catalog and tile endpoint: `/tiles/<layer>/<z>/<x>/<y>.png`.
 - Custom markers owned by Map App:
   - add
@@ -41,7 +45,9 @@ Initial scaffold built. The app runs independently on Flask and stores its own d
   - `Undo Last` removes the most recent in-progress point
   - Backspace/Delete also remove the most recent in-progress point
   - ruler/line/area placement uses a crosshair cursor
+  - marker/ruler/line/area placement shows a circular magnifier following the pointer
   - saved drawings in SQLite
+- App-native dialogs replace browser `alert`, `confirm`, and `prompt` flows.
 - Export:
   - `GET /api/export/geojson` exports markers and drawings.
 - Future OM hook:

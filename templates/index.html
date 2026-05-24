@@ -20,6 +20,10 @@
     <button class="btn" id="finish-tool-btn" hidden>Finish</button>
     <button class="btn danger" id="cancel-tool-btn" hidden>Cancel</button>
     <span class="spacer"></span>
+    <form id="search-form" role="search">
+      <input id="search-input" type="search" placeholder="Search places" autocomplete="off">
+      <button class="btn" id="search-btn" type="submit">Search</button>
+    </form>
     <select id="layer-select" title="Map layer"></select>
     <button class="btn" id="layer-settings-btn" title="API keys for keyed map layers">Keys</button>
     <button class="btn swatch-btn" id="accent-settings-btn" title="Accent colour"><span id="accent-swatch"></span>Accent</button>
@@ -51,6 +55,10 @@
         <div class="card-title">Ruler</div>
         <div id="measure-total">0 m</div>
         <div id="measure-help">Tap points on the map. Drag points to adjust.</div>
+      </div>
+      <div id="search-results" class="floating-panel" hidden></div>
+      <div id="magnifier" aria-hidden="true">
+        <div id="magnifier-map"></div>
       </div>
       <div id="map"></div>
     </section>
@@ -113,6 +121,20 @@
         <button class="btn" id="accent-reset-btn" type="button">Reset</button>
         <button class="btn" value="cancel">Cancel</button>
         <button class="btn primary" id="accent-save-btn" value="default">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="app-dialog">
+    <form method="dialog" id="app-dialog-form">
+      <h2 id="app-dialog-title">Message</h2>
+      <p id="app-dialog-message" class="dialog-note"></p>
+      <label id="app-dialog-input-label" hidden>Value
+        <input id="app-dialog-input">
+      </label>
+      <div class="dialog-actions">
+        <button class="btn" id="app-dialog-cancel" value="cancel">Cancel</button>
+        <button class="btn primary" id="app-dialog-ok" value="default">OK</button>
       </div>
     </form>
   </dialog>

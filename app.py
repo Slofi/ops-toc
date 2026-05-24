@@ -7,6 +7,8 @@ import math
 import os
 import sqlite3
 import time
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -421,6 +423,54 @@ def api_tile_layers():
         },
     ]
     return jsonify({"local": local, "online": online})
+
+
+@app.route("/api/search")
+def api_search():
+    query = _clean_text(request.args.get("q"), 120)
+    if not query:
+        return jsonify([])
+    params = urllib.parse.urlencode(
+        {
+            "format": "jsonv2",
+            "q": query,
+            "limit": 8,
+            "addressdetails": 1,
+        }
+    )
+    url = f"https://nominatim.openstreetmap.org/search?{params}"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Slofi Map App/0.1 (local cyberdeck map search)",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except (OSError, TimeoutError, ValueError) as exc:
+        return jsonify({"error": f"Search failed: {exc}"}), 502
+
+    results = []
+    for item in data:
+        try:
+            lat = _float(item.get("lat"), "lat")
+            lon = _float(item.get("lon"), "lon")
+        except ValueError:
+            continue
+        results.append(
+            {
+                "name": _clean_text(item.get("display_name"), 260),
+                "lat": lat,
+                "lon": lon,
+                "type": _clean_text(item.get("type"), 40),
+                "category": _clean_text(item.get("category"), 40),
+                "importance": item.get("importance"),
+                "bbox": item.get("boundingbox") or [],
+            }
+        )
+    return jsonify(results)
 
 
 @app.route("/tiles/<layer_id>/<int:z>/<int:x>/<int:y>.png")

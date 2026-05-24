@@ -9,6 +9,11 @@ const state = {
   toolPoints: [],
   toolMarkers: [],
   toolLine: null,
+  activeLayerValue: "",
+  magnifierMap: null,
+  magnifierLayer: null,
+  magnifierLatLng: null,
+  searchMarker: null,
 };
 
 const el = (id) => document.getElementById(id);
@@ -58,6 +63,62 @@ function applyAccentColor(hex) {
 
 function currentAccentColor() {
   return getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || DEFAULT_ACCENT;
+}
+
+function appDialog({ title = "Message", message = "", mode = "alert", value = "", placeholder = "" }) {
+  return new Promise((resolve) => {
+    const dialog = el("app-dialog");
+    const form = el("app-dialog-form");
+    const inputWrap = el("app-dialog-input-label");
+    const input = el("app-dialog-input");
+    const cancel = el("app-dialog-cancel");
+    el("app-dialog-title").textContent = title;
+    el("app-dialog-message").textContent = message;
+    inputWrap.hidden = mode !== "prompt";
+    cancel.hidden = mode === "alert";
+    input.value = value;
+    input.placeholder = placeholder;
+
+    const cleanup = () => {
+      form.onsubmit = null;
+      cancel.onclick = null;
+      dialog.oncancel = null;
+      dialog.onclose = null;
+    };
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      cleanup();
+      dialog.close();
+      resolve(mode === "prompt" ? input.value : true);
+    };
+    cancel.onclick = (event) => {
+      event.preventDefault();
+      cleanup();
+      dialog.close();
+      resolve(mode === "confirm" || mode === "prompt" ? null : false);
+    };
+    dialog.oncancel = (event) => {
+      event.preventDefault();
+      cleanup();
+      dialog.close();
+      resolve(mode === "confirm" || mode === "prompt" ? null : false);
+    };
+    dialog.onclose = () => cleanup();
+    dialog.showModal();
+    if (mode === "prompt") setTimeout(() => input.focus(), 60);
+  });
+}
+
+function appAlert(message, title = "Map App") {
+  return appDialog({ title, message, mode: "alert" });
+}
+
+function appConfirm(message, title = "Confirm") {
+  return appDialog({ title, message, mode: "confirm" });
+}
+
+function appPrompt(message, value = "", title = "Name") {
+  return appDialog({ title, message, value, mode: "prompt" });
 }
 
 function fmtDistance(meters) {
@@ -130,6 +191,63 @@ function setToolButtons(active) {
   el("measure-card").classList.toggle("show", state.tool === "measure");
 }
 
+function placementToolActive() {
+  return ["marker", "measure", "line", "polygon"].includes(state.tool);
+}
+
+function enableMagnifier() {
+  if (!placementToolActive()) return;
+  el("magnifier").classList.add("show");
+  if (!state.magnifierMap) {
+    state.magnifierMap = L.map("magnifier-map", {
+      attributionControl: false,
+      zoomControl: false,
+      dragging: false,
+      touchZoom: false,
+      scrollWheelZoom: false,
+      doubleClickZoom: false,
+      boxZoom: false,
+      keyboard: false,
+      tap: false,
+      preferCanvas: true,
+    }).setView(state.map.getCenter(), state.map.getZoom() + 2);
+  }
+  syncMagnifierLayer();
+  setTimeout(() => state.magnifierMap.invalidateSize(), 20);
+}
+
+function disableMagnifier() {
+  el("magnifier").classList.remove("show");
+  state.magnifierLatLng = null;
+}
+
+function positionMagnifier(originalEvent) {
+  if (!placementToolActive() || !state.magnifierMap) return;
+  const wrap = el("map-wrap").getBoundingClientRect();
+  const mag = el("magnifier");
+  const size = mag.offsetWidth || 172;
+  const offset = 28;
+  const clientX = originalEvent.clientX ?? originalEvent.touches?.[0]?.clientX;
+  const clientY = originalEvent.clientY ?? originalEvent.touches?.[0]?.clientY;
+  if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return;
+  let left = clientX - wrap.left + offset;
+  let top = clientY - wrap.top - size - offset;
+  if (left + size > wrap.width - 8) left = clientX - wrap.left - size - offset;
+  if (top < 8) top = clientY - wrap.top + offset;
+  left = Math.max(8, Math.min(left, wrap.width - size - 8));
+  top = Math.max(8, Math.min(top, wrap.height - size - 8));
+  mag.style.left = `${left}px`;
+  mag.style.top = `${top}px`;
+}
+
+function updateMagnifier(event) {
+  if (!placementToolActive()) return;
+  enableMagnifier();
+  positionMagnifier(event.originalEvent || event);
+  state.magnifierLatLng = event.latlng || state.map.mouseEventToLatLng(event.originalEvent || event);
+  state.magnifierMap.setView(state.magnifierLatLng, Math.min(state.map.getZoom() + 2, 22), { animate: false });
+}
+
 function clearTool() {
   state.toolMarkers.forEach((m) => state.map.removeLayer(m));
   state.toolMarkers = [];
@@ -139,6 +257,7 @@ function clearTool() {
   state.tool = null;
   setBanner("");
   el("map").classList.remove("tool-crosshair");
+  disableMagnifier();
   setToolButtons(null);
 }
 
@@ -149,7 +268,8 @@ function startTool(tool) {
   if (tool === "measure") setBanner("Tap points for the ruler. Drag points to adjust.");
   if (tool === "line") setBanner("Tap points for a line, then Finish.");
   if (tool === "polygon") setBanner("Tap area corners, then Finish.");
-  el("map").classList.toggle("tool-crosshair", ["measure", "line", "polygon"].includes(tool));
+  el("map").classList.toggle("tool-crosshair", placementToolActive());
+  enableMagnifier();
   const activeId = { marker: "add-marker-btn", measure: "measure-btn", line: "draw-line-btn", polygon: "draw-poly-btn" }[tool];
   setToolButtons(activeId);
 }
@@ -221,7 +341,11 @@ async function finishTool() {
   if (!state.tool || state.toolPoints.length < 2) return;
   if (state.tool === "measure" || state.tool === "line" || state.tool === "polygon") {
     const kind = state.tool === "measure" ? "measure" : state.tool;
-    const name = prompt("Name this drawing:", kind === "measure" ? "Ruler path" : kind === "polygon" ? "Area" : "Line");
+    const name = await appPrompt(
+      "Name this drawing:",
+      kind === "measure" ? "Ruler path" : kind === "polygon" ? "Area" : "Line",
+      "Save Drawing",
+    );
     if (name === null) return;
     try {
       await api("/api/drawings", {
@@ -237,7 +361,7 @@ async function finishTool() {
       clearTool();
       await loadDrawings();
     } catch (err) {
-      alert(err.message);
+      await appAlert(err.message, "Save Failed");
     }
   }
 }
@@ -348,7 +472,7 @@ function editMarker(id) {
 
 async function deleteMarker(id) {
   const marker = state.markers.get(id);
-  if (!marker || !confirm(`Delete marker "${marker.name}"?`)) return;
+  if (!marker || !(await appConfirm(`Delete marker "${marker.name}"?`, "Delete Marker"))) return;
   await api(`/api/markers/${id}`, { method: "DELETE" });
   await loadMarkers();
 }
@@ -357,7 +481,7 @@ async function shareMarkerLater(id) {
   try {
     await api(`/api/om/share-marker/${id}`, { method: "POST" });
   } catch (err) {
-    alert(`${err.message}\n\nThis is intentional for v0.1: Map owns markers, OM integration comes next.`);
+    await appAlert(`${err.message}\n\nThis is intentional for v0.1: Map owns markers, OM integration comes next.`, "OM Sharing");
   }
 }
 
@@ -422,7 +546,7 @@ function flyToDrawing(id) {
 
 async function deleteDrawing(id) {
   const drawing = state.drawings.get(id);
-  if (!drawing || !confirm(`Delete drawing "${drawing.name}"?`)) return;
+  if (!drawing || !(await appConfirm(`Delete drawing "${drawing.name}"?`, "Delete Drawing"))) return;
   await api(`/api/drawings/${id}`, { method: "DELETE" });
   await loadDrawings();
 }
@@ -458,36 +582,52 @@ function resolveTileUrl(url, layerName = "selected layer") {
   if (url.includes("{apikey}")) {
     const key = localStorage.getItem("thunderforestApiKey") || "";
     if (!key) {
-      alert(`${layerName} needs a Thunderforest API key. Open Keys and save one first.`);
+      appAlert(`${layerName} needs a Thunderforest API key. Open Keys and save one first.`, "API Key Required");
     }
     url = url.replace("{apikey}", encodeURIComponent(key));
   }
   if (url.includes("{mtapikey}")) {
     const key = localStorage.getItem("mapTilerApiKey") || "";
     if (!key) {
-      alert(`${layerName} needs a MapTiler API key. Open Keys and save one first.`);
+      appAlert(`${layerName} needs a MapTiler API key. Open Keys and save one first.`, "API Key Required");
     }
     url = url.replace("{mtapikey}", encodeURIComponent(key));
   }
   return url;
 }
 
-function setLayer(value) {
-  if (state.baseLayer) state.map.removeLayer(state.baseLayer);
+function createTileLayer(value, magnifier = false) {
   const [type, id] = value.split(":");
   if (type === "local") {
-    state.baseLayer = L.tileLayer(`/tiles/${id}/{z}/{x}/{y}.png`, {
+    return L.tileLayer(`/tiles/${id}/{z}/{x}/{y}.png`, {
       maxZoom: 18,
       attribution: "Local MBTiles",
-    }).addTo(state.map);
-  } else {
-    const opt = [...el("layer-select").options].find((o) => o.value === value);
-    const rawUrl = opt?.dataset.url || "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
-    state.baseLayer = L.tileLayer(resolveTileUrl(rawUrl, opt?.textContent || "selected layer"), {
-      maxZoom: Number(opt?.dataset.maxzoom || 19),
-      attribution: opt?.dataset.attr || "",
-    }).addTo(state.map);
+      detectRetina: !magnifier,
+    });
   }
+  const opt = [...el("layer-select").options].find((o) => o.value === value);
+  const rawUrl = opt?.dataset.url || "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
+  return L.tileLayer(resolveTileUrl(rawUrl, opt?.textContent || "selected layer"), {
+    maxZoom: Number(opt?.dataset.maxzoom || 19),
+    attribution: opt?.dataset.attr || "",
+    detectRetina: !magnifier,
+  });
+}
+
+function syncMagnifierLayer() {
+  if (!state.magnifierMap || !state.activeLayerValue) return;
+  if (state.magnifierLayer) state.magnifierMap.removeLayer(state.magnifierLayer);
+  state.magnifierLayer = createTileLayer(state.activeLayerValue, true).addTo(state.magnifierMap);
+  if (state.magnifierLatLng) {
+    state.magnifierMap.setView(state.magnifierLatLng, Math.min(state.map.getZoom() + 2, 22), { animate: false });
+  }
+}
+
+function setLayer(value) {
+  if (state.baseLayer) state.map.removeLayer(state.baseLayer);
+  state.activeLayerValue = value;
+  state.baseLayer = createTileLayer(value).addTo(state.map);
+  syncMagnifierLayer();
   localStorage.setItem("mapAppLayer", value);
 }
 
@@ -528,6 +668,72 @@ function resetAccent() {
   applyAccentColor(DEFAULT_ACCENT);
 }
 
+function hideSearchResults() {
+  const box = el("search-results");
+  box.hidden = true;
+  box.innerHTML = "";
+}
+
+function renderSearchResults(results) {
+  const box = el("search-results");
+  if (!results.length) {
+    box.innerHTML = '<div class="empty">No places found.</div>';
+    box.hidden = false;
+    return;
+  }
+  box.innerHTML = results.map((r, idx) => `
+    <button class="search-result" type="button" data-index="${idx}">
+      <div class="search-result-title">${esc(r.name)}</div>
+      <div class="search-result-meta">${esc([r.category, r.type].filter(Boolean).join(" / "))} - ${r.lat.toFixed(5)}, ${r.lon.toFixed(5)}</div>
+    </button>`).join("");
+  box.querySelectorAll(".search-result").forEach((btn) => {
+    btn.onclick = () => selectSearchResult(results[Number(btn.dataset.index)]);
+  });
+  box.hidden = false;
+}
+
+function selectSearchResult(result) {
+  hideSearchResults();
+  const latlng = [result.lat, result.lon];
+  if (state.searchMarker) state.map.removeLayer(state.searchMarker);
+  state.searchMarker = L.marker(latlng, {
+    icon: L.divIcon({
+      html: '<div class="marker-chip">⌕</div>',
+      className: "",
+      iconSize: [30, 30],
+      iconAnchor: [15, 15],
+    }),
+  }).addTo(state.map).bindPopup(`
+    <div style="min-width:190px;max-width:280px">
+      <div style="color:var(--accent);font-weight:700;margin-bottom:5px">${esc(result.name)}</div>
+      <div style="color:var(--muted);font-size:11px">${result.lat.toFixed(5)}, ${result.lon.toFixed(5)}</div>
+    </div>`);
+  const bbox = (result.bbox || []).map(Number);
+  if (bbox.length === 4 && bbox.every(Number.isFinite)) {
+    state.map.fitBounds([[bbox[0], bbox[2]], [bbox[1], bbox[3]]], { maxZoom: 16, padding: [24, 24] });
+  } else {
+    state.map.setView(latlng, Math.max(state.map.getZoom(), 14));
+  }
+  setTimeout(() => state.searchMarker.openPopup(), 180);
+}
+
+async function runSearch(event) {
+  event.preventDefault();
+  const query = el("search-input").value.trim();
+  if (!query) {
+    hideSearchResults();
+    return;
+  }
+  el("search-btn").disabled = true;
+  try {
+    renderSearchResults(await api(`/api/search?q=${encodeURIComponent(query)}`));
+  } catch (err) {
+    await appAlert(err.message, "Search Failed");
+  } finally {
+    el("search-btn").disabled = false;
+  }
+}
+
 function initMap() {
   const saved = JSON.parse(localStorage.getItem("mapAppView") || "null");
   state.map = L.map("map", { zoomSnap: 0.5, zoomDelta: 0.5 })
@@ -544,6 +750,13 @@ function initMap() {
       return;
     }
     addToolPoint(event.latlng);
+  });
+  state.map.on("mousemove", updateMagnifier);
+  state.map.on("mouseout", disableMagnifier);
+  state.map.on("zoomend", () => {
+    if (state.magnifierMap && state.magnifierLatLng) {
+      state.magnifierMap.setView(state.magnifierLatLng, Math.min(state.map.getZoom() + 2, 22), { animate: false });
+    }
   });
 }
 
@@ -565,8 +778,10 @@ function bindUi() {
   el("accent-settings-btn").onclick = openAccentSettings;
   el("accent-form").onsubmit = saveAccent;
   el("accent-reset-btn").onclick = resetAccent;
+  el("search-form").onsubmit = runSearch;
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && state.tool) clearTool();
+    if (event.key === "Escape") hideSearchResults();
     if (event.key === "Enter" && state.tool && state.toolPoints.length >= 2) finishTool();
     if ((event.key === "Backspace" || event.key === "Delete") && state.tool && state.toolPoints.length) {
       event.preventDefault();
@@ -582,4 +797,4 @@ async function boot() {
   await Promise.all([loadMarkers(), loadDrawings()]);
 }
 
-boot().catch((err) => alert(err.message));
+boot().catch((err) => appAlert(err.message, "Startup Failed"));
