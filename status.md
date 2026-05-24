@@ -23,6 +23,10 @@ Initial scaffold built. The app runs independently on Flask and stores its own d
 - API-key dialog in Map App stores keys in browser localStorage using the same keys as OM:
   - `thunderforestApiKey`
   - `mapTilerApiKey`
+- Accent colour control:
+  - toolbar `Accent` button opens a colour picker dialog
+  - stored in browser localStorage as `mapAppAccentColor`
+  - uses OM-style HSL normalization for readable `--accent` and dim active-state background
 - Local MBTiles catalog and tile endpoint: `/tiles/<layer>/<z>/<x>/<y>.png`.
 - Custom markers owned by Map App:
   - add
@@ -34,6 +38,9 @@ Initial scaffold built. The app runs independently on Flask and stores its own d
   - line drawing
   - polygon/area drawing
   - adjustable multi-point ruler
+  - `Undo Last` removes the most recent in-progress point
+  - Backspace/Delete also remove the most recent in-progress point
+  - ruler/line/area placement uses a crosshair cursor
   - saved drawings in SQLite
 - Export:
   - `GET /api/export/geojson` exports markers and drawings.

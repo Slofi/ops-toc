@@ -12,6 +12,53 @@ const state = {
 };
 
 const el = (id) => document.getElementById(id);
+const DEFAULT_ACCENT = "#4ade80";
+
+function hexToHsl(hex) {
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  let h = 0;
+  let s = 0;
+  const l = (max + min) / 2;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+    if (max === g) h = ((b - r) / d + 2) / 6;
+    if (max === b) h = ((r - g) / d + 4) / 6;
+  }
+  return [Math.round(h * 360), Math.round(s * 100), Math.round(l * 100)];
+}
+
+function hslToHex(h, s, l) {
+  s /= 100;
+  l /= 100;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n) => {
+    const k = (n + h / 30) % 12;
+    const c = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+    return Math.round(255 * c).toString(16).padStart(2, "0");
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
+
+function applyAccentColor(hex) {
+  if (!/^#[0-9a-fA-F]{6}$/.test(hex || "")) return;
+  const [h, s, l] = hexToHsl(hex);
+  const accentHex = hslToHex(h, s, Math.max(l, 45));
+  const dimHex = hslToHex(h, Math.min(s * 0.5, 35), Math.max(l * 0.25, 12));
+  document.documentElement.style.setProperty("--accent", accentHex);
+  document.documentElement.style.setProperty("--accent-dim", dimHex);
+  const swatch = el("accent-swatch");
+  if (swatch) swatch.style.background = accentHex;
+}
+
+function currentAccentColor() {
+  return getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || DEFAULT_ACCENT;
+}
 
 function fmtDistance(meters) {
   if (!Number.isFinite(meters)) return "0 m";
@@ -77,6 +124,7 @@ function setToolButtons(active) {
   for (const id of ["add-marker-btn", "measure-btn", "draw-line-btn", "draw-poly-btn"]) {
     el(id).classList.toggle("active", active === id);
   }
+  el("undo-point-btn").hidden = !state.tool || !state.toolPoints.length;
   el("finish-tool-btn").hidden = !state.tool || state.toolPoints.length < 2;
   el("cancel-tool-btn").hidden = !state.tool;
   el("measure-card").classList.toggle("show", state.tool === "measure");
@@ -90,6 +138,7 @@ function clearTool() {
   state.toolPoints = [];
   state.tool = null;
   setBanner("");
+  el("map").classList.remove("tool-crosshair");
   setToolButtons(null);
 }
 
@@ -100,6 +149,7 @@ function startTool(tool) {
   if (tool === "measure") setBanner("Tap points for the ruler. Drag points to adjust.");
   if (tool === "line") setBanner("Tap points for a line, then Finish.");
   if (tool === "polygon") setBanner("Tap area corners, then Finish.");
+  el("map").classList.toggle("tool-crosshair", ["measure", "line", "polygon"].includes(tool));
   const activeId = { marker: "add-marker-btn", measure: "measure-btn", line: "draw-line-btn", polygon: "draw-poly-btn" }[tool];
   setToolButtons(activeId);
 }
@@ -115,7 +165,7 @@ function updateToolLine() {
   if (state.tool === "polygon") {
     state.toolLine = L.polygon(latlngs, { color: "#f59e0b", weight: 2, fillOpacity: 0.16 }).addTo(state.map);
   } else {
-    state.toolLine = L.polyline(latlngs, { color: state.tool === "measure" ? "#4ade80" : "#f59e0b", weight: 3 }).addTo(state.map);
+    state.toolLine = L.polyline(latlngs, { color: state.tool === "measure" ? currentAccentColor() : "#f59e0b", weight: 3 }).addTo(state.map);
   }
   updateMeasureTotal();
   setToolButtons({ marker: "add-marker-btn", measure: "measure-btn", line: "draw-line-btn", polygon: "draw-poly-btn" }[state.tool]);
@@ -139,7 +189,7 @@ function addToolPoint(latlng) {
   const idx = state.toolPoints.length;
   const point = { lat: latlng.lat, lon: latlng.lng };
   state.toolPoints.push(point);
-  const color = state.tool === "measure" ? "#4ade80" : "#f59e0b";
+  const color = state.tool === "measure" ? currentAccentColor() : "#f59e0b";
   const marker = L.marker(latlng, {
     draggable: true,
     icon: L.divIcon({
@@ -159,6 +209,14 @@ function addToolPoint(latlng) {
   updateToolLine();
 }
 
+function undoToolPoint() {
+  if (!state.toolPoints.length) return;
+  state.toolPoints.pop();
+  const marker = state.toolMarkers.pop();
+  if (marker) state.map.removeLayer(marker);
+  updateToolLine();
+}
+
 async function finishTool() {
   if (!state.tool || state.toolPoints.length < 2) return;
   if (state.tool === "measure" || state.tool === "line" || state.tool === "polygon") {
@@ -172,7 +230,7 @@ async function finishTool() {
         body: JSON.stringify({
           name: name.trim() || kind,
           kind,
-          color: kind === "measure" ? "#4ade80" : "#f59e0b",
+          color: kind === "measure" ? currentAccentColor() : "#f59e0b",
           data: { points: state.toolPoints },
         }),
       });
@@ -451,6 +509,25 @@ function saveLayerKeys(event) {
   }, 250);
 }
 
+function openAccentSettings() {
+  el("accent-color-input").value = localStorage.getItem("mapAppAccentColor") || currentAccentColor();
+  el("accent-dialog").showModal();
+}
+
+function saveAccent(event) {
+  event.preventDefault();
+  const hex = el("accent-color-input").value || DEFAULT_ACCENT;
+  localStorage.setItem("mapAppAccentColor", hex);
+  applyAccentColor(hex);
+  el("accent-dialog").close();
+}
+
+function resetAccent() {
+  localStorage.setItem("mapAppAccentColor", DEFAULT_ACCENT);
+  el("accent-color-input").value = DEFAULT_ACCENT;
+  applyAccentColor(DEFAULT_ACCENT);
+}
+
 function initMap() {
   const saved = JSON.parse(localStorage.getItem("mapAppView") || "null");
   state.map = L.map("map", { zoomSnap: 0.5, zoomDelta: 0.5 })
@@ -471,21 +548,30 @@ function initMap() {
 }
 
 function bindUi() {
+  applyAccentColor(localStorage.getItem("mapAppAccentColor") || DEFAULT_ACCENT);
   el("markers-btn").onclick = () => el("side-panel").classList.toggle("closed");
   el("close-panel-btn").onclick = () => el("side-panel").classList.add("closed");
   el("add-marker-btn").onclick = () => startTool("marker");
   el("measure-btn").onclick = () => startTool("measure");
   el("draw-line-btn").onclick = () => startTool("line");
   el("draw-poly-btn").onclick = () => startTool("polygon");
+  el("undo-point-btn").onclick = undoToolPoint;
   el("finish-tool-btn").onclick = finishTool;
   el("cancel-tool-btn").onclick = clearTool;
   el("marker-form").onsubmit = saveMarker;
   el("layer-select").onchange = (event) => setLayer(event.target.value);
   el("layer-settings-btn").onclick = openLayerSettings;
   el("layer-settings-form").onsubmit = saveLayerKeys;
+  el("accent-settings-btn").onclick = openAccentSettings;
+  el("accent-form").onsubmit = saveAccent;
+  el("accent-reset-btn").onclick = resetAccent;
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && state.tool) clearTool();
     if (event.key === "Enter" && state.tool && state.toolPoints.length >= 2) finishTool();
+    if ((event.key === "Backspace" || event.key === "Delete") && state.tool && state.toolPoints.length) {
+      event.preventDefault();
+      undoToolPoint();
+    }
   });
 }
 

@@ -16,11 +16,13 @@
     <button class="btn" id="measure-btn">Ruler</button>
     <button class="btn" id="draw-line-btn">Draw Line</button>
     <button class="btn" id="draw-poly-btn">Draw Area</button>
+    <button class="btn" id="undo-point-btn" hidden>Undo Last</button>
     <button class="btn" id="finish-tool-btn" hidden>Finish</button>
     <button class="btn danger" id="cancel-tool-btn" hidden>Cancel</button>
     <span class="spacer"></span>
     <select id="layer-select" title="Map layer"></select>
     <button class="btn" id="layer-settings-btn" title="API keys for keyed map layers">Keys</button>
+    <button class="btn swatch-btn" id="accent-settings-btn" title="Accent colour"><span id="accent-swatch"></span>Accent</button>
     <a class="btn" href="/api/export/geojson" target="_blank" rel="noopener">Export</a>
   </header>
 
@@ -96,6 +98,21 @@
       <div class="dialog-actions">
         <button class="btn" value="cancel">Cancel</button>
         <button class="btn primary" id="layer-key-save-btn" value="default">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="accent-dialog">
+    <form method="dialog" id="accent-form">
+      <h2>Accent Colour</h2>
+      <p class="dialog-note">Uses the same light/dim derivation as OM so active controls stay readable on the dark UI.</p>
+      <label>Colour
+        <input type="color" id="accent-color-input" value="#4ade80">
+      </label>
+      <div class="dialog-actions">
+        <button class="btn" id="accent-reset-btn" type="button">Reset</button>
+        <button class="btn" value="cancel">Cancel</button>
+        <button class="btn primary" id="accent-save-btn" value="default">Save</button>
       </div>
     </form>
   </dialog>

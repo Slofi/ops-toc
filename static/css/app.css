@@ -59,6 +59,19 @@ html, body {
 .btn.primary { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
 .btn.danger { color: var(--red); border-color: rgba(248, 81, 73, 0.35); }
 .btn.small { padding: 3px 8px; font-size: 11px; }
+.swatch-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+#accent-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  background: var(--accent);
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
 select { max-width: 220px; }
 
 #main {
@@ -117,6 +130,7 @@ select { max-width: 220px; }
 
 #map-wrap { position: relative; min-width: 0; min-height: 0; }
 #map { position: absolute; inset: 0; background: var(--bg); }
+#map.tool-crosshair, #map.tool-crosshair * { cursor: crosshair !important; }
 
 #banner {
   display: none;
@@ -207,6 +221,11 @@ input, textarea {
   color: var(--text);
   font: inherit;
   padding: 7px 9px;
+}
+input[type="color"] {
+  height: 40px;
+  padding: 4px;
+  cursor: pointer;
 }
 textarea { resize: vertical; }
 #marker-status { min-height: 18px; color: var(--red); font-size: 12px; margin-top: 8px; }

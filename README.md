@@ -51,3 +51,14 @@ localStorage with the same names OM uses:
 thunderforestApiKey
 mapTilerApiKey
 ```
+
+## Appearance
+
+Use the `Accent` button in the toolbar to set the UI accent colour. The selected
+colour is saved in browser localStorage as:
+
+```text
+mapAppAccentColor
+```
+
+Map App derives readable accent and dim active-state colours the same way OM does.
