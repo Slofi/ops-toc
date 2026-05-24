@@ -899,6 +899,32 @@ async function updateApp() {
   }
 }
 
+async function restartApp() {
+  el("restart-app-btn").disabled = true;
+  el("update-status").textContent = "Restarting Map App service...";
+  try {
+    await api("/api/service/restart", { method: "POST" });
+    setTimeout(() => window.location.reload(), 3500);
+  } catch (err) {
+    el("restart-app-btn").disabled = false;
+    el("update-status").textContent = `Restart failed: ${err.message}`;
+  }
+}
+
+async function stopApp() {
+  const ok = await appConfirm("Power off Map App? The page will stop responding until the service is started again.", "Power Off");
+  if (!ok) return;
+  el("stop-app-btn").disabled = true;
+  el("update-status").textContent = "Stopping Map App service...";
+  try {
+    await api("/api/service/stop", { method: "POST" });
+    el("update-status").textContent = "Map App is stopping. Start it again from the dashboard when needed.";
+  } catch (err) {
+    el("stop-app-btn").disabled = false;
+    el("update-status").textContent = `Power off failed: ${err.message}`;
+  }
+}
+
 function hideSearchResults() {
   const box = el("search-results");
   box.hidden = true;
@@ -1020,6 +1046,8 @@ function bindUi() {
     }
   });
   el("update-app-btn").onclick = updateApp;
+  el("restart-app-btn").onclick = restartApp;
+  el("stop-app-btn").onclick = stopApp;
   el("search-form").onsubmit = runSearch;
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && state.tool) clearTool();

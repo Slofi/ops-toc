@@ -176,12 +176,14 @@
       </section>
 
       <section class="settings-section">
-        <h3>App Update</h3>
+        <h3>App Control</h3>
         <p class="dialog-note">Pulls the latest GitHub version into this checkout, restarts <code>map-app.service</code>, then reloads the page.</p>
         <div id="update-status"></div>
         <pre id="update-log" hidden></pre>
         <div class="section-actions">
           <button class="btn primary" id="update-app-btn" type="button">Update Map App</button>
+          <button class="btn" id="restart-app-btn" type="button">Restart</button>
+          <button class="btn danger" id="stop-app-btn" type="button">Power Off</button>
         </div>
       </section>
     </form>

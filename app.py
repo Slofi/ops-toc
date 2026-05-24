@@ -266,9 +266,9 @@ def init_mbtiles(conn: sqlite3.Connection, metadata: dict[str, str]) -> None:
     conn.executemany("INSERT INTO metadata (name,value) VALUES (?,?)", sorted(metadata.items()))
 
 
-def restart_service_soon() -> None:
+def service_action_soon(action: str) -> None:
     time.sleep(1)
-    subprocess.run(["systemctl", "--user", "restart", "map-app.service"], cwd=APP_ROOT, check=False)
+    subprocess.run(["systemctl", "--user", action, "map-app.service"], cwd=APP_ROOT, check=False)
 
 
 def update_job(job_id: str, **updates: Any) -> None:
@@ -391,8 +391,20 @@ def api_update_app():
         return jsonify({"ok": False, "error": str(exc)}), 500
     ok = result.returncode == 0
     if ok:
-        threading.Thread(target=restart_service_soon, daemon=True).start()
+        threading.Thread(target=service_action_soon, args=("restart",), daemon=True).start()
     return jsonify({"ok": ok, "log": result.stdout[-6000:], "restart": ok}), (200 if ok else 500)
+
+
+@app.route("/api/service/restart", methods=["POST"])
+def api_restart_service():
+    threading.Thread(target=service_action_soon, args=("restart",), daemon=True).start()
+    return jsonify({"ok": True, "message": "Restarting Map App service."})
+
+
+@app.route("/api/service/stop", methods=["POST"])
+def api_stop_service():
+    threading.Thread(target=service_action_soon, args=("stop",), daemon=True).start()
+    return jsonify({"ok": True, "message": "Stopping Map App service."})
 
 
 @app.route("/api/tile-layers")
