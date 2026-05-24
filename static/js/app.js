@@ -668,9 +668,11 @@ function openSettings() {
   el("accent-color-input").value = localStorage.getItem("mapAppAccentColor") || currentAccentColor();
   el("layer-key-status").textContent = "";
   el("update-status").textContent = "";
+  el("version-summary").textContent = "Checking version...";
   el("update-log").hidden = true;
   el("settings-dialog").showModal();
   prepareOfflineSection();
+  loadVersionStatus(false);
 }
 
 function saveLayerKeys(event) {
@@ -899,6 +901,28 @@ async function updateApp() {
   }
 }
 
+async function loadVersionStatus(checkRemote = false) {
+  const btn = el("check-update-btn");
+  if (btn) btn.disabled = true;
+  if (checkRemote) el("version-summary").textContent = "Checking GitHub version...";
+  try {
+    const data = await api(`/api/version${checkRemote ? "?check=1" : ""}`);
+    const parts = [];
+    parts.push(`Current: ${data.current || "unknown"}`);
+    if (data.branch) parts.push(`Branch: ${data.branch}`);
+    if (data.latest) parts.push(`Latest: ${data.latest}`);
+    if (data.latest) parts.push(data.up_to_date ? "Up to date" : "Update available");
+    el("version-summary").textContent = parts.join(" · ");
+    if (data.remote_error) el("update-status").textContent = `Version check warning: ${data.remote_error}`;
+    else if (checkRemote) el("update-status").textContent = data.up_to_date ? "Already up to date." : "Update available.";
+  } catch (err) {
+    el("version-summary").textContent = "Version unavailable.";
+    el("update-status").textContent = `Version check failed: ${err.message}`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function restartApp() {
   el("restart-app-btn").disabled = true;
   el("update-status").textContent = "Restarting Map App service...";
@@ -1045,6 +1069,7 @@ function bindUi() {
       searchOfflineRegions();
     }
   });
+  el("check-update-btn").onclick = () => loadVersionStatus(true);
   el("update-app-btn").onclick = updateApp;
   el("restart-app-btn").onclick = restartApp;
   el("stop-app-btn").onclick = stopApp;

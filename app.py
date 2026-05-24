@@ -271,6 +271,46 @@ def service_action_soon(action: str) -> None:
     subprocess.run(["systemctl", "--user", action, "map-app.service"], cwd=APP_ROOT, check=False)
 
 
+def run_git(args: list[str], timeout: int = 20) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=APP_ROOT,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=timeout,
+    )
+
+
+def git_version_payload(check_remote: bool = False) -> dict[str, Any]:
+    payload: dict[str, Any] = {"ok": True, "is_git": (APP_ROOT / ".git").exists()}
+    current = run_git(["rev-parse", "--short", "HEAD"])
+    branch = run_git(["rev-parse", "--abbrev-ref", "HEAD"])
+    remote = run_git(["config", "--get", "remote.origin.url"])
+    payload.update(
+        {
+            "current": current.stdout.strip() if current.returncode == 0 else "",
+            "branch": branch.stdout.strip() if branch.returncode == 0 else "",
+            "remote": remote.stdout.strip() if remote.returncode == 0 else "",
+        }
+    )
+    if not payload["is_git"] or current.returncode != 0:
+        payload["ok"] = False
+        payload["error"] = "Map App directory is not a usable git checkout."
+        return payload
+    if check_remote:
+        ref = payload["branch"] if payload["branch"] and payload["branch"] != "HEAD" else "master"
+        latest = run_git(["ls-remote", "origin", ref], timeout=20)
+        if latest.returncode == 0 and latest.stdout.strip():
+            full = latest.stdout.split()[0]
+            payload["latest"] = full[:7]
+            payload["up_to_date"] = full.startswith(payload["current"])
+        else:
+            payload["remote_error"] = latest.stdout.strip() or "Unable to check remote version."
+    return payload
+
+
 def update_job(job_id: str, **updates: Any) -> None:
     with download_lock:
         if job_id in download_jobs:
@@ -375,18 +415,16 @@ def api_health():
     return jsonify({"ok": True, "service": "map-app", "port": PORT, "data_dir": str(DATA_DIR)})
 
 
+@app.route("/api/version")
+def api_version():
+    check_remote = request.args.get("check") in {"1", "true", "yes"}
+    return jsonify(git_version_payload(check_remote))
+
+
 @app.route("/api/update", methods=["POST"])
 def api_update_app():
     try:
-        result = subprocess.run(
-            ["git", "pull", "--ff-only"],
-            cwd=APP_ROOT,
-            check=False,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=60,
-        )
+        result = run_git(["pull", "--ff-only"], timeout=60)
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
     ok = result.returncode == 0

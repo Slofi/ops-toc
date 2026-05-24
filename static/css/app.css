@@ -326,6 +326,12 @@ textarea { resize: vertical; }
 #marker-status { min-height: 18px; color: var(--red); font-size: 12px; margin-top: 8px; }
 #layer-key-status { min-height: 18px; color: var(--accent); font-size: 12px; margin-top: 8px; }
 #update-status { min-height: 18px; color: var(--accent); font-size: 12px; margin-top: 8px; }
+.version-summary {
+  min-height: 18px;
+  color: var(--muted);
+  font-size: 12px;
+  margin: 2px 0 8px;
+}
 #update-log {
   max-height: 160px;
   overflow: auto;

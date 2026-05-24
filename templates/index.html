@@ -25,8 +25,8 @@
       <button class="btn" id="search-btn" type="submit">Search</button>
     </form>
     <select id="layer-select" title="Map layer"></select>
-    <button class="btn icon-btn" id="settings-btn" title="Settings">☰</button>
     <a class="btn" href="/api/export/geojson" target="_blank" rel="noopener">Export</a>
+    <button class="btn icon-btn" id="settings-btn" title="Settings">☰</button>
   </header>
 
   <main id="main">
@@ -178,9 +178,11 @@
       <section class="settings-section">
         <h3>App Control</h3>
         <p class="dialog-note">Pulls the latest GitHub version into this checkout, restarts <code>map-app.service</code>, then reloads the page.</p>
+        <div id="version-summary" class="version-summary">Checking version...</div>
         <div id="update-status"></div>
         <pre id="update-log" hidden></pre>
         <div class="section-actions">
+          <button class="btn" id="check-update-btn" type="button">Check Version</button>
           <button class="btn primary" id="update-app-btn" type="button">Update Map App</button>
           <button class="btn" id="restart-app-btn" type="button">Restart</button>
           <button class="btn danger" id="stop-app-btn" type="button">Power Off</button>
