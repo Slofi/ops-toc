@@ -13,6 +13,8 @@ const state = {
   magnifierMap: null,
   magnifierLayer: null,
   magnifierLatLng: null,
+  magnifierRaf: 0,
+  magnifierLastUpdate: 0,
   searchMarker: null,
 };
 
@@ -195,6 +197,21 @@ function placementToolActive() {
   return ["marker", "measure", "line", "polygon"].includes(state.tool);
 }
 
+function invalidateMapSoon() {
+  for (const delay of [0, 80, 220]) {
+    setTimeout(() => {
+      state.map?.invalidateSize({ animate: false });
+      state.magnifierMap?.invalidateSize({ animate: false });
+    }, delay);
+  }
+}
+
+function setSidePanelClosed(closed) {
+  el("side-panel").classList.toggle("closed", closed);
+  el("main").classList.toggle("panel-closed", closed);
+  invalidateMapSoon();
+}
+
 function enableMagnifier() {
   if (!placementToolActive()) return;
   el("magnifier").classList.add("show");
@@ -210,15 +227,19 @@ function enableMagnifier() {
       keyboard: false,
       tap: false,
       preferCanvas: true,
-    }).setView(state.map.getCenter(), state.map.getZoom() + 2);
+    }).setView(state.map.getCenter(), state.map.getZoom());
   }
-  syncMagnifierLayer();
+  if (!state.magnifierLayer) syncMagnifierLayer();
   setTimeout(() => state.magnifierMap.invalidateSize(), 20);
 }
 
 function disableMagnifier() {
   el("magnifier").classList.remove("show");
   state.magnifierLatLng = null;
+  if (state.magnifierRaf) {
+    cancelAnimationFrame(state.magnifierRaf);
+    state.magnifierRaf = 0;
+  }
 }
 
 function positionMagnifier(originalEvent) {
@@ -245,7 +266,15 @@ function updateMagnifier(event) {
   enableMagnifier();
   positionMagnifier(event.originalEvent || event);
   state.magnifierLatLng = event.latlng || state.map.mouseEventToLatLng(event.originalEvent || event);
-  state.magnifierMap.setView(state.magnifierLatLng, Math.min(state.map.getZoom() + 2, 22), { animate: false });
+  const now = performance.now();
+  if (now - state.magnifierLastUpdate < 90) return;
+  state.magnifierLastUpdate = now;
+  if (state.magnifierRaf) cancelAnimationFrame(state.magnifierRaf);
+  state.magnifierRaf = requestAnimationFrame(() => {
+    state.magnifierRaf = 0;
+    if (!state.magnifierMap || !state.magnifierLatLng || !placementToolActive()) return;
+    state.magnifierMap.setView(state.magnifierLatLng, state.map.getZoom(), { animate: false });
+  });
 }
 
 function clearTool() {
@@ -619,7 +648,7 @@ function syncMagnifierLayer() {
   if (state.magnifierLayer) state.magnifierMap.removeLayer(state.magnifierLayer);
   state.magnifierLayer = createTileLayer(state.activeLayerValue, true).addTo(state.magnifierMap);
   if (state.magnifierLatLng) {
-    state.magnifierMap.setView(state.magnifierLatLng, Math.min(state.map.getZoom() + 2, 22), { animate: false });
+    state.magnifierMap.setView(state.magnifierLatLng, state.map.getZoom(), { animate: false });
   }
 }
 
@@ -755,15 +784,15 @@ function initMap() {
   state.map.on("mouseout", disableMagnifier);
   state.map.on("zoomend", () => {
     if (state.magnifierMap && state.magnifierLatLng) {
-      state.magnifierMap.setView(state.magnifierLatLng, Math.min(state.map.getZoom() + 2, 22), { animate: false });
+      state.magnifierMap.setView(state.magnifierLatLng, state.map.getZoom(), { animate: false });
     }
   });
 }
 
 function bindUi() {
   applyAccentColor(localStorage.getItem("mapAppAccentColor") || DEFAULT_ACCENT);
-  el("markers-btn").onclick = () => el("side-panel").classList.toggle("closed");
-  el("close-panel-btn").onclick = () => el("side-panel").classList.add("closed");
+  el("markers-btn").onclick = () => setSidePanelClosed(!el("side-panel").classList.contains("closed"));
+  el("close-panel-btn").onclick = () => setSidePanelClosed(true);
   el("add-marker-btn").onclick = () => startTool("marker");
   el("measure-btn").onclick = () => startTool("measure");
   el("draw-line-btn").onclick = () => startTool("line");

@@ -97,6 +97,7 @@ select { max-width: 220px; }
   min-width: 0;
 }
 #side-panel.closed { display: none; }
+#main.panel-closed { grid-template-columns: 1fr; }
 #main:has(#side-panel.closed) { grid-template-columns: 1fr; }
 
 .panel-head {
@@ -159,6 +160,8 @@ select { max-width: 220px; }
 #magnifier-map {
   position: absolute;
   inset: 0;
+  transform: scale(1.55);
+  transform-origin: center;
 }
 #magnifier::before,
 #magnifier::after {
