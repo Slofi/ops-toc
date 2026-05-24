@@ -25,9 +25,7 @@
       <button class="btn" id="search-btn" type="submit">Search</button>
     </form>
     <select id="layer-select" title="Map layer"></select>
-    <button class="btn" id="layer-settings-btn" title="API keys for keyed map layers">Keys</button>
-    <button class="btn" id="offline-btn" title="Download visible map area for offline use">Offline</button>
-    <button class="btn swatch-btn" id="accent-settings-btn" title="Accent colour"><span id="accent-swatch"></span>Accent</button>
+    <button class="btn icon-btn" id="settings-btn" title="Settings">☰</button>
     <a class="btn" href="/api/export/geojson" target="_blank" rel="noopener">Export</a>
   </header>
 
@@ -91,41 +89,6 @@
     </form>
   </dialog>
 
-  <dialog id="layer-settings-dialog">
-    <form method="dialog" id="layer-settings-form">
-      <h2>Map Layer Keys</h2>
-      <p class="dialog-note">Keys are saved in this browser profile and use the same storage names as OverMesh.</p>
-      <label>Thunderforest API key
-        <input id="tf-api-key-input" autocomplete="off" spellcheck="false">
-      </label>
-      <p class="field-help">Used by TF Landscape, TF Outdoors, TF Pioneer, and TF Atlas.</p>
-      <label>MapTiler API key
-        <input id="mt-api-key-input" autocomplete="off" spellcheck="false">
-      </label>
-      <p class="field-help">Used by MT Satellite Hybrid, MT Topo, MT Streets, and MT Winter.</p>
-      <div id="layer-key-status"></div>
-      <div class="dialog-actions">
-        <button class="btn" value="cancel">Cancel</button>
-        <button class="btn primary" id="layer-key-save-btn" value="default">Save</button>
-      </div>
-    </form>
-  </dialog>
-
-  <dialog id="accent-dialog">
-    <form method="dialog" id="accent-form">
-      <h2>Accent Colour</h2>
-      <p class="dialog-note">Uses the same light/dim derivation as OM so active controls stay readable on the dark UI.</p>
-      <label>Colour
-        <input type="color" id="accent-color-input" value="#4ade80">
-      </label>
-      <div class="dialog-actions">
-        <button class="btn" id="accent-reset-btn" type="button">Reset</button>
-        <button class="btn" value="cancel">Cancel</button>
-        <button class="btn primary" id="accent-save-btn" value="default">Save</button>
-      </div>
-    </form>
-  </dialog>
-
   <dialog id="app-dialog">
     <form method="dialog" id="app-dialog-form">
       <h2 id="app-dialog-title">Message</h2>
@@ -140,30 +103,87 @@
     </form>
   </dialog>
 
-  <dialog id="offline-dialog">
-    <form method="dialog" id="offline-form">
-      <h2>Download Offline Map</h2>
-      <p class="dialog-note">Downloads the current visible map area into a local MBTiles file under <code>/home/slofi/maps/mbtiles</code>.</p>
-      <label>Name
-        <input id="offline-name" maxlength="90" value="Current view">
-      </label>
-      <div class="split-fields">
-        <label>Min zoom
-          <input id="offline-min-zoom" type="number" min="0" max="22" value="10">
+  <dialog id="settings-dialog">
+    <form method="dialog" id="settings-form">
+      <div class="settings-head">
+        <h2>Settings</h2>
+        <button class="btn small" value="cancel">Close</button>
+      </div>
+
+      <section class="settings-section">
+        <h3>Offline Maps</h3>
+        <p class="dialog-note">Download map tiles into MBTiles under <code>/home/slofi/maps/mbtiles</code>. The CD tile server picks up new files automatically.</p>
+        <div class="settings-grid">
+          <label>Name
+            <input id="offline-name" maxlength="90" value="Current view">
+          </label>
+          <label>Find region
+            <div class="inline-search">
+              <input id="offline-region-search" type="search" placeholder="Slovenia, Ljubljana, Alps..." autocomplete="off">
+              <button class="btn" id="offline-region-search-btn" type="button">Search</button>
+            </div>
+          </label>
+        </div>
+        <div id="offline-region-results" class="settings-results" hidden></div>
+        <p class="field-help" id="offline-bounds-help">Using current visible map area.</p>
+        <div class="split-fields">
+          <label>Min zoom
+            <input id="offline-min-zoom" type="number" min="0" max="22" value="10">
+          </label>
+          <label>Max zoom
+            <input id="offline-max-zoom" type="number" min="0" max="22" value="14">
+          </label>
+        </div>
+        <p class="field-help">Suggested: z8-z10 for large regions, z10-z14 for towns/field areas, z14-z16 for detailed local use. Higher max zoom grows very quickly.</p>
+        <div id="offline-estimate" class="field-help">Estimate unavailable.</div>
+        <div id="offline-progress" class="progress-wrap" hidden>
+          <div id="offline-progress-bar"></div>
+        </div>
+        <div id="offline-status"></div>
+        <div class="section-actions">
+          <button class="btn" id="offline-use-view-btn" type="button">Use Current View</button>
+          <button class="btn primary" id="offline-download-btn" type="button">Download</button>
+        </div>
+      </section>
+
+      <section class="settings-section">
+        <h3>Map Layer Keys</h3>
+        <p class="dialog-note">Keys are saved in this browser profile and use the same storage names as OverMesh.</p>
+        <label>Thunderforest API key
+          <input id="tf-api-key-input" autocomplete="off" spellcheck="false">
         </label>
-        <label>Max zoom
-          <input id="offline-max-zoom" type="number" min="0" max="22" value="14">
+        <p class="field-help">Used by TF Landscape, TF Outdoors, TF Pioneer, and TF Atlas.</p>
+        <label>MapTiler API key
+          <input id="mt-api-key-input" autocomplete="off" spellcheck="false">
         </label>
-      </div>
-      <div id="offline-estimate" class="field-help">Estimate unavailable.</div>
-      <div id="offline-progress" class="progress-wrap" hidden>
-        <div id="offline-progress-bar"></div>
-      </div>
-      <div id="offline-status"></div>
-      <div class="dialog-actions">
-        <button class="btn" value="cancel">Close</button>
-        <button class="btn primary" id="offline-download-btn" type="button">Download</button>
-      </div>
+        <p class="field-help">Used by MT Satellite Hybrid, MT Topo, MT Streets, and MT Winter.</p>
+        <div id="layer-key-status"></div>
+        <div class="section-actions">
+          <button class="btn primary" id="layer-key-save-btn" type="button">Save Keys</button>
+        </div>
+      </section>
+
+      <section class="settings-section">
+        <h3>Appearance</h3>
+        <p class="dialog-note">Uses the same light/dim derivation as OM so active controls stay readable on the dark UI.</p>
+        <label>Accent colour
+          <input type="color" id="accent-color-input" value="#4ade80">
+        </label>
+        <div class="section-actions">
+          <button class="btn" id="accent-reset-btn" type="button">Reset</button>
+          <button class="btn primary" id="accent-save-btn" type="button">Save Colour</button>
+        </div>
+      </section>
+
+      <section class="settings-section">
+        <h3>App Update</h3>
+        <p class="dialog-note">Pulls the latest GitHub version into this checkout, restarts <code>map-app.service</code>, then reloads the page.</p>
+        <div id="update-status"></div>
+        <pre id="update-log" hidden></pre>
+        <div class="section-actions">
+          <button class="btn primary" id="update-app-btn" type="button">Update Map App</button>
+        </div>
+      </section>
     </form>
   </dialog>
 

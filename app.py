@@ -5,6 +5,7 @@ import io
 import json
 import math
 import os
+import subprocess
 import sqlite3
 import threading
 import time
@@ -23,7 +24,6 @@ DB_PATH = Path(os.environ.get("MAP_APP_DB", DATA_DIR / "map_app.db"))
 MBTILES_DIR = Path(os.environ.get("MAP_APP_MBTILES_DIR", DATA_DIR / "mbtiles"))
 DEFAULT_MBTILES = os.environ.get("MAP_APP_DEFAULT_MBTILES", "")
 PORT = int(os.environ.get("MAP_APP_PORT", "8090"))
-MAX_DOWNLOAD_TILES = int(os.environ.get("MAP_APP_MAX_DOWNLOAD_TILES", "3500"))
 
 app = Flask(__name__)
 download_jobs: dict[str, dict[str, Any]] = {}
@@ -266,6 +266,11 @@ def init_mbtiles(conn: sqlite3.Connection, metadata: dict[str, str]) -> None:
     conn.executemany("INSERT INTO metadata (name,value) VALUES (?,?)", sorted(metadata.items()))
 
 
+def restart_service_soon() -> None:
+    time.sleep(1)
+    subprocess.run(["systemctl", "--user", "restart", "map-app.service"], cwd=APP_ROOT, check=False)
+
+
 def update_job(job_id: str, **updates: Any) -> None:
     with download_lock:
         if job_id in download_jobs:
@@ -368,6 +373,26 @@ def index():
 @app.route("/api/health")
 def api_health():
     return jsonify({"ok": True, "service": "map-app", "port": PORT, "data_dir": str(DATA_DIR)})
+
+
+@app.route("/api/update", methods=["POST"])
+def api_update_app():
+    try:
+        result = subprocess.run(
+            ["git", "pull", "--ff-only"],
+            cwd=APP_ROOT,
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=60,
+        )
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    ok = result.returncode == 0
+    if ok:
+        threading.Thread(target=restart_service_soon, daemon=True).start()
+    return jsonify({"ok": ok, "log": result.stdout[-6000:], "restart": ok}), (200 if ok else 500)
 
 
 @app.route("/api/tile-layers")
@@ -619,7 +644,7 @@ def api_download_estimate():
     if min_zoom > max_zoom:
         min_zoom, max_zoom = max_zoom, min_zoom
     count = len(tiles_for_bounds(bounds, min_zoom, max_zoom))
-    return jsonify({"tiles": count, "limit": MAX_DOWNLOAD_TILES, "ok": count <= MAX_DOWNLOAD_TILES})
+    return jsonify({"tiles": count, "ok": True})
 
 
 @app.route("/api/downloads", methods=["POST"])
@@ -644,8 +669,6 @@ def api_create_download():
     tiles = tiles_for_bounds(bounds, min_zoom, max_zoom)
     if not tiles:
         return jsonify({"error": "No tiles in selected area"}), 400
-    if len(tiles) > MAX_DOWNLOAD_TILES:
-        return jsonify({"error": f"Too many tiles ({len(tiles)}). Limit is {MAX_DOWNLOAD_TILES}."}), 400
 
     name = _clean_text(payload.get("name"), 90, "Offline map") or "Offline map"
     layer_name = _clean_text(payload.get("layer_name"), 90, "Map layer") or "Map layer"

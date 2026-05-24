@@ -17,6 +17,7 @@ const state = {
   magnifierLastUpdate: 0,
   searchMarker: null,
   offlinePoll: 0,
+  offlineBounds: null,
 };
 
 const el = (id) => document.getElementById(id);
@@ -661,35 +662,32 @@ function setLayer(value) {
   localStorage.setItem("mapAppLayer", value);
 }
 
-function openLayerSettings() {
+function openSettings() {
   el("tf-api-key-input").value = localStorage.getItem("thunderforestApiKey") || "";
   el("mt-api-key-input").value = localStorage.getItem("mapTilerApiKey") || "";
+  el("accent-color-input").value = localStorage.getItem("mapAppAccentColor") || currentAccentColor();
   el("layer-key-status").textContent = "";
-  el("layer-settings-dialog").showModal();
+  el("update-status").textContent = "";
+  el("update-log").hidden = true;
+  el("settings-dialog").showModal();
+  prepareOfflineSection();
 }
 
 function saveLayerKeys(event) {
-  event.preventDefault();
+  event?.preventDefault();
   localStorage.setItem("thunderforestApiKey", el("tf-api-key-input").value.trim());
   localStorage.setItem("mapTilerApiKey", el("mt-api-key-input").value.trim());
   el("layer-key-status").textContent = "Saved.";
   setTimeout(() => {
-    el("layer-settings-dialog").close();
     setLayer(el("layer-select").value);
   }, 250);
 }
 
-function openAccentSettings() {
-  el("accent-color-input").value = localStorage.getItem("mapAppAccentColor") || currentAccentColor();
-  el("accent-dialog").showModal();
-}
-
 function saveAccent(event) {
-  event.preventDefault();
+  event?.preventDefault();
   const hex = el("accent-color-input").value || DEFAULT_ACCENT;
   localStorage.setItem("mapAppAccentColor", hex);
   applyAccentColor(hex);
-  el("accent-dialog").close();
 }
 
 function resetAccent() {
@@ -716,6 +714,7 @@ function currentLayerDownloadDef() {
 }
 
 function currentBoundsPayload() {
+  if (state.offlineBounds) return { ...state.offlineBounds };
   const b = state.map.getBounds();
   return {
     south: b.getSouth(),
@@ -741,7 +740,7 @@ async function updateOfflineEstimate() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...currentBoundsPayload(), min_zoom: minZoom, max_zoom: maxZoom }),
     });
-    estimate.textContent = `${data.tiles.toLocaleString()} tiles selected. Limit: ${data.limit.toLocaleString()}.`;
+    estimate.textContent = `${data.tiles.toLocaleString()} tiles selected. No hard limit; check data plan and disk space for large jobs.`;
     el("offline-download-btn").disabled = !data.ok;
   } catch (err) {
     estimate.textContent = err.message;
@@ -749,7 +748,7 @@ async function updateOfflineEstimate() {
   }
 }
 
-function openOfflineDialog() {
+function prepareOfflineSection() {
   const zoom = Math.round(state.map.getZoom());
   el("offline-min-zoom").value = Math.max(0, zoom - 1);
   el("offline-max-zoom").value = Math.min(18, zoom + 2);
@@ -757,7 +756,71 @@ function openOfflineDialog() {
   el("offline-status").textContent = "";
   el("offline-progress").hidden = true;
   el("offline-progress-bar").style.width = "0";
-  el("offline-dialog").showModal();
+  useCurrentViewForOffline(false);
+  updateOfflineEstimate();
+}
+
+function useCurrentViewForOffline(updateEstimate = true) {
+  state.offlineBounds = null;
+  el("offline-bounds-help").textContent = "Using current visible map area.";
+  el("offline-region-results").hidden = true;
+  el("offline-region-results").innerHTML = "";
+  if (updateEstimate) updateOfflineEstimate();
+}
+
+async function searchOfflineRegions() {
+  const query = el("offline-region-search").value.trim();
+  const box = el("offline-region-results");
+  if (!query) {
+    box.hidden = true;
+    box.innerHTML = "";
+    return;
+  }
+  box.hidden = false;
+  box.innerHTML = '<div class="empty compact">Searching...</div>';
+  try {
+    const results = await api(`/api/search?q=${encodeURIComponent(query)}`);
+    renderOfflineRegionResults(results);
+  } catch (err) {
+    box.innerHTML = `<div class="empty compact">${esc(err.message)}</div>`;
+  }
+}
+
+function renderOfflineRegionResults(results) {
+  const box = el("offline-region-results");
+  if (!results.length) {
+    box.innerHTML = '<div class="empty compact">No regions found.</div>';
+    return;
+  }
+  box.innerHTML = results.map((r, idx) => `
+    <button class="search-result compact" type="button" data-index="${idx}">
+      <div class="search-result-title">${esc(r.name)}</div>
+      <div class="search-result-meta">${esc([r.category, r.type].filter(Boolean).join(" / "))} - ${r.lat.toFixed(5)}, ${r.lon.toFixed(5)}</div>
+    </button>`).join("");
+  box.querySelectorAll(".search-result").forEach((btn) => {
+    btn.onclick = () => selectOfflineRegion(results[Number(btn.dataset.index)]);
+  });
+}
+
+function selectOfflineRegion(result) {
+  const bbox = result.bbox || [];
+  if (bbox.length >= 4) {
+    const south = Number(bbox[0]);
+    const north = Number(bbox[1]);
+    const west = Number(bbox[2]);
+    const east = Number(bbox[3]);
+    if ([south, west, north, east].every(Number.isFinite)) {
+      state.offlineBounds = { south, west, north, east };
+      state.map.fitBounds([[south, west], [north, east]], { padding: [20, 20] });
+      el("offline-bounds-help").textContent = `Using region: ${result.name}`;
+    }
+  } else {
+    state.offlineBounds = null;
+    state.map.setView([result.lat, result.lon], Math.max(state.map.getZoom(), 12));
+    el("offline-bounds-help").textContent = `No region bounds found; using visible map around ${result.name}.`;
+  }
+  el("offline-name").value = result.name.split(",")[0].slice(0, 90) || el("offline-name").value;
+  el("offline-region-results").hidden = true;
   updateOfflineEstimate();
 }
 
@@ -815,6 +878,24 @@ async function startOfflineDownload() {
   } catch (err) {
     el("offline-download-btn").disabled = false;
     await appAlert(err.message, "Download Failed");
+  }
+}
+
+async function updateApp() {
+  const btn = el("update-app-btn");
+  btn.disabled = true;
+  el("update-status").textContent = "Updating from GitHub...";
+  el("update-log").hidden = true;
+  el("update-log").textContent = "";
+  try {
+    const data = await api("/api/update", { method: "POST" });
+    el("update-status").textContent = data.restart ? "Updated. Restarting service and reloading..." : "Already up to date.";
+    el("update-log").textContent = data.log || "";
+    el("update-log").hidden = !data.log;
+    setTimeout(() => window.location.reload(), 3500);
+  } catch (err) {
+    btn.disabled = false;
+    el("update-status").textContent = `Update failed: ${err.message}`;
   }
 }
 
@@ -923,15 +1004,22 @@ function bindUi() {
   el("cancel-tool-btn").onclick = clearTool;
   el("marker-form").onsubmit = saveMarker;
   el("layer-select").onchange = (event) => setLayer(event.target.value);
-  el("layer-settings-btn").onclick = openLayerSettings;
-  el("layer-settings-form").onsubmit = saveLayerKeys;
-  el("accent-settings-btn").onclick = openAccentSettings;
-  el("accent-form").onsubmit = saveAccent;
+  el("settings-btn").onclick = openSettings;
+  el("layer-key-save-btn").onclick = saveLayerKeys;
+  el("accent-save-btn").onclick = saveAccent;
   el("accent-reset-btn").onclick = resetAccent;
-  el("offline-btn").onclick = openOfflineDialog;
   el("offline-min-zoom").onchange = updateOfflineEstimate;
   el("offline-max-zoom").onchange = updateOfflineEstimate;
   el("offline-download-btn").onclick = startOfflineDownload;
+  el("offline-use-view-btn").onclick = () => useCurrentViewForOffline(true);
+  el("offline-region-search-btn").onclick = searchOfflineRegions;
+  el("offline-region-search").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      searchOfflineRegions();
+    }
+  });
+  el("update-app-btn").onclick = updateApp;
   el("search-form").onsubmit = runSearch;
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && state.tool) clearTool();
