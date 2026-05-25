@@ -13,6 +13,7 @@ import time
 import urllib.parse
 import urllib.request
 import uuid
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,8 @@ DB_PATH = Path(os.environ.get("MAP_APP_DB", DATA_DIR / "map_app.db"))
 MBTILES_DIR = Path(os.environ.get("MAP_APP_MBTILES_DIR", DATA_DIR / "mbtiles"))
 DEFAULT_MBTILES = os.environ.get("MAP_APP_DEFAULT_MBTILES", "")
 PORT = int(os.environ.get("MAP_APP_PORT", "8090"))
+DOWNLOAD_JOB_RETENTION_DAYS = int(os.environ.get("MAP_APP_DOWNLOAD_JOB_RETENTION_DAYS", "7"))
+TILE_DOWNLOAD_RETRIES = int(os.environ.get("MAP_APP_TILE_DOWNLOAD_RETRIES", "2"))
 
 app = Flask(__name__)
 download_jobs: dict[str, dict[str, Any]] = {}
@@ -34,6 +37,7 @@ download_queue: list[str] = []
 download_worker_started = False
 _cancelled_jobs: set[str] = set()
 _paused_jobs: set[str] = set()
+_active_jobs: set[str] = set()
 
 
 @app.after_request
@@ -98,6 +102,28 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS app_meta (
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS download_jobs (
+                id           TEXT PRIMARY KEY,
+                kind         TEXT NOT NULL,
+                status       TEXT NOT NULL,
+                name         TEXT NOT NULL,
+                layer_name   TEXT DEFAULT '',
+                path         TEXT NOT NULL,
+                total        INTEGER DEFAULT 0,
+                done         INTEGER DEFAULT 0,
+                saved        INTEGER DEFAULT 0,
+                failed       INTEGER DEFAULT 0,
+                created_at   INTEGER NOT NULL,
+                queued_at    INTEGER,
+                started_at   INTEGER,
+                finished_at  INTEGER,
+                error        TEXT DEFAULT '',
+                payload_json TEXT NOT NULL
             )
             """
         )
@@ -338,11 +364,133 @@ def update_job(job_id: str, **updates: Any) -> None:
     with download_lock:
         if job_id in download_jobs:
             download_jobs[job_id].update(updates)
+            persist_download_job(download_jobs[job_id])
         download_condition.notify_all()
 
 
-def enqueue_download_job(job: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+def _job_payload_json(job: dict[str, Any]) -> str:
+    return json.dumps(job.get("payload") or {}, separators=(",", ":"))
+
+
+def persist_download_job(job: dict[str, Any]) -> None:
+    with get_db() as conn:
+        conn.execute(
+            """
+            INSERT INTO download_jobs (
+                id, kind, status, name, layer_name, path, total, done, saved, failed,
+                created_at, queued_at, started_at, finished_at, error, payload_json
+            )
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET
+                kind=excluded.kind,
+                status=excluded.status,
+                name=excluded.name,
+                layer_name=excluded.layer_name,
+                path=excluded.path,
+                total=excluded.total,
+                done=excluded.done,
+                saved=excluded.saved,
+                failed=excluded.failed,
+                created_at=excluded.created_at,
+                queued_at=excluded.queued_at,
+                started_at=excluded.started_at,
+                finished_at=excluded.finished_at,
+                error=excluded.error,
+                payload_json=excluded.payload_json
+            """,
+            (
+                job["id"],
+                job.get("kind") or "download",
+                job.get("status") or "queued",
+                job.get("name") or "Offline map",
+                job.get("layer_name") or "",
+                job.get("path") or "",
+                int(job.get("total") or 0),
+                int(job.get("done") or 0),
+                int(job.get("saved") or 0),
+                int(job.get("failed") or 0),
+                int(job.get("created_at") or now_ts()),
+                job.get("queued_at"),
+                job.get("started_at"),
+                job.get("finished_at"),
+                job.get("error") or "",
+                _job_payload_json(job),
+            ),
+        )
+
+
+def start_download_worker_locked() -> None:
     global download_worker_started
+    if not download_worker_started:
+        threading.Thread(target=download_worker, daemon=True).start()
+        download_worker_started = True
+
+
+def _download_job_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    try:
+        payload = json.loads(row["payload_json"] or "{}")
+    except (TypeError, ValueError):
+        payload = {}
+    return {
+        "id": row["id"],
+        "kind": row["kind"],
+        "status": row["status"],
+        "name": row["name"],
+        "layer_name": row["layer_name"] or "",
+        "path": row["path"],
+        "total": row["total"] or 0,
+        "done": row["done"] or 0,
+        "saved": row["saved"] or 0,
+        "failed": row["failed"] or 0,
+        "created_at": row["created_at"],
+        "queued_at": row["queued_at"],
+        "started_at": row["started_at"],
+        "finished_at": row["finished_at"],
+        "error": row["error"] or "",
+        "payload": payload,
+    }
+
+
+def load_download_jobs() -> None:
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM download_jobs ORDER BY created_at").fetchall()
+    with download_condition:
+        download_jobs.clear()
+        download_queue.clear()
+        _paused_jobs.clear()
+        _active_jobs.clear()
+        for row in rows:
+            job = _download_job_from_row(row)
+            status = job.get("status")
+            if status == "running":
+                job.update({"status": "queued", "done": 0, "saved": 0, "failed": 0, "started_at": None, "error": ""})
+                persist_download_job(job)
+                status = "queued"
+            download_jobs[job["id"]] = job
+            if status == "queued":
+                download_queue.append(job["id"])
+            elif status == "paused":
+                _paused_jobs.add(job["id"])
+        if download_queue:
+            start_download_worker_locked()
+        download_condition.notify_all()
+
+
+def cleanup_download_job_history() -> None:
+    cutoff = now_ts() - DOWNLOAD_JOB_RETENTION_DAYS * 86400
+    with get_db() as conn:
+        conn.execute(
+            """
+            DELETE FROM download_jobs
+            WHERE status IN ('done', 'error', 'cancelled')
+              AND finished_at IS NOT NULL
+              AND finished_at < ?
+            """,
+            (cutoff,),
+        )
+
+
+def enqueue_download_job(job: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
     job = dict(job)
     job["status"] = "queued"
     job["queued_at"] = now_ts()
@@ -350,9 +498,8 @@ def enqueue_download_job(job: dict[str, Any], payload: dict[str, Any]) -> dict[s
     with download_condition:
         download_jobs[job["id"]] = job
         download_queue.append(job["id"])
-        if not download_worker_started:
-            threading.Thread(target=download_worker, daemon=True).start()
-            download_worker_started = True
+        persist_download_job(job)
+        start_download_worker_locked()
         download_condition.notify_all()
     return {k: v for k, v in job.items() if k != "payload"}
 
@@ -366,17 +513,61 @@ def download_worker() -> None:
             job = download_jobs.get(job_id)
             if not job or job.get("status") == "cancelled":
                 continue
+            _active_jobs.add(job_id)
             while job_id in _paused_jobs and job.get("status") != "cancelled":
                 job["status"] = "paused"
+                persist_download_job(job)
                 download_condition.wait()
+            if job_id in _cancelled_jobs or job.get("status") == "cancelled":
+                job["status"] = "cancelled"
+                job["finished_at"] = now_ts()
+                _cancelled_jobs.discard(job_id)
+                _active_jobs.discard(job_id)
+                persist_download_job(job)
+                continue
             job["status"] = "running"
             job["started_at"] = now_ts()
+            persist_download_job(job)
             payload = dict(job.get("payload") or {})
-        run_download_job(job_id, payload)
+        try:
+            run_download_job(job_id, payload)
+        finally:
+            with download_condition:
+                _active_jobs.discard(job_id)
+                download_condition.notify_all()
 
 
 def public_job(job: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in job.items() if k != "payload"}
+    out = {k: v for k, v in job.items() if k != "payload"}
+    elapsed = 0
+    if out.get("started_at"):
+        end = out.get("finished_at") or now_ts()
+        elapsed = max(0, int(end) - int(out["started_at"]))
+    done = int(out.get("done") or 0)
+    total = int(out.get("total") or 0)
+    rate = (done / elapsed) if elapsed > 0 and done > 0 else 0
+    remaining = max(0, total - done)
+    out["elapsed_s"] = elapsed
+    out["tiles_per_s"] = round(rate, 2) if rate else 0
+    out["eta_s"] = int(remaining / rate) if rate > 0 and remaining else 0
+    return out
+
+
+def clear_finished_download_jobs() -> int:
+    statuses = {"done", "error", "cancelled"}
+    with download_condition:
+        remove_ids = [job_id for job_id, job in download_jobs.items() if job.get("status") in statuses]
+        for job_id in remove_ids:
+            download_jobs.pop(job_id, None)
+            _cancelled_jobs.discard(job_id)
+            _paused_jobs.discard(job_id)
+            _active_jobs.discard(job_id)
+        with get_db() as conn:
+            conn.execute(
+                "DELETE FROM download_jobs WHERE status IN ('done','error','cancelled')"
+            )
+        download_condition.notify_all()
+    return len(remove_ids)
 
 
 def missing_tiles_for_mbtiles(path: Path, tiles: list[tuple[int, int, int]]) -> list[tuple[int, int, int]]:
@@ -398,6 +589,33 @@ def missing_tiles_for_mbtiles(path: Path, tiles: list[tuple[int, int, int]]) -> 
     return missing
 
 
+def is_readable_mbtiles(path: Path) -> bool:
+    if not path.exists():
+        return False
+    try:
+        with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as conn:
+            conn.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
+        return True
+    except sqlite3.Error:
+        return False
+
+
+def fetch_tile_data(url: str) -> bytes:
+    last_error: Exception | None = None
+    for attempt in range(TILE_DOWNLOAD_RETRIES + 1):
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Slofi Map App/0.1"})
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                return resp.read()
+        except Exception as exc:
+            last_error = exc
+            if attempt < TILE_DOWNLOAD_RETRIES:
+                time.sleep(min(2.0, 0.35 * (attempt + 1)))
+    if last_error:
+        raise last_error
+    return b""
+
+
 def run_download_job(job_id: str, payload: dict[str, Any]) -> None:
     tiles = payload["tiles"]
     path = Path(payload["path"])
@@ -406,27 +624,30 @@ def run_download_job(job_id: str, payload: dict[str, Any]) -> None:
     failed = 0
     try:
         ensure_dirs()
-        if tmp_path.exists():
-            tmp_path.unlink()
-        if payload.get("repair_existing") and path.exists():
+        if tmp_path.exists() and not is_readable_mbtiles(tmp_path):
+            tmp_path.unlink(missing_ok=True)
+        resume_partial = tmp_path.exists()
+        if not resume_partial and payload.get("repair_existing") and path.exists():
             shutil.copy2(path, tmp_path)
+            resume_partial = True
         with sqlite3.connect(tmp_path) as conn:
-            if payload.get("repair_existing") and path.exists():
-                update_mbtiles_metadata(conn, payload["metadata"])
-            else:
-                init_mbtiles(conn, payload["metadata"])
-            for idx, (z, x, y) in enumerate(tiles, start=1):
+            init_mbtiles(conn, payload["metadata"])
+            tiles_to_fetch = missing_tiles_for_mbtiles(tmp_path, tiles)
+            saved = len(tiles) - len(tiles_to_fetch)
+            update_job(job_id, done=saved, saved=saved, failed=failed)
+            for idx, (z, x, y) in enumerate(tiles_to_fetch, start=saved + 1):
                 with download_condition:
                     while job_id in _paused_jobs and job_id not in _cancelled_jobs:
-                        download_jobs[job_id]["status"] = "paused"
+                        if job_id in download_jobs:
+                            download_jobs[job_id]["status"] = "paused"
+                            persist_download_job(download_jobs[job_id])
                         download_condition.wait(timeout=1)
                     if job_id in download_jobs and download_jobs[job_id].get("status") == "paused":
                         download_jobs[job_id]["status"] = "running"
+                        persist_download_job(download_jobs[job_id])
                 url = substitute_tile_url(payload["url"], z, x, y)
                 try:
-                    req = urllib.request.Request(url, headers={"User-Agent": "Slofi Map App/0.1"})
-                    with urllib.request.urlopen(req, timeout=12) as resp:
-                        data = resp.read()
+                    data = fetch_tile_data(url)
                     if not data:
                         failed += 1
                     else:
@@ -606,6 +827,272 @@ def drawing_feature(drawing: dict[str, Any]) -> dict[str, Any] | None:
         },
         "geometry": geometry,
     }
+
+
+def export_markings_feature_collection() -> dict[str, Any]:
+    features = []
+    with get_db() as conn:
+        marker_rows = conn.execute("SELECT * FROM markers ORDER BY id").fetchall()
+        drawing_rows = conn.execute("SELECT * FROM drawings ORDER BY id").fetchall()
+    features.extend(marker_feature(_marker_row(r)) for r in marker_rows)
+    for row in drawing_rows:
+        feature = drawing_feature(_drawing_row(row))
+        if feature:
+            features.append(feature)
+    for feature in features:
+        props = feature.setdefault("properties", {})
+        props.setdefault("source_app", "map-app")
+    return {"type": "FeatureCollection", "features": features}
+
+
+def _feature_props(feature: dict[str, Any]) -> dict[str, Any]:
+    props = feature.get("properties")
+    return props if isinstance(props, dict) else {}
+
+
+def _feature_name(feature: dict[str, Any], fallback: str) -> str:
+    props = _feature_props(feature)
+    return _clean_text(props.get("name") or props.get("title") or fallback, 80, fallback) or fallback
+
+
+def _feature_points(coords: list[Any]) -> list[dict[str, float]]:
+    points = []
+    for coord in coords:
+        if not isinstance(coord, list) or len(coord) < 2:
+            continue
+        try:
+            lon = _float(coord[0], "lon")
+            lat = _float(coord[1], "lat")
+        except ValueError:
+            continue
+        points.append({"lat": lat, "lon": lon})
+    return points
+
+
+def import_markings_feature_collection(geojson: dict[str, Any]) -> dict[str, int]:
+    if geojson.get("type") == "FeatureCollection":
+        features = [f for f in (geojson.get("features") or []) if isinstance(f, dict)]
+    elif geojson.get("type") == "Feature":
+        features = [geojson]
+    else:
+        features = [{"type": "Feature", "properties": {}, "geometry": geojson}]
+    markers_added = 0
+    drawings_added = 0
+    ts = now_ts()
+    with get_db() as conn:
+        for feature in features:
+            geom = feature.get("geometry") if isinstance(feature.get("geometry"), dict) else {}
+            gtype = geom.get("type")
+            props = _feature_props(feature)
+            name = _feature_name(feature, "Imported mark" if gtype == "Point" else "Imported drawing")
+            color = _clean_text(props.get("color"), 16, "#f59e0b") or "#f59e0b"
+            if gtype == "Point":
+                coords = geom.get("coordinates") or []
+                if len(coords) < 2:
+                    continue
+                try:
+                    lon = _float(coords[0], "lon")
+                    lat = _float(coords[1], "lat")
+                except ValueError:
+                    continue
+                conn.execute(
+                    """
+                    INSERT INTO markers (lat,lon,name,description,emoji,category,source,created_at,updated_at)
+                    VALUES (?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        lat,
+                        lon,
+                        name,
+                        _clean_text(props.get("description") or props.get("desc"), 400),
+                        _clean_text(props.get("marker_emoji") or props.get("emoji"), 24, "pin") or "pin",
+                        _clean_text(props.get("source_type") or props.get("category"), 40, "exchange") or "exchange",
+                        "om-exchange" if props.get("source_app") == "overmesh" else "geojson-import",
+                        ts,
+                        ts,
+                    ),
+                )
+                markers_added += 1
+            elif gtype == "LineString":
+                points = _feature_points(geom.get("coordinates") or [])
+                if len(points) < 2:
+                    continue
+                data = {"points": points, "distance_m": line_distance_m(points)}
+                conn.execute(
+                    "INSERT INTO drawings (name,kind,color,data_json,created_at,updated_at) VALUES (?,?,?,?,?,?)",
+                    (name, "line", color, json.dumps(data, separators=(",", ":")), ts, ts),
+                )
+                drawings_added += 1
+            elif gtype == "MultiLineString":
+                for idx, coords in enumerate(geom.get("coordinates") or [], start=1):
+                    points = _feature_points(coords)
+                    if len(points) < 2:
+                        continue
+                    data = {"points": points, "distance_m": line_distance_m(points)}
+                    conn.execute(
+                        "INSERT INTO drawings (name,kind,color,data_json,created_at,updated_at) VALUES (?,?,?,?,?,?)",
+                        (name if idx == 1 else f"{name} {idx}", "line", color, json.dumps(data, separators=(",", ":")), ts, ts),
+                    )
+                    drawings_added += 1
+            elif gtype == "Polygon":
+                rings = geom.get("coordinates") or []
+                points = _feature_points(rings[0] if rings else [])
+                if len(points) > 2 and points[0] == points[-1]:
+                    points = points[:-1]
+                if len(points) < 3:
+                    continue
+                data = {"points": points, "distance_m": line_distance_m(points + [points[0]])}
+                conn.execute(
+                    "INSERT INTO drawings (name,kind,color,data_json,created_at,updated_at) VALUES (?,?,?,?,?,?)",
+                    (name, "polygon", color, json.dumps(data, separators=(",", ":")), ts, ts),
+                )
+                drawings_added += 1
+            elif gtype == "MultiPolygon":
+                for idx, polygon in enumerate(geom.get("coordinates") or [], start=1):
+                    points = _feature_points(polygon[0] if polygon else [])
+                    if len(points) > 2 and points[0] == points[-1]:
+                        points = points[:-1]
+                    if len(points) < 3:
+                        continue
+                    data = {"points": points, "distance_m": line_distance_m(points + [points[0]])}
+                    conn.execute(
+                        "INSERT INTO drawings (name,kind,color,data_json,created_at,updated_at) VALUES (?,?,?,?,?,?)",
+                        (name if idx == 1 else f"{name} {idx}", "polygon", color, json.dumps(data, separators=(",", ":")), ts, ts),
+                    )
+                    drawings_added += 1
+    return {"markers": markers_added, "drawings": drawings_added}
+
+
+def _om_base_url(raw: str) -> str:
+    url = _clean_text(raw, 240, "http://localhost:8082").rstrip("/")
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("OM URL must start with http:// or https://")
+    return url
+
+
+def _json_request(url: str, payload: dict[str, Any] | None = None, timeout: int = 20) -> dict[str, Any]:
+    body = None
+    headers = {"Accept": "application/json"}
+    method = "GET"
+    if payload is not None:
+        body = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+        method = "POST"
+    req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = resp.read()
+    try:
+        return json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("OM returned invalid JSON") from exc
+
+
+def gpx_text(markers: list[dict[str, Any]], drawings: list[dict[str, Any]]) -> bytes:
+    ET.register_namespace("", "http://www.topografix.com/GPX/1/1")
+    gpx = ET.Element(
+        "gpx",
+        {
+            "version": "1.1",
+            "creator": "Slofi Map App",
+            "xmlns": "http://www.topografix.com/GPX/1/1",
+        },
+    )
+    meta = ET.SubElement(gpx, "metadata")
+    ET.SubElement(meta, "name").text = "Map App export"
+    for marker in markers:
+        wpt = ET.SubElement(gpx, "wpt", {"lat": str(marker["lat"]), "lon": str(marker["lon"])})
+        ET.SubElement(wpt, "name").text = marker["name"]
+        if marker.get("description"):
+            ET.SubElement(wpt, "desc").text = marker["description"]
+        ET.SubElement(wpt, "type").text = marker.get("category") or "marker"
+        ET.SubElement(wpt, "sym").text = marker.get("emoji") or "pin"
+    for drawing in drawings:
+        points = (drawing.get("data") or {}).get("points") or []
+        if len(points) < 2:
+            continue
+        trk = ET.SubElement(gpx, "trk")
+        ET.SubElement(trk, "name").text = drawing["name"]
+        ET.SubElement(trk, "type").text = drawing["kind"]
+        seg = ET.SubElement(trk, "trkseg")
+        for point in points:
+            ET.SubElement(seg, "trkpt", {"lat": str(point["lat"]), "lon": str(point["lon"])})
+    ET.indent(gpx, space="  ")
+    return ET.tostring(gpx, encoding="utf-8", xml_declaration=True)
+
+
+def _xml_children(node: ET.Element, name: str) -> list[ET.Element]:
+    return [child for child in node if child.tag.rsplit("}", 1)[-1] == name]
+
+
+def _xml_text(node: ET.Element, name: str, default: str = "") -> str:
+    for child in _xml_children(node, name):
+        return child.text or default
+    return default
+
+
+def _xml_points(nodes: list[ET.Element]) -> list[dict[str, float]]:
+    points = []
+    for node in nodes:
+        try:
+            points.append({"lat": _float(node.attrib.get("lat"), "lat"), "lon": _float(node.attrib.get("lon"), "lon")})
+        except ValueError:
+            continue
+    return points
+
+
+def import_gpx_bytes(raw: bytes) -> dict[str, int]:
+    if len(raw) > 5 * 1024 * 1024:
+        raise ValueError("GPX file is too large")
+    try:
+        root = ET.fromstring(raw)
+    except ET.ParseError as exc:
+        raise ValueError("Invalid GPX file") from exc
+    ts = now_ts()
+    markers_added = 0
+    drawings_added = 0
+    with get_db() as conn:
+        for wpt in _xml_children(root, "wpt"):
+            try:
+                lat = _float(wpt.attrib.get("lat"), "lat")
+                lon = _float(wpt.attrib.get("lon"), "lon")
+            except ValueError:
+                continue
+            name = _clean_text(_xml_text(wpt, "name", "Waypoint"), 80, "Waypoint") or "Waypoint"
+            desc = _clean_text(_xml_text(wpt, "desc"), 400)
+            category = _clean_text(_xml_text(wpt, "type", "gpx"), 40, "gpx") or "gpx"
+            emoji = _clean_text(_xml_text(wpt, "sym", "pin"), 24, "pin") or "pin"
+            conn.execute(
+                """
+                INSERT INTO markers (lat,lon,name,description,emoji,category,source,created_at,updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?)
+                """,
+                (lat, lon, name, desc, emoji, category, "gpx-import", ts, ts),
+            )
+            markers_added += 1
+        for rte in _xml_children(root, "rte"):
+            points = _xml_points(_xml_children(rte, "rtept"))
+            if len(points) < 2:
+                continue
+            name = _clean_text(_xml_text(rte, "name", "GPX route"), 80, "GPX route") or "GPX route"
+            conn.execute(
+                "INSERT INTO drawings (name,kind,color,data_json,created_at,updated_at) VALUES (?,?,?,?,?,?)",
+                (name, "line", "#f59e0b", json.dumps({"points": points, "distance_m": line_distance_m(points)}, separators=(",", ":")), ts, ts),
+            )
+            drawings_added += 1
+        for trk in _xml_children(root, "trk"):
+            name = _clean_text(_xml_text(trk, "name", "GPX track"), 80, "GPX track") or "GPX track"
+            for idx, seg in enumerate(_xml_children(trk, "trkseg"), start=1):
+                points = _xml_points(_xml_children(seg, "trkpt"))
+                if len(points) < 2:
+                    continue
+                seg_name = name if idx == 1 else f"{name} {idx}"
+                conn.execute(
+                    "INSERT INTO drawings (name,kind,color,data_json,created_at,updated_at) VALUES (?,?,?,?,?,?)",
+                    (seg_name, "line", "#f59e0b", json.dumps({"points": points, "distance_m": line_distance_m(points)}, separators=(",", ":")), ts, ts),
+                )
+                drawings_added += 1
+    return {"markers": markers_added, "drawings": drawings_added}
 
 
 @app.route("/")
@@ -917,6 +1404,12 @@ def api_list_downloads():
     return jsonify({"jobs": jobs})
 
 
+@app.route("/api/downloads/clear-finished", methods=["POST"])
+def api_clear_finished_downloads():
+    cleared = clear_finished_download_jobs()
+    return jsonify({"ok": True, "cleared": cleared})
+
+
 @app.route("/api/downloads/<job_id>")
 def api_get_download(job_id: str):
     with download_lock:
@@ -1105,16 +1598,77 @@ def api_measure():
 
 @app.route("/api/export/geojson")
 def api_export_geojson():
-    features = []
+    return jsonify(export_markings_feature_collection())
+
+
+@app.route("/api/exchange/markings")
+def api_exchange_markings():
+    return jsonify({"ok": True, "data": export_markings_feature_collection()})
+
+
+@app.route("/api/exchange/import", methods=["POST"])
+def api_exchange_import():
+    payload = request.get_json(silent=True) or {}
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    if not isinstance(data, dict):
+        return jsonify({"error": "GeoJSON data required"}), 400
+    result = import_markings_feature_collection(data)
+    return jsonify({"ok": True, **result})
+
+
+@app.route("/api/om/sync/push", methods=["POST"])
+def api_om_sync_push():
+    payload = request.get_json(silent=True) or {}
+    try:
+        base = _om_base_url(payload.get("url") or "http://localhost:8082")
+        data = export_markings_feature_collection()
+        result = _json_request(f"{base}/api/map_exchange/import", {"data": data})
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 502
+    if result.get("error"):
+        return jsonify(result), 502
+    return jsonify({"ok": True, "om": result})
+
+
+@app.route("/api/om/sync/pull", methods=["POST"])
+def api_om_sync_pull():
+    payload = request.get_json(silent=True) or {}
+    try:
+        base = _om_base_url(payload.get("url") or "http://localhost:8082")
+        result = _json_request(f"{base}/api/map_exchange/export")
+        data = result.get("data")
+        if not isinstance(data, dict):
+            return jsonify({"error": "OM response missing GeoJSON data"}), 502
+        imported = import_markings_feature_collection(data)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 502
+    return jsonify({"ok": True, **imported, "om": result.get("counts") or {}})
+
+
+@app.route("/api/export/gpx")
+def api_export_gpx():
     with get_db() as conn:
         marker_rows = conn.execute("SELECT * FROM markers ORDER BY id").fetchall()
         drawing_rows = conn.execute("SELECT * FROM drawings ORDER BY id").fetchall()
-    features.extend(marker_feature(_marker_row(r)) for r in marker_rows)
-    for row in drawing_rows:
-        feature = drawing_feature(_drawing_row(row))
-        if feature:
-            features.append(feature)
-    return jsonify({"type": "FeatureCollection", "features": features})
+    markers = [_marker_row(r) for r in marker_rows]
+    drawings = [_drawing_row(r) for r in drawing_rows]
+    return Response(
+        gpx_text(markers, drawings),
+        mimetype="application/gpx+xml",
+        headers={"Content-Disposition": "attachment; filename=map-app-export.gpx"},
+    )
+
+
+@app.route("/api/import/gpx", methods=["POST"])
+def api_import_gpx():
+    file = request.files.get("file")
+    if not file:
+        return jsonify({"error": "GPX file required"}), 400
+    try:
+        result = import_gpx_bytes(file.read())
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True, **result})
 
 
 @app.route("/api/om/share-marker/<int:marker_id>", methods=["POST"])
@@ -1137,6 +1691,8 @@ def api_om_share_marker(marker_id: int):
 
 
 init_db()
+cleanup_download_job_history()
+load_download_jobs()
 
 
 
@@ -1152,6 +1708,7 @@ def api_cancel_download(job_id):
             download_queue.remove(job_id)
             job["status"] = "cancelled"
             job["finished_at"] = now_ts()
+            persist_download_job(job)
             return jsonify({"ok": True, "job": public_job(job)})
     _cancelled_jobs.add(job_id)
     _paused_jobs.discard(job_id)
@@ -1169,8 +1726,8 @@ def api_pause_download(job_id):
         if job.get("status") not in {"running", "queued"}:
             return jsonify({"error": "Job cannot be paused"}), 400
         _paused_jobs.add(job_id)
-        if job.get("status") == "queued":
-            job["status"] = "paused"
+        job["status"] = "paused"
+        persist_download_job(job)
         download_condition.notify_all()
         return jsonify({"ok": True, "job": public_job(job)})
 
@@ -1185,7 +1742,14 @@ def api_resume_download(job_id):
             return jsonify({"error": "Job cannot be resumed"}), 400
         _paused_jobs.discard(job_id)
         if job.get("status") == "paused":
-            job["status"] = "queued" if job_id in download_queue else "running"
+            if job_id in _active_jobs:
+                job["status"] = "running"
+            else:
+                job["status"] = "queued"
+                if job_id not in download_queue:
+                    download_queue.append(job_id)
+                start_download_worker_locked()
+            persist_download_job(job)
         download_condition.notify_all()
         return jsonify({"ok": True, "job": public_job(job)})
 

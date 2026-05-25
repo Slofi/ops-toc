@@ -1,5 +1,23 @@
 # Map App - Changelog
 
+## 2026-05-25
+
+**[CD/Codex]** - Pulled the CD-pushed offline download management work back to TestBox. Map App now has a real in-app download queue for new downloads, refreshes, repairs, and update-all jobs; pause/resume/cancel controls; a Download Queue settings panel; richer Downloaded Tilesets metadata and summary totals; per-tileset Use, Repair, Refresh, and Delete actions; safe `.part` writes for refresh/update so existing MBTiles are only replaced after success; and an app-package-style settings UI.
+
+**[Codex]** - Updated `status.md` with the current queue behavior, API endpoints, and follow-up risks from the CD-pushed version.
+
+**[Codex]** - Added SQLite-backed download job persistence locally on TestBox. The `download_jobs` table stores job state and payloads so queued jobs survive restart, paused jobs remain paused until resumed, and interrupted running jobs are restored as queued for retry.
+
+**[Codex]** - Added true partial MBTiles resume locally on TestBox. Restarted jobs now reuse readable `.part` files, skip already-saved tiles, and fetch only missing entries; unreadable partials are discarded and rebuilt. Finished/error/cancelled job records are pruned after 7 days by default, and individual tile downloads retry with short backoff before being counted as failed.
+
+**[Codex]** - Added Download Queue polish locally on TestBox: job API responses now include elapsed time, tile rate, and ETA; the queue panel shows active/finished/failed counts; and a Clear Finished button removes completed/cancelled/error job records without deleting downloaded MBTiles.
+
+**[Codex]** - Added GPX import/export locally on TestBox. Export writes markers as waypoints and drawings as tracks; import reads waypoints into markers and tracks/routes into line drawings from Settings -> Import / Export.
+
+**[Codex]** - Added local Map App <-> OverMesh marking exchange. Map App can pull OM Marks/Self Notes/Overlays into local markers/drawings, and push Map App markers/drawings into OM as Self Notes/Overlays. The exchange is HTTP/GeoJSON based and deliberately local-only: it does not broadcast marks over the mesh.
+
+**[Codex]** - Added an app-native searchable manual to the hamburger menu, modeled after OM's in-app manual. It covers map basics, markers, drawings/ruler, offline maps, queue controls, import/export, OM sync, appearance, API keys, updates, restart, and shutdown.
+
 ## 2026-05-24
 
 **[Codex]** - Added current-view offline map downloads. The toolbar `Offline` dialog estimates tile counts, downloads the selected online base layer into MBTiles under `/home/slofi/maps/mbtiles/`, tracks progress, refreshes the local layer list when complete, and exposes the catalog/tiles with CORS so local OM can consume the same tiles on the CD.

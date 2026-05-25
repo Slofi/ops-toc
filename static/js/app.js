@@ -163,6 +163,234 @@ function esc(text) {
   }[c]));
 }
 
+const MAP_APP_MANUAL_SECTIONS = [
+  {
+    title: "Map Basics",
+    tags: "map layers search markers drawings ruler toolbar side panel",
+    body: [
+      "Map App is the Cyberdeck map workspace. It owns local markers, drawings, measurements, offline tile downloads, and app-to-app marking exchange.",
+      "The layer selector switches between online layers and local MBTiles. Local layers appear after a download completes or after the shared tile server sees MBTiles in the shared folder.",
+      "The place search box uses the Map App backend to query Nominatim, then pans or zooms to the selected result."
+    ],
+    buttons: [
+      ["Markers", "Open or close the left panel with saved markers and drawings."],
+      ["Search", "Find places by name and jump the map to the selected result."],
+      ["Layer menu", "Choose online or local MBTiles base layers."],
+      ["GeoJSON", "Export all current markers and drawings as GeoJSON."]
+    ]
+  },
+  {
+    title: "Markers",
+    tags: "markers pins notes add edit delete category emoji om sync",
+    body: [
+      "Markers are local Map App points. They have a name, optional description, icon text, and category.",
+      "Use Add Marker, then click the map. Existing markers can be edited or deleted from the marker popup or the left panel.",
+      "When pushed to OM through local sync, Map App markers become OM Self Notes. They are not broadcast as mesh waypoints."
+    ],
+    buttons: [
+      ["Add Marker", "Start marker placement. Click the map to open the marker form."],
+      ["Edit", "Change marker text, description, icon text, or category."],
+      ["Delete", "Remove the marker from Map App only."],
+      ["Push To OM", "Send markers to OM as local Self Notes."]
+    ]
+  },
+  {
+    title: "Drawings And Ruler",
+    tags: "drawings ruler line polygon area measure undo finish delete",
+    body: [
+      "Draw Line, Draw Area, and Ruler all create multi-point map drawings. Ruler paths also store total distance.",
+      "While placing points, the cursor becomes a crosshair and a magnifier bubble helps with precise placement.",
+      "Undo Last removes the most recent in-progress point. Finish saves the shape; Cancel discards the in-progress shape."
+    ],
+    buttons: [
+      ["Ruler", "Measure a multi-point path and optionally save it."],
+      ["Draw Line", "Create a saved line drawing."],
+      ["Draw Area", "Create a saved polygon drawing."],
+      ["Undo Last", "Delete the latest point in the active drawing."],
+      ["Finish", "Save the active drawing."],
+      ["Cancel", "Discard the active drawing."]
+    ]
+  },
+  {
+    title: "Offline Maps",
+    tags: "offline maps mbtiles downloads zoom region tiles layers queue local tile server",
+    body: [
+      "Offline downloads write MBTiles into the shared Cyberdeck folder, normally ~/maps/mbtiles/. The CD tile server and other apps can use those files.",
+      "Use Find region or Use Current View, choose an online source, set min/max zoom, then Download. Higher zoom levels grow very fast.",
+      "Downloaded maps appear in Downloaded Tilesets with actions for Use, Repair, Refresh, and Delete."
+    ],
+    buttons: [
+      ["Find region", "Search for a named region and use its bounds for the download."],
+      ["Use Current View", "Use the visible map area as the download bounds."],
+      ["Country / Region / Local / Detail", "Apply practical zoom presets."],
+      ["Download", "Queue a new MBTiles download."],
+      ["Repair", "Download missing tiles for an existing tileset."],
+      ["Refresh", "Re-download the same bounds and zoom range."]
+    ]
+  },
+  {
+    title: "Download Queue",
+    tags: "queue pause resume cancel eta speed retry partial resume update all repair all",
+    body: [
+      "Downloads are queued so Map App does not hammer tile providers. The queue shows progress, saved/failed tiles, speed, and ETA.",
+      "Jobs are persisted in SQLite. Queued and paused jobs survive restart; interrupted jobs can resume from readable .part MBTiles files and skip already saved tiles.",
+      "Finished, cancelled, and failed job records can be cleared without deleting downloaded maps."
+    ],
+    buttons: [
+      ["Pause", "Pause a queued or running job."],
+      ["Resume", "Continue a paused job."],
+      ["Cancel", "Cancel a job and remove its partial file."],
+      ["Repair Missing", "Queue repair jobs for downloaded maps."],
+      ["Update All", "Queue refresh jobs for all refreshable maps."],
+      ["Clear Finished", "Remove finished job records only."]
+    ]
+  },
+  {
+    title: "Import, Export, And OM Sync",
+    tags: "gpx geojson import export overmesh om sync pull push markings overlays self notes",
+    body: [
+      "GPX import creates markers from waypoints and line drawings from tracks/routes. GPX export writes markers as waypoints and drawings as tracks.",
+      "Pull From OM imports OM Marks, Self Notes, and Overlays into Map App markers and drawings.",
+      "Push To OM sends Map App markers as OM Self Notes and drawings as OM Overlays. This is local-only and does not broadcast anything over the mesh."
+    ],
+    buttons: [
+      ["Import GPX", "Read GPX waypoints, tracks, and routes into Map App."],
+      ["Export GPX", "Download Map App markings as GPX."],
+      ["Export GeoJSON", "Download Map App markings as GeoJSON."],
+      ["Pull From OM", "Import OM local map markings from the configured OM URL."],
+      ["Push To OM", "Send Map App markings to OM as local notes and overlays."]
+    ]
+  },
+  {
+    title: "Appearance, Keys, And App Control",
+    tags: "settings accent keys thunderforest maptiler update restart shutdown version",
+    body: [
+      "Appearance controls the accent color. API keys are stored in this browser profile using the same localStorage key names as OM.",
+      "Version check compares the local git checkout to GitHub. Update pulls from GitHub and restarts Map App when successful.",
+      "Restart and Shutdown act on the user systemd service on the target device."
+    ],
+    buttons: [
+      ["Save Keys", "Save Thunderforest and MapTiler API keys in the browser profile."],
+      ["Save Accent", "Store the current accent color in the browser profile."],
+      ["Check Version", "Compare the running checkout with GitHub."],
+      ["Update", "Run git pull and restart the service after success."],
+      ["Restart", "Restart map-app.service."],
+      ["Shutdown", "Stop map-app.service."]
+    ]
+  }
+];
+
+function manualText(section) {
+  const buttonText = (section.buttons || []).map(([label, desc]) => `${label} ${desc}`).join(" ");
+  const splitText = (section.split || []).map((group) => [
+    group.title,
+    ...(group.body || []),
+    ...(group.buttons || []).map(([label, desc]) => `${label} ${desc}`),
+  ].flat().join(" ")).join(" ");
+  return [section.title, section.tags, ...(section.body || []), buttonText, splitText].join(" ").toLowerCase();
+}
+
+function manualSearchParts(query = "") {
+  const raw = String(query || "").trim().toLowerCase();
+  return { raw, terms: raw.split(/\s+/).filter(Boolean) };
+}
+
+function manualEscapeRegExp(text) {
+  return String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function manualHighlight(text, parts) {
+  let out = esc(text || "");
+  const needles = [...new Set([parts?.raw, ...(parts?.terms || [])].filter((s) => s && s.length >= 2))]
+    .sort((a, b) => b.length - a.length);
+  if (!needles.length) return out;
+  const re = new RegExp(`(${needles.map((needle) => manualEscapeRegExp(esc(needle))).join("|")})`, "ig");
+  return out.replace(re, "<mark>$1</mark>");
+}
+
+function manualScore(section, parts) {
+  if (!parts?.terms?.length) return { score: 1, matches: 0 };
+  const title = String(section.title || "").toLowerCase();
+  const tags = String(section.tags || "").toLowerCase();
+  const body = (section.body || []).join(" ").toLowerCase();
+  const buttons = (section.buttons || []).map(([label, desc]) => `${label} ${desc}`).join(" ").toLowerCase();
+  const split = (section.split || []).map((group) => [
+    group.title,
+    ...(group.body || []),
+    ...(group.buttons || []).map(([label, desc]) => `${label} ${desc}`),
+  ].flat().join(" ")).join(" ").toLowerCase();
+  const all = [title, tags, body, buttons, split].join(" ");
+  let score = 0;
+  let matches = 0;
+  if (parts.raw && all.includes(parts.raw)) score += 12;
+  parts.terms.forEach((term) => {
+    if (!all.includes(term)) return;
+    matches += 1;
+    if (title.includes(term)) score += 12;
+    if (tags.includes(term)) score += 8;
+    if (buttons.includes(term)) score += 5;
+    if (split.includes(term)) score += 4;
+    if (body.includes(term)) score += 3;
+  });
+  if (matches === parts.terms.length) score += 10;
+  return { score, matches };
+}
+
+function manualButtonHtml(item, parts = null) {
+  const label = Array.isArray(item) ? item[0] : item?.label;
+  const desc = Array.isArray(item) ? item[1] : item?.desc;
+  return `<div class="manual-button-row">
+    <span class="btn">${manualHighlight(label || "", parts)}</span>
+    <span>${manualHighlight(desc || "", parts)}</span>
+  </div>`;
+}
+
+function manualSplitHtml(groups, parts = null) {
+  if (!groups?.length) return "";
+  return `<div class="manual-split">${groups.map((group) => `
+    <div class="manual-card">
+      <div class="manual-card-title">${manualHighlight(group.title || "", parts)}</div>
+      ${(group.body || []).map((line) => `<p>${manualHighlight(line, parts)}</p>`).join("")}
+      ${(group.buttons || []).length ? `<div class="manual-buttons">${group.buttons.map((btn) => manualButtonHtml(btn, parts)).join("")}</div>` : ""}
+    </div>`).join("")}</div>`;
+}
+
+function renderManual(query = "") {
+  const box = el("manual-results");
+  if (!box) return;
+  const parts = manualSearchParts(query);
+  const ranked = parts.terms.length
+    ? MAP_APP_MANUAL_SECTIONS.map((section) => ({ section, ...manualScore(section, parts) }))
+      .filter((r) => r.score > 0 && r.matches > 0)
+      .sort((a, b) => b.score - a.score || a.section.title.localeCompare(b.section.title))
+    : MAP_APP_MANUAL_SECTIONS.map((section) => ({ section, score: 1, matches: 0 }));
+  const sections = ranked.map((r) => r.section);
+  if (!sections.length) {
+    box.innerHTML = '<div class="manual-empty">No manual sections match that search.</div>';
+    return;
+  }
+  const summary = parts.terms.length
+    ? `<div class="manual-summary">Showing ${sections.length} section${sections.length === 1 ? "" : "s"} ranked by relevance.</div>`
+    : "";
+  box.innerHTML = summary + sections.map((section) => `
+    <div class="manual-section">
+      <div class="manual-title">${manualHighlight(section.title, parts)}</div>
+      ${(section.body || []).map((line) => `<p>${manualHighlight(line, parts)}</p>`).join("")}
+      ${manualSplitHtml(section.split, parts)}
+      ${(section.buttons || []).length ? `<div class="manual-buttons">${section.buttons.map((btn) => manualButtonHtml(btn, parts)).join("")}</div>` : ""}
+    </div>`).join("");
+}
+
+function openManual() {
+  setHamburgerOpen(false);
+  const dialog = el("manual-dialog");
+  const search = el("manual-search");
+  if (search) search.value = "";
+  renderManual("");
+  dialog?.showModal();
+  setTimeout(() => search?.focus(), 50);
+}
+
 function iconHtml(text) {
   const label = (text || "pin").slice(0, 3);
   return `<div class="marker-chip">${esc(label)}</div>`;
@@ -606,6 +834,73 @@ async function deleteDrawing(id) {
   if (!drawing || !(await appConfirm(`Delete drawing "${drawing.name}"?`, "Delete Drawing"))) return;
   await api(`/api/drawings/${id}`, { method: "DELETE" });
   await loadDrawings();
+}
+
+async function importGpxFile(event) {
+  const input = event.target;
+  const file = input.files?.[0];
+  if (!file) return;
+  const status = el("data-transfer-status");
+  if (status) status.textContent = `Importing ${file.name}...`;
+  const form = new FormData();
+  form.append("file", file);
+  try {
+    const result = await api("/api/import/gpx", { method: "POST", body: form });
+    input.value = "";
+    if (status) status.textContent = `Imported ${result.markers || 0} markers and ${result.drawings || 0} drawings.`;
+    await Promise.all([loadMarkers(), loadDrawings()]);
+    await appAlert(`Imported ${result.markers || 0} markers and ${result.drawings || 0} drawings.`, "GPX Import");
+  } catch (err) {
+    input.value = "";
+    if (status) status.textContent = `Import failed: ${err.message}`;
+    await appAlert(`Import failed: ${err.message}`, "GPX Import");
+  }
+}
+
+function omSyncUrl() {
+  const input = el("om-sync-url");
+  const value = (input?.value || "http://localhost:8082").trim().replace(/\/+$/, "");
+  if (input) input.value = value;
+  localStorage.setItem("mapAppOmSyncUrl", value);
+  return value;
+}
+
+async function pullFromOverMesh() {
+  const status = el("data-transfer-status");
+  if (status) status.textContent = "Pulling markings from OverMesh...";
+  try {
+    const result = await api("/api/om/sync/pull", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: omSyncUrl() }),
+    });
+    if (status) status.textContent = `Pulled ${result.markers || 0} markers and ${result.drawings || 0} drawings from OM.`;
+    await Promise.all([loadMarkers(), loadDrawings()]);
+    await appAlert(`Pulled ${result.markers || 0} markers and ${result.drawings || 0} drawings from OM.`, "OverMesh Sync");
+  } catch (err) {
+    if (status) status.textContent = `Pull failed: ${err.message}`;
+    await appAlert(`Pull failed: ${err.message}`, "OverMesh Sync");
+  }
+}
+
+async function pushToOverMesh() {
+  const ok = await appConfirm("Push Map App markers and drawings to OverMesh? Markers become OM Self Notes; drawings become OM Overlays. Nothing is broadcast over the mesh.", "Push To OM");
+  if (!ok) return;
+  const status = el("data-transfer-status");
+  if (status) status.textContent = "Pushing markings to OverMesh...";
+  try {
+    const result = await api("/api/om/sync/push", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: omSyncUrl() }),
+    });
+    const om = result.om || {};
+    if (status) status.textContent = `Pushed to OM: ${om.notes || 0} notes and ${om.layers || 0} overlays.`;
+    await appAlert(`Pushed to OM: ${om.notes || 0} notes and ${om.layers || 0} overlays.`, "OverMesh Sync");
+  } catch (err) {
+    if (status) status.textContent = `Push failed: ${err.message}`;
+    await appAlert(`Push failed: ${err.message}`, "OverMesh Sync");
+  }
 }
 
 async function loadLayers() {
@@ -1153,6 +1448,18 @@ function bindUi() {
   bindClick("undo-point-btn", undoToolPoint);
   bindClick("finish-tool-btn", finishTool);
   bindClick("cancel-tool-btn", clearTool);
+  bindClick("gpx-import-btn", () => el("gpx-import-file")?.click());
+  bindEvent("gpx-import-file", "change", importGpxFile);
+  bindClick("om-pull-btn", pullFromOverMesh);
+  bindClick("om-push-btn", pushToOverMesh);
+  bindClick("menu-manual-btn", openManual);
+  bindClick("manual-clear-btn", () => {
+    if (el("manual-search")) el("manual-search").value = "";
+    renderManual("");
+  });
+  bindEvent("manual-search", "input", (event) => renderManual(event.target.value));
+  const omUrl = localStorage.getItem("mapAppOmSyncUrl");
+  if (omUrl && el("om-sync-url")) el("om-sync-url").value = omUrl;
   el("marker-form").onsubmit = saveMarker;
   el("layer-select").onchange = (event) => setLayer(event.target.value);
   bindClick("settings-btn", toggleHamburgerMenu);
@@ -1398,20 +1705,30 @@ async function repairAllTilesets() {
 
 async function loadDownloadQueue() {
   const box = el("download-queue-list");
+  const summary = el("download-queue-summary");
   if (!box) return;
   try {
     const data = await api("/api/downloads");
-    const jobs = (data.jobs || []).filter((j) => !["done", "cancelled"].includes(j.status)).slice(0, 12);
+    const allJobs = data.jobs || [];
+    const activeJobs = allJobs.filter((j) => !["done", "cancelled", "error"].includes(j.status));
+    const finishedJobs = allJobs.filter((j) => ["done", "cancelled", "error"].includes(j.status));
+    if (summary) {
+      const failed = finishedJobs.filter((j) => j.status === "error").length;
+      summary.textContent = `${activeJobs.length} active · ${finishedJobs.length} finished${failed ? ` · ${failed} failed` : ""}`;
+    }
+    const jobs = activeJobs.slice(0, 12);
     if (!jobs.length) {
       box.innerHTML = '<p class="field-help" style="color:var(--muted)">No queued or running jobs.</p>';
       return;
     }
     box.innerHTML = jobs.map((j) => {
       const pct = j.total ? Math.round((j.done / j.total) * 100) : 0;
+      const eta = j.eta_s ? ` · ETA ${fmtDuration(j.eta_s)}` : "";
+      const rate = j.tiles_per_s ? ` · ${j.tiles_per_s} tiles/s` : "";
       return `<div class="queue-row">
         <div class="queue-main">
           <div class="tileset-title">${esc(j.name)} <span class="queue-kind">${esc(j.kind || "download")}</span></div>
-          <div class="field-help">${esc(j.status)} · ${Number(j.done || 0).toLocaleString()}/${Number(j.total || 0).toLocaleString()} tiles · ${Number(j.saved || 0).toLocaleString()} saved · ${Number(j.failed || 0).toLocaleString()} failed</div>
+          <div class="field-help">${esc(j.status)} · ${Number(j.done || 0).toLocaleString()}/${Number(j.total || 0).toLocaleString()} tiles · ${Number(j.saved || 0).toLocaleString()} saved · ${Number(j.failed || 0).toLocaleString()} failed${esc(rate)}${esc(eta)}</div>
           <div class="queue-progress"><span style="width:${pct}%"></span></div>
         </div>
         <div class="tileset-actions">
@@ -1428,7 +1745,30 @@ async function loadDownloadQueue() {
       };
     });
   } catch (e) {
+    if (summary) summary.textContent = "Failed to load jobs.";
     box.innerHTML = '<p class="field-help" style="color:var(--muted)">Failed to load queue.</p>';
+  }
+}
+
+function fmtDuration(seconds) {
+  const s = Math.max(0, Number(seconds) || 0);
+  if (s < 60) return `${Math.round(s)}s`;
+  const m = Math.floor(s / 60);
+  const rem = Math.round(s % 60);
+  if (m < 60) return `${m}m ${rem}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h ${m % 60}m`;
+}
+
+async function clearFinishedDownloads() {
+  const ok = await appConfirm("Clear finished, cancelled, and failed download job records? Downloaded maps stay untouched.", "Clear Finished Jobs");
+  if (!ok) return;
+  try {
+    const data = await api("/api/downloads/clear-finished", { method: "POST" });
+    await appAlert(`Cleared ${data.cleared || 0} job records.`, "Download Queue");
+    await loadDownloadQueue();
+  } catch (e) {
+    await appAlert(`Clear failed: ${e.message}`, "Download Queue");
   }
 }
 

@@ -25,16 +25,18 @@
       <button class="btn" id="search-btn" type="submit">Search</button>
     </form>
     <select id="layer-select" title="Map layer"></select>
-    <a class="btn" href="/api/export/geojson" target="_blank" rel="noopener">Export</a>
+    <a class="btn" href="/api/export/geojson" target="_blank" rel="noopener">GeoJSON</a>
     <div id="menu-wrap">
       <button class="btn icon-btn" id="settings-btn" title="Menu" aria-haspopup="true" aria-expanded="false">☰</button>
       <div id="hamburger-menu" hidden>
+        <button class="menu-item" type="button" data-settings-target="data-section">Import / Export</button>
         <button class="menu-item" type="button" data-settings-target="offline-section">Offline Download</button>
         <button class="menu-item" type="button" data-settings-target="tilesets-section">Downloaded Maps</button>
         <button class="menu-item" type="button" data-settings-target="queue-section">Download Queue</button>
         <button class="menu-item" type="button" data-settings-target="keys-section">Map Keys</button>
         <button class="menu-item" type="button" data-settings-target="appearance-section">Appearance</button>
         <button class="menu-item" type="button" data-settings-target="app-control-section">App Control</button>
+        <button class="menu-item" type="button" id="menu-manual-btn">Manual</button>
         <div class="menu-sep"></div>
         <button class="menu-item" type="button" id="menu-restart-btn">Restart Map App</button>
         <button class="menu-item danger" type="button" id="menu-shutdown-btn">Shutdown Map App</button>
@@ -116,12 +118,46 @@
     </form>
   </dialog>
 
+  <dialog id="manual-dialog">
+    <form method="dialog" id="manual-form">
+      <div class="settings-head">
+        <h2>Map App Manual</h2>
+        <button class="btn small" value="cancel">Close</button>
+      </div>
+      <div class="manual-search-row">
+        <input id="manual-search" type="search" placeholder="Search manual..." autocomplete="off">
+        <button class="btn" id="manual-clear-btn" type="button">Clear</button>
+      </div>
+      <div id="manual-results"></div>
+    </form>
+  </dialog>
+
   <dialog id="settings-dialog">
     <form method="dialog" id="settings-form">
       <div class="settings-head">
         <h2>Settings</h2>
         <button class="btn small" value="cancel">Close</button>
       </div>
+
+      <section class="settings-section" id="data-section">
+        <h3>Import / Export</h3>
+        <p class="dialog-note">GPX waypoints import as markers. GPX tracks and routes import as line drawings.</p>
+        <label>OverMesh URL
+          <input id="om-sync-url" autocomplete="off" spellcheck="false" value="http://localhost:8082">
+        </label>
+        <input id="gpx-import-file" type="file" accept=".gpx,application/gpx+xml,application/xml,text/xml" hidden>
+        <div class="section-actions">
+          <button class="btn" id="gpx-import-btn" type="button">Import GPX</button>
+          <a class="btn" href="/api/export/gpx">Export GPX</a>
+          <a class="btn" href="/api/export/geojson" target="_blank" rel="noopener">Export GeoJSON</a>
+        </div>
+        <div class="section-actions">
+          <button class="btn" id="om-pull-btn" type="button">Pull From OM</button>
+          <button class="btn" id="om-push-btn" type="button">Push To OM</button>
+        </div>
+        <p class="field-help">Pull imports OM Marks, Self Notes, and Overlays into Map App. Push sends Map App markers as OM Self Notes and drawings as OM Overlays. Nothing is broadcast over the mesh.</p>
+        <div id="data-transfer-status" class="field-help"></div>
+      </section>
 
       <section class="settings-section" id="offline-section">
         <h3>Offline Maps</h3>
@@ -184,7 +220,11 @@
 
       <section class="settings-section" id="queue-section">
         <h3>Download Queue</h3>
+        <div id="download-queue-summary" class="field-help">Checking jobs...</div>
         <div id="download-queue-list"><p class="field-help" style="color:var(--muted)">No queued or running jobs.</p></div>
+        <div class="section-actions">
+          <button class="btn" id="download-clear-finished-btn" type="button" onclick="clearFinishedDownloads()">Clear Finished</button>
+        </div>
       </section>
       <section class="settings-section" id="keys-section">
         <h3>Map Layer Keys</h3>

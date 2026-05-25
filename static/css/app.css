@@ -402,6 +402,9 @@ select {
 #settings-dialog {
   width: min(760px, calc(100vw - 28px));
 }
+#manual-dialog {
+  width: min(760px, calc(100vw - 28px));
+}
 dialog {
   width: min(420px, calc(100vw - 28px));
   border: 1px solid var(--border);
@@ -551,6 +554,100 @@ textarea { resize: vertical; }
   margin: 2px 0 8px;
 }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.manual-search-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+#manual-results {
+  max-height: min(620px, calc(100vh - 210px));
+  min-height: 180px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.manual-section {
+  border: 1px solid var(--border);
+  background: var(--bg2);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+.manual-title {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 7px;
+}
+.manual-section p {
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0 0 7px;
+}
+.manual-buttons {
+  border-top: 1px solid var(--border);
+  margin-top: 9px;
+  padding-top: 7px;
+}
+.manual-button-row {
+  display: grid;
+  grid-template-columns: minmax(92px, max-content) minmax(0, 1fr);
+  gap: 9px;
+  align-items: start;
+  margin: 6px 0;
+}
+.manual-button-row .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 2px 9px;
+  font-size: 11px;
+  line-height: 1.2;
+  cursor: default;
+  pointer-events: none;
+}
+.manual-button-row span:last-child {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+  padding-top: 2px;
+}
+.manual-split {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+  margin-top: 9px;
+}
+.manual-card {
+  border: 1px solid var(--accent-mid);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--accent-faint);
+}
+.manual-card-title {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 7px;
+}
+.manual-empty {
+  color: var(--muted);
+  font-size: 13px;
+  padding: 12px 0;
+}
+.manual-summary {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 2px 0 9px;
+}
+#manual-results mark {
+  background: rgba(250, 204, 21, 0.28);
+  color: var(--text);
+  border-radius: 2px;
+  padding: 0 2px;
+}
 
 @media (max-width: 760px) {
   body {
@@ -585,6 +682,7 @@ textarea { resize: vertical; }
     border-bottom: 0;
   }
   #settings-dialog { width: 100vw; }
+  #manual-dialog { width: 100vw; }
   .tileset-row,
   .queue-row {
     flex-direction: column;
