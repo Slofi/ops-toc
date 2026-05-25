@@ -5,6 +5,7 @@ import io
 import json
 import math
 import os
+import shutil
 import subprocess
 import sqlite3
 import threading
@@ -28,7 +29,11 @@ PORT = int(os.environ.get("MAP_APP_PORT", "8090"))
 app = Flask(__name__)
 download_jobs: dict[str, dict[str, Any]] = {}
 download_lock = threading.Lock()
+download_condition = threading.Condition(download_lock)
+download_queue: list[str] = []
+download_worker_started = False
 _cancelled_jobs: set[str] = set()
+_paused_jobs: set[str] = set()
 
 
 @app.after_request
@@ -36,7 +41,7 @@ def add_cors_headers(resp):
     # OM on the same machine reads Map App's tile catalog from localhost:8090.
     resp.headers["Access-Control-Allow-Origin"] = "*"
     resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
-    resp.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
+    resp.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,DELETE,OPTIONS"
     return resp
 
 
@@ -180,8 +185,10 @@ def list_mbtiles() -> list[dict[str, Any]]:
             with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as conn:
                 rows = conn.execute("SELECT name,value FROM metadata").fetchall()
                 meta = {r[0]: r[1] for r in rows}
+                tile_count = conn.execute("SELECT COUNT(*) FROM tiles").fetchone()[0]
         except sqlite3.Error:
             meta = {}
+            tile_count = 0
         layers.append(
             {
                 "id": layer_id,
@@ -192,9 +199,15 @@ def list_mbtiles() -> list[dict[str, Any]]:
                 "maxzoom": int(meta.get("maxzoom") or 18),
                 "bounds": meta.get("bounds") or "",
                 "size": path.stat().st_size if path.exists() else 0,
+                "tile_count": tile_count,
+                "description": meta.get("description") or "",
+                "attribution": meta.get("attribution") or "",
                 "source_url": meta.get("source_url") or "",
                 "source_layer_name": meta.get("source_layer_name") or "",
+                "source_min_zoom": meta.get("source_min_zoom") or meta.get("minzoom") or "",
+                "source_max_zoom": meta.get("source_max_zoom") or meta.get("maxzoom") or "",
                 "mtime": path.stat().st_mtime if path.exists() else 0,
+                "map_app_tile_url": f"/tiles/{layer_id}/{{z}}/{{x}}/{{y}}.png",
             }
         )
     return layers
@@ -270,6 +283,12 @@ def init_mbtiles(conn: sqlite3.Connection, metadata: dict[str, str]) -> None:
     conn.executemany("INSERT INTO metadata (name,value) VALUES (?,?)", sorted(metadata.items()))
 
 
+def update_mbtiles_metadata(conn: sqlite3.Connection, metadata: dict[str, str]) -> None:
+    conn.execute("CREATE TABLE IF NOT EXISTS metadata (name TEXT, value TEXT)")
+    conn.execute("DELETE FROM metadata")
+    conn.executemany("INSERT INTO metadata (name,value) VALUES (?,?)", sorted(metadata.items()))
+
+
 def service_action_soon(action: str) -> None:
     time.sleep(1)
     subprocess.run(["systemctl", "--user", action, "map-app.service"], cwd=APP_ROOT, check=False)
@@ -319,6 +338,64 @@ def update_job(job_id: str, **updates: Any) -> None:
     with download_lock:
         if job_id in download_jobs:
             download_jobs[job_id].update(updates)
+        download_condition.notify_all()
+
+
+def enqueue_download_job(job: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    global download_worker_started
+    job = dict(job)
+    job["status"] = "queued"
+    job["queued_at"] = now_ts()
+    job["payload"] = payload
+    with download_condition:
+        download_jobs[job["id"]] = job
+        download_queue.append(job["id"])
+        if not download_worker_started:
+            threading.Thread(target=download_worker, daemon=True).start()
+            download_worker_started = True
+        download_condition.notify_all()
+    return {k: v for k, v in job.items() if k != "payload"}
+
+
+def download_worker() -> None:
+    while True:
+        with download_condition:
+            while not download_queue:
+                download_condition.wait()
+            job_id = download_queue.pop(0)
+            job = download_jobs.get(job_id)
+            if not job or job.get("status") == "cancelled":
+                continue
+            while job_id in _paused_jobs and job.get("status") != "cancelled":
+                job["status"] = "paused"
+                download_condition.wait()
+            job["status"] = "running"
+            job["started_at"] = now_ts()
+            payload = dict(job.get("payload") or {})
+        run_download_job(job_id, payload)
+
+
+def public_job(job: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in job.items() if k != "payload"}
+
+
+def missing_tiles_for_mbtiles(path: Path, tiles: list[tuple[int, int, int]]) -> list[tuple[int, int, int]]:
+    if not path.exists():
+        return tiles
+    missing = []
+    try:
+        with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as conn:
+            for z, x, y in tiles:
+                y_tms = (2**z - 1) - y
+                row = conn.execute(
+                    "SELECT 1 FROM tiles WHERE zoom_level=? AND tile_column=? AND tile_row=? LIMIT 1",
+                    (z, x, y_tms),
+                ).fetchone()
+                if not row:
+                    missing.append((z, x, y))
+    except sqlite3.Error:
+        return tiles
+    return missing
 
 
 def run_download_job(job_id: str, payload: dict[str, Any]) -> None:
@@ -331,9 +408,20 @@ def run_download_job(job_id: str, payload: dict[str, Any]) -> None:
         ensure_dirs()
         if tmp_path.exists():
             tmp_path.unlink()
+        if payload.get("repair_existing") and path.exists():
+            shutil.copy2(path, tmp_path)
         with sqlite3.connect(tmp_path) as conn:
-            init_mbtiles(conn, payload["metadata"])
+            if payload.get("repair_existing") and path.exists():
+                update_mbtiles_metadata(conn, payload["metadata"])
+            else:
+                init_mbtiles(conn, payload["metadata"])
             for idx, (z, x, y) in enumerate(tiles, start=1):
+                with download_condition:
+                    while job_id in _paused_jobs and job_id not in _cancelled_jobs:
+                        download_jobs[job_id]["status"] = "paused"
+                        download_condition.wait(timeout=1)
+                    if job_id in download_jobs and download_jobs[job_id].get("status") == "paused":
+                        download_jobs[job_id]["status"] = "running"
                 url = substitute_tile_url(payload["url"], z, x, y)
                 try:
                     req = urllib.request.Request(url, headers={"User-Agent": "Slofi Map App/0.1"})
@@ -355,7 +443,7 @@ def run_download_job(job_id: str, payload: dict[str, Any]) -> None:
                 update_job(job_id, done=idx, saved=saved, failed=failed)
                 if job_id in _cancelled_jobs:
                     conn.commit()
-                    tmp_path.replace(path)
+                    tmp_path.unlink(missing_ok=True)
                     _cancelled_jobs.discard(job_id)
                     update_job(job_id, status="cancelled", finished_at=now_ts())
                     return
@@ -366,6 +454,111 @@ def run_download_job(job_id: str, payload: dict[str, Any]) -> None:
         if tmp_path.exists():
             tmp_path.unlink(missing_ok=True)
         update_job(job_id, status="error", error=str(exc), finished_at=now_ts())
+
+
+def job_from_download_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None, tuple[str, int] | None]:
+    try:
+        bounds = {
+            "south": _float(payload.get("south"), "south"),
+            "west": _float(payload.get("west"), "west"),
+            "north": _float(payload.get("north"), "north"),
+            "east": _float(payload.get("east"), "east"),
+        }
+        min_zoom = max(0, min(22, _int(payload.get("min_zoom"), "min_zoom")))
+        max_zoom = max(0, min(22, _int(payload.get("max_zoom"), "max_zoom")))
+    except ValueError as exc:
+        return {}, None, (str(exc), 400)
+    if min_zoom > max_zoom:
+        min_zoom, max_zoom = max_zoom, min_zoom
+    url = _clean_text(payload.get("url"), 500)
+    if not url or "{z}" not in url or "{x}" not in url or "{y}" not in url:
+        return {}, None, ("Tile URL template required", 400)
+    tiles = tiles_for_bounds(bounds, min_zoom, max_zoom)
+    if not tiles:
+        return {}, None, ("No tiles in selected area", 400)
+
+    name = _clean_text(payload.get("name"), 90, "Offline map") or "Offline map"
+    layer_name = _clean_text(payload.get("layer_name"), 90, "Map layer") or "Map layer"
+    fmt = _clean_text(payload.get("format"), 12, "png") or "png"
+    slug = _safe_slug(f"{name}-{layer_name}-z{min_zoom}-{max_zoom}")
+    path = MBTILES_DIR / f"{slug}.mbtiles"
+    suffix = 2
+    while path.exists() or path.with_suffix(path.suffix + ".part").exists():
+        path = MBTILES_DIR / f"{slug}-{suffix}.mbtiles"
+        suffix += 1
+    metadata = {
+        "name": name,
+        "type": "baselayer",
+        "version": "1",
+        "description": f"{layer_name} offline tiles from Map App",
+        "format": "jpg" if fmt in {"jpg", "jpeg"} else "png",
+        "minzoom": str(min_zoom),
+        "maxzoom": str(max_zoom),
+        "bounds": f"{bounds['west']},{bounds['south']},{bounds['east']},{bounds['north']}",
+        "attribution": _clean_text(payload.get("attribution"), 260),
+        "source_url": url,
+        "source_min_zoom": str(min_zoom),
+        "source_max_zoom": str(max_zoom),
+        "source_layer_name": layer_name,
+    }
+    job_id = uuid.uuid4().hex[:12]
+    job = {
+        "id": job_id,
+        "kind": "download",
+        "status": "queued",
+        "name": name,
+        "layer_name": layer_name,
+        "path": str(path),
+        "total": len(tiles),
+        "done": 0,
+        "saved": 0,
+        "failed": 0,
+        "created_at": now_ts(),
+    }
+    job_payload = {"tiles": tiles, "path": str(path), "url": url, "metadata": metadata}
+    return job, job_payload, None
+
+
+def job_from_layer(layer: dict[str, Any], mode: str) -> tuple[dict[str, Any], dict[str, Any] | None, tuple[str, int] | None]:
+    path = Path(layer["path"])
+    if MBTILES_DIR not in path.parents:
+        return {}, None, (f"Cannot {mode} this tileset", 403)
+    url = layer.get("source_url", "")
+    if not url or "{z}" not in url:
+        return {}, None, ("No source URL stored for this tileset", 400)
+    bounds_str = layer.get("bounds", "")
+    try:
+        west, south, east, north = [float(v) for v in bounds_str.split(",")]
+    except Exception:
+        return {}, None, ("No bounds stored for this tileset", 400)
+    min_zoom = int(layer.get("minzoom", 0))
+    max_zoom = int(layer.get("maxzoom", 14))
+    tiles = tiles_for_bounds({"south": south, "west": west, "north": north, "east": east}, min_zoom, max_zoom)
+    if mode == "repair":
+        tiles = missing_tiles_for_mbtiles(path, tiles)
+    if not tiles:
+        return {}, None, ("No missing tiles found" if mode == "repair" else "No tiles in area", 400)
+    name = layer.get("name", "Offline map")
+    layer_name = layer.get("source_layer_name", "Map layer")
+    fmt = layer.get("format", "png")
+    metadata = {
+        "name": name, "type": "baselayer", "version": "1",
+        "description": f"{layer_name} offline tiles from Map App",
+        "format": fmt, "minzoom": str(min_zoom), "maxzoom": str(max_zoom),
+        "bounds": bounds_str, "source_url": url,
+        "source_min_zoom": str(min_zoom), "source_max_zoom": str(max_zoom),
+        "source_layer_name": layer_name,
+    }
+    job_id = uuid.uuid4().hex[:12]
+    job = {
+        "id": job_id, "kind": mode, "status": "queued", "name": name, "layer_name": layer_name,
+        "path": str(path), "total": len(tiles), "done": 0, "saved": 0, "failed": 0, "created_at": now_ts(),
+    }
+    payload = {
+        "tiles": tiles, "path": str(path), "url": url, "metadata": metadata,
+        "repair_existing": mode == "repair",
+    }
+    return job, payload, None
 
 
 def haversine_m(a: dict[str, float], b: dict[str, float]) -> float:
@@ -709,80 +902,19 @@ def api_download_estimate():
 
 @app.route("/api/downloads", methods=["POST"])
 def api_create_download():
-    payload = request.get_json(silent=True) or {}
-    try:
-        bounds = {
-            "south": _float(payload.get("south"), "south"),
-            "west": _float(payload.get("west"), "west"),
-            "north": _float(payload.get("north"), "north"),
-            "east": _float(payload.get("east"), "east"),
-        }
-        min_zoom = max(0, min(22, _int(payload.get("min_zoom"), "min_zoom")))
-        max_zoom = max(0, min(22, _int(payload.get("max_zoom"), "max_zoom")))
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    if min_zoom > max_zoom:
-        min_zoom, max_zoom = max_zoom, min_zoom
-    url = _clean_text(payload.get("url"), 500)
-    if not url or "{z}" not in url or "{x}" not in url or "{y}" not in url:
-        return jsonify({"error": "Tile URL template required"}), 400
-    tiles = tiles_for_bounds(bounds, min_zoom, max_zoom)
-    if not tiles:
-        return jsonify({"error": "No tiles in selected area"}), 400
+    job, job_payload, error = job_from_download_payload(request.get_json(silent=True) or {})
+    if error:
+        message, status = error
+        return jsonify({"error": message}), status
+    return jsonify(enqueue_download_job(job, job_payload))
 
-    name = _clean_text(payload.get("name"), 90, "Offline map") or "Offline map"
-    layer_name = _clean_text(payload.get("layer_name"), 90, "Map layer") or "Map layer"
-    fmt = _clean_text(payload.get("format"), 12, "png") or "png"
-    slug = _safe_slug(f"{name}-{layer_name}-z{min_zoom}-{max_zoom}")
-    path = MBTILES_DIR / f"{slug}.mbtiles"
-    suffix = 2
-    while path.exists() or path.with_suffix(path.suffix + ".part").exists():
-        path = MBTILES_DIR / f"{slug}-{suffix}.mbtiles"
-        suffix += 1
-    metadata = {
-        "name": name,
-        "type": "baselayer",
-        "version": "1",
-        "description": f"{layer_name} offline tiles from Map App",
-        "format": "jpg" if fmt in {"jpg", "jpeg"} else "png",
-        "minzoom": str(min_zoom),
-        "maxzoom": str(max_zoom),
-        "bounds": f"{bounds['west']},{bounds['south']},{bounds['east']},{bounds['north']}",
-        "attribution": _clean_text(payload.get("attribution"), 260),
-        "source_url": url,
-        "source_min_zoom": str(min_zoom),
-        "source_max_zoom": str(max_zoom),
-        "source_layer_name": layer_name,
-    }
-    job_id = uuid.uuid4().hex[:12]
-    job = {
-        "id": job_id,
-        "status": "running",
-        "name": name,
-        "layer_name": layer_name,
-        "total": len(tiles),
-        "done": 0,
-        "saved": 0,
-        "failed": 0,
-        "created_at": now_ts(),
-    }
+
+@app.route("/api/downloads", methods=["GET"])
+def api_list_downloads():
     with download_lock:
-        download_jobs[job_id] = job
-    thread = threading.Thread(
-        target=run_download_job,
-        args=(
-            job_id,
-            {
-                "tiles": tiles,
-                "path": str(path),
-                "url": url,
-                "metadata": metadata,
-            },
-        ),
-        daemon=True,
-    )
-    thread.start()
-    return jsonify(job)
+        jobs = [public_job(job) for job in download_jobs.values()]
+    jobs.sort(key=lambda j: j.get("created_at", 0), reverse=True)
+    return jsonify({"jobs": jobs})
 
 
 @app.route("/api/downloads/<job_id>")
@@ -791,7 +923,7 @@ def api_get_download(job_id: str):
         job = download_jobs.get(job_id)
         if not job:
             return jsonify({"error": "Download job not found"}), 404
-        return jsonify(dict(job))
+        return jsonify(public_job(job))
 
 
 @app.route("/tiles/<layer_id>/<int:z>/<int:x>/<int:y>.png")
@@ -1010,14 +1142,52 @@ init_db()
 
 @app.route("/api/downloads/<job_id>/cancel", methods=["POST"])
 def api_cancel_download(job_id):
-    with download_lock:
+    with download_condition:
         job = download_jobs.get(job_id)
         if not job:
             return jsonify({"error": "Job not found"}), 404
-        if job.get("status") != "running":
-            return jsonify({"error": "Job not running"}), 400
+        if job.get("status") in {"done", "error", "cancelled"}:
+            return jsonify({"error": "Job already finished"}), 400
+        if job_id in download_queue:
+            download_queue.remove(job_id)
+            job["status"] = "cancelled"
+            job["finished_at"] = now_ts()
+            return jsonify({"ok": True, "job": public_job(job)})
     _cancelled_jobs.add(job_id)
+    _paused_jobs.discard(job_id)
+    with download_condition:
+        download_condition.notify_all()
     return jsonify({"ok": True})
+
+
+@app.route("/api/downloads/<job_id>/pause", methods=["POST"])
+def api_pause_download(job_id):
+    with download_condition:
+        job = download_jobs.get(job_id)
+        if not job:
+            return jsonify({"error": "Job not found"}), 404
+        if job.get("status") not in {"running", "queued"}:
+            return jsonify({"error": "Job cannot be paused"}), 400
+        _paused_jobs.add(job_id)
+        if job.get("status") == "queued":
+            job["status"] = "paused"
+        download_condition.notify_all()
+        return jsonify({"ok": True, "job": public_job(job)})
+
+
+@app.route("/api/downloads/<job_id>/resume", methods=["POST"])
+def api_resume_download(job_id):
+    with download_condition:
+        job = download_jobs.get(job_id)
+        if not job:
+            return jsonify({"error": "Job not found"}), 404
+        if job.get("status") not in {"paused", "running"}:
+            return jsonify({"error": "Job cannot be resumed"}), 400
+        _paused_jobs.discard(job_id)
+        if job.get("status") == "paused":
+            job["status"] = "queued" if job_id in download_queue else "running"
+        download_condition.notify_all()
+        return jsonify({"ok": True, "job": public_job(job)})
 
 @app.route("/api/tile-layers/<layer_id>", methods=["DELETE"])
 def api_delete_tile_layer(layer_id):
@@ -1027,6 +1197,10 @@ def api_delete_tile_layer(layer_id):
     path = Path(layer["path"])
     if MBTILES_DIR not in path.parents:
         return jsonify({"error": "Cannot delete this tileset"}), 403
+    with download_lock:
+        for job in download_jobs.values():
+            if job.get("status") in {"queued", "running", "paused"} and job.get("path") == str(path):
+                return jsonify({"error": "Tileset has a running download or refresh job"}), 409
     path.unlink(missing_ok=True)
     return jsonify({"ok": True})
 
@@ -1035,46 +1209,53 @@ def api_refresh_tile_layer(layer_id):
     layer = find_mbtiles(layer_id)
     if not layer:
         return jsonify({"error": "Tileset not found"}), 404
-    path = Path(layer["path"])
-    if MBTILES_DIR not in path.parents:
-        return jsonify({"error": "Cannot refresh this tileset"}), 403
-    url = layer.get("source_url", "")
-    if not url or "{z}" not in url:
-        return jsonify({"error": "No source URL stored for this tileset"}), 400
-    bounds_str = layer.get("bounds", "")
-    try:
-        west, south, east, north = [float(v) for v in bounds_str.split(",")]
-    except Exception:
-        return jsonify({"error": "No bounds stored for this tileset"}), 400
-    bounds = {"south": south, "west": west, "north": north, "east": east}
-    min_zoom = int(layer.get("minzoom", 0))
-    max_zoom = int(layer.get("maxzoom", 14))
-    tiles = tiles_for_bounds(bounds, min_zoom, max_zoom)
-    if not tiles:
-        return jsonify({"error": "No tiles in area"}), 400
-    name = layer.get("name", "Offline map")
-    layer_name = layer.get("source_layer_name", "Map layer")
-    fmt = layer.get("format", "png")
-    metadata = {
-        "name": name, "type": "baselayer", "version": "1",
-        "description": f"{layer_name} offline tiles from Map App",
-        "format": fmt, "minzoom": str(min_zoom), "maxzoom": str(max_zoom),
-        "bounds": bounds_str, "source_url": url,
-        "source_min_zoom": str(min_zoom), "source_max_zoom": str(max_zoom),
-        "source_layer_name": layer_name,
-    }
-    job_id = uuid.uuid4().hex[:12]
-    job = {"id": job_id, "status": "running", "name": name, "layer_name": layer_name,
-           "total": len(tiles), "done": 0, "saved": 0, "failed": 0, "created_at": now_ts()}
-    with download_lock:
-        download_jobs[job_id] = job
-    thread = threading.Thread(
-        target=run_download_job,
-        args=(job_id, {"tiles": tiles, "path": str(path), "url": url, "metadata": metadata}),
-        daemon=True,
-    )
-    thread.start()
-    return jsonify(job)
+    job, payload, error = job_from_layer(layer, "refresh")
+    if error:
+        message, status = error
+        return jsonify({"error": message}), status
+    return jsonify(enqueue_download_job(job, payload))
+
+
+@app.route("/api/tile-layers/<layer_id>/repair", methods=["POST"])
+def api_repair_tile_layer(layer_id):
+    layer = find_mbtiles(layer_id)
+    if not layer:
+        return jsonify({"error": "Tileset not found"}), 404
+    job, payload, error = job_from_layer(layer, "repair")
+    if error:
+        message, status = error
+        return jsonify({"error": message}), status
+    return jsonify(enqueue_download_job(job, payload))
+
+
+@app.route("/api/tile-layers/update-all", methods=["POST"])
+def api_update_all_tile_layers():
+    jobs = []
+    errors = []
+    for layer in list_mbtiles():
+        if not layer.get("source_url"):
+            continue
+        job, payload, error = job_from_layer(layer, "refresh")
+        if error:
+            errors.append({"id": layer["id"], "error": error[0]})
+            continue
+        jobs.append(enqueue_download_job(job, payload))
+    return jsonify({"ok": True, "jobs": jobs, "errors": errors})
+
+
+@app.route("/api/tile-layers/repair-all", methods=["POST"])
+def api_repair_all_tile_layers():
+    jobs = []
+    errors = []
+    for layer in list_mbtiles():
+        if not layer.get("source_url"):
+            continue
+        job, payload, error = job_from_layer(layer, "repair")
+        if error:
+            errors.append({"id": layer["id"], "error": error[0]})
+            continue
+        jobs.append(enqueue_download_job(job, payload))
+    return jsonify({"ok": True, "jobs": jobs, "errors": errors})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT, debug=False)

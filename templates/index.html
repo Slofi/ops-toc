@@ -9,7 +9,7 @@
 </head>
 <body>
   <header id="toolbar">
-    <div class="brand">Map</div>
+    <div class="brand"><span class="brand-icon">◇</span><span>Map App</span></div>
     <button class="btn" id="markers-btn">Markers</button>
     <button class="btn" id="add-marker-btn">Add Marker</button>
     <span class="sep"></span>
@@ -26,7 +26,20 @@
     </form>
     <select id="layer-select" title="Map layer"></select>
     <a class="btn" href="/api/export/geojson" target="_blank" rel="noopener">Export</a>
-    <button class="btn icon-btn" id="settings-btn" title="Settings">☰</button>
+    <div id="menu-wrap">
+      <button class="btn icon-btn" id="settings-btn" title="Menu" aria-haspopup="true" aria-expanded="false">☰</button>
+      <div id="hamburger-menu" hidden>
+        <button class="menu-item" type="button" data-settings-target="offline-section">Offline Download</button>
+        <button class="menu-item" type="button" data-settings-target="tilesets-section">Downloaded Maps</button>
+        <button class="menu-item" type="button" data-settings-target="queue-section">Download Queue</button>
+        <button class="menu-item" type="button" data-settings-target="keys-section">Map Keys</button>
+        <button class="menu-item" type="button" data-settings-target="appearance-section">Appearance</button>
+        <button class="menu-item" type="button" data-settings-target="app-control-section">App Control</button>
+        <div class="menu-sep"></div>
+        <button class="menu-item" type="button" id="menu-restart-btn">Restart Map App</button>
+        <button class="menu-item danger" type="button" id="menu-shutdown-btn">Shutdown Map App</button>
+      </div>
+    </div>
   </header>
 
   <main id="main">
@@ -110,7 +123,7 @@
         <button class="btn small" value="cancel">Close</button>
       </div>
 
-      <section class="settings-section">
+      <section class="settings-section" id="offline-section">
         <h3>Offline Maps</h3>
         <p class="dialog-note">Download map tiles into MBTiles under <code>/home/slofi/maps/mbtiles</code>. The CD tile server picks up new files automatically.</p>
         <div class="settings-grid">
@@ -152,18 +165,28 @@
         <div class="section-actions">
           <button class="btn" id="offline-use-view-btn" type="button">Use Current View</button>
           <button class="btn primary" id="offline-download-btn" type="button">Download</button>
+          <button class="btn" id="offline-pause-btn" type="button" hidden>Pause</button>
+          <button class="btn" id="offline-resume-btn" type="button" hidden>Resume</button>
           <button class="btn danger" id="offline-cancel-btn" type="button" hidden>Cancel</button>
         </div>
       </section>
 
-      <section class="settings-section">
+      <section class="settings-section" id="tilesets-section">
         <h3>Downloaded Tilesets</h3>
+        <div id="tilesets-summary" class="tilesets-summary">Checking downloaded maps...</div>
         <div id="tilesets-list"><p class="field-help" style="color:var(--muted)">No tilesets downloaded yet.</p></div>
         <div class="section-actions">
           <button class="btn" id="tilesets-refresh-btn" type="button" onclick="loadTilesets()">Refresh List</button>
+          <button class="btn" id="tilesets-repair-all-btn" type="button" onclick="repairAllTilesets()">Repair Missing</button>
+          <button class="btn primary" id="tilesets-update-all-btn" type="button" onclick="updateAllTilesets()">Update All</button>
         </div>
       </section>
-      <section class="settings-section">
+
+      <section class="settings-section" id="queue-section">
+        <h3>Download Queue</h3>
+        <div id="download-queue-list"><p class="field-help" style="color:var(--muted)">No queued or running jobs.</p></div>
+      </section>
+      <section class="settings-section" id="keys-section">
         <h3>Map Layer Keys</h3>
         <p class="dialog-note">Keys are saved in this browser profile and use the same storage names as OverMesh.</p>
         <label>Thunderforest API key
@@ -180,7 +203,7 @@
         </div>
       </section>
 
-      <section class="settings-section">
+      <section class="settings-section" id="appearance-section">
         <h3>Appearance</h3>
         <p class="dialog-note">Uses the same light/dim derivation as OM so active controls stay readable on the dark UI.</p>
         <label>Accent colour
@@ -192,7 +215,7 @@
         </div>
       </section>
 
-      <section class="settings-section">
+      <section class="settings-section" id="app-control-section">
         <h3>App Control</h3>
         <p class="dialog-note">Pulls the latest GitHub version into this checkout, restarts <code>map-app.service</code>, then reloads the page.</p>
         <div id="version-summary" class="version-summary">Checking version...</div>

@@ -17,12 +17,23 @@ const state = {
   magnifierLastUpdate: 0,
   searchMarker: null,
   offlinePoll: 0,
+  queuePoll: 0,
   offlineBounds: null,
   offlineJobId: null,
 };
 
 const el = (id) => document.getElementById(id);
 const DEFAULT_ACCENT = "#4ade80";
+
+function bindClick(id, handler) {
+  const node = el(id);
+  if (node) node.onclick = handler;
+}
+
+function bindEvent(id, eventName, handler) {
+  const node = el(id);
+  if (node) node.addEventListener(eventName, handler);
+}
 
 function hexToHsl(hex) {
   const r = parseInt(hex.slice(1, 3), 16) / 255;
@@ -62,6 +73,8 @@ function applyAccentColor(hex) {
   const dimHex = hslToHex(h, Math.min(s * 0.5, 35), Math.max(l * 0.25, 12));
   document.documentElement.style.setProperty("--accent", accentHex);
   document.documentElement.style.setProperty("--accent-dim", dimHex);
+  document.documentElement.style.setProperty("--accent-faint", `hsla(${h}, ${s}%, ${Math.max(l, 45)}%, 0.10)`);
+  document.documentElement.style.setProperty("--accent-mid", `hsla(${h}, ${s}%, ${Math.max(l, 45)}%, 0.32)`);
   const swatch = el("accent-swatch");
   if (swatch) swatch.style.background = accentHex;
 }
@@ -130,6 +143,18 @@ function fmtDistance(meters) {
   if (!Number.isFinite(meters)) return "0 m";
   if (meters < 1000) return `${Math.round(meters)} m`;
   return `${(meters / 1000).toFixed(meters < 10000 ? 2 : 1)} km`;
+}
+
+function fmtBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let idx = 0;
+  while (value >= 1024 && idx < units.length - 1) {
+    value /= 1024;
+    idx += 1;
+  }
+  return `${value.toFixed(idx === 0 ? 0 : 1)} ${units[idx]}`;
 }
 
 function esc(text) {
@@ -663,7 +688,7 @@ function setLayer(value) {
   localStorage.setItem("mapAppLayer", value);
 }
 
-function openSettings() {
+function openSettings(targetId = "") {
   el("tf-api-key-input").value = localStorage.getItem("thunderforestApiKey") || "";
   el("mt-api-key-input").value = localStorage.getItem("mapTilerApiKey") || "";
   el("accent-color-input").value = localStorage.getItem("mapAppAccentColor") || currentAccentColor();
@@ -674,6 +699,30 @@ function openSettings() {
   el("settings-dialog").showModal();
   prepareOfflineSection();
   loadVersionStatus(false);
+  if (targetId) {
+    setTimeout(() => {
+      el(targetId)?.scrollIntoView({ block: "start", behavior: "smooth" });
+    }, 80);
+  }
+}
+
+function setHamburgerOpen(open) {
+  const menu = el("hamburger-menu");
+  const button = el("settings-btn");
+  if (!menu || !button) return;
+  menu.hidden = !open;
+  button.classList.toggle("active", open);
+  button.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+function toggleHamburgerMenu(event) {
+  event?.stopPropagation();
+  setHamburgerOpen(el("hamburger-menu")?.hidden ?? true);
+}
+
+function openSettingsFromMenu(targetId) {
+  setHamburgerOpen(false);
+  openSettings(targetId);
 }
 
 function saveLayerKeys(event) {
@@ -778,6 +827,8 @@ function prepareOfflineSection() {
     });
   }
   loadTilesets();
+  loadDownloadQueue();
+  if (!state.queuePoll) state.queuePoll = setInterval(loadDownloadQueue, 2500);
   el("offline-progress").hidden = true;
   el("offline-progress-bar").style.width = "0";
   useCurrentViewForOffline(false);
@@ -851,10 +902,15 @@ function selectOfflineRegion(result) {
 async function pollOfflineJob(jobId) {
   const job = await api(`/api/downloads/${jobId}`);
   const cancelBtn = el("offline-cancel-btn");
+  const pauseBtn = el("offline-pause-btn");
+  const resumeBtn = el("offline-resume-btn");
   const pct = job.total ? Math.round((job.done / job.total) * 100) : 0;
   el("offline-progress").hidden = false;
   el("offline-progress-bar").style.width = `${pct}%`;
   el("offline-status").textContent = `${job.status}: ${job.done}/${job.total} tiles, ${job.saved} saved, ${job.failed} failed`;
+  pauseBtn.hidden = !["queued", "running"].includes(job.status);
+  resumeBtn.hidden = job.status !== "paused";
+  cancelBtn.hidden = !["queued", "running", "paused"].includes(job.status);
   if (job.status === "done" || job.status === "error" || job.status === "cancelled") {
     clearInterval(state.offlinePoll);
     state.offlinePoll = 0;
@@ -862,6 +918,8 @@ async function pollOfflineJob(jobId) {
     el("offline-download-btn").disabled = false;
     cancelBtn.hidden = true;
     cancelBtn.disabled = false;
+    pauseBtn.hidden = true;
+    resumeBtn.hidden = true;
     if (job.status === "done") {
       el("offline-status").textContent = `Done. Saved ${job.saved} tiles.`;
     } else if (job.status === "cancelled") {
@@ -870,6 +928,7 @@ async function pollOfflineJob(jobId) {
       el("offline-status").textContent = `Failed: ${job.error || "unknown error"}`;
     }
     await loadTilesets();
+    await loadDownloadQueue();
   }
 }
 
@@ -901,7 +960,9 @@ async function startOfflineDownload() {
     el("offline-status").textContent = `Started: ${job.total} tiles.`;
     state.offlineJobId = job.id;
     const cancelBtn = el("offline-cancel-btn");
+    const pauseBtn = el("offline-pause-btn");
     if (cancelBtn) { cancelBtn.hidden = false; cancelBtn.disabled = false; }
+    if (pauseBtn) pauseBtn.hidden = false;
     if (state.offlinePoll) clearInterval(state.offlinePoll);
     state.offlinePoll = setInterval(() => pollOfflineJob(job.id).catch((err) => {
       el("offline-status").textContent = err.message;
@@ -954,27 +1015,37 @@ async function loadVersionStatus(checkRemote = false) {
 }
 
 async function restartApp() {
-  el("restart-app-btn").disabled = true;
+  const restartBtn = el("restart-app-btn");
+  const menuRestartBtn = el("menu-restart-btn");
+  if (restartBtn) restartBtn.disabled = true;
+  if (menuRestartBtn) menuRestartBtn.disabled = true;
+  setHamburgerOpen(false);
   el("update-status").textContent = "Restarting Map App service...";
   try {
     await api("/api/service/restart", { method: "POST" });
     setTimeout(() => window.location.reload(), 3500);
   } catch (err) {
-    el("restart-app-btn").disabled = false;
+    if (restartBtn) restartBtn.disabled = false;
+    if (menuRestartBtn) menuRestartBtn.disabled = false;
     el("update-status").textContent = `Restart failed: ${err.message}`;
   }
 }
 
 async function stopApp() {
-  const ok = await appConfirm("Power off Map App? The page will stop responding until the service is started again.", "Power Off");
+  setHamburgerOpen(false);
+  const ok = await appConfirm("Shutdown Map App? The page will stop responding until the service is started again.", "Shutdown");
   if (!ok) return;
-  el("stop-app-btn").disabled = true;
+  const stopBtn = el("stop-app-btn");
+  const menuShutdownBtn = el("menu-shutdown-btn");
+  if (stopBtn) stopBtn.disabled = true;
+  if (menuShutdownBtn) menuShutdownBtn.disabled = true;
   el("update-status").textContent = "Stopping Map App service...";
   try {
     await api("/api/service/stop", { method: "POST" });
     el("update-status").textContent = "Map App is stopping. Start it again from the dashboard when needed.";
   } catch (err) {
-    el("stop-app-btn").disabled = false;
+    if (stopBtn) stopBtn.disabled = false;
+    if (menuShutdownBtn) menuShutdownBtn.disabled = false;
     el("update-status").textContent = `Power off failed: ${err.message}`;
   }
 }
@@ -1073,48 +1144,59 @@ function initMap() {
 
 function bindUi() {
   applyAccentColor(localStorage.getItem("mapAppAccentColor") || DEFAULT_ACCENT);
-  el("markers-btn").onclick = () => setSidePanelClosed(!el("side-panel").classList.contains("closed"));
-  el("close-panel-btn").onclick = () => setSidePanelClosed(true);
-  el("add-marker-btn").onclick = () => startTool("marker");
-  el("measure-btn").onclick = () => startTool("measure");
-  el("draw-line-btn").onclick = () => startTool("line");
-  el("draw-poly-btn").onclick = () => startTool("polygon");
-  el("undo-point-btn").onclick = undoToolPoint;
-  el("finish-tool-btn").onclick = finishTool;
-  el("cancel-tool-btn").onclick = clearTool;
+  bindClick("markers-btn", () => setSidePanelClosed(!el("side-panel").classList.contains("closed")));
+  bindClick("close-panel-btn", () => setSidePanelClosed(true));
+  bindClick("add-marker-btn", () => startTool("marker"));
+  bindClick("measure-btn", () => startTool("measure"));
+  bindClick("draw-line-btn", () => startTool("line"));
+  bindClick("draw-poly-btn", () => startTool("polygon"));
+  bindClick("undo-point-btn", undoToolPoint);
+  bindClick("finish-tool-btn", finishTool);
+  bindClick("cancel-tool-btn", clearTool);
   el("marker-form").onsubmit = saveMarker;
   el("layer-select").onchange = (event) => setLayer(event.target.value);
-  el("settings-btn").onclick = openSettings;
-  el("layer-key-save-btn").onclick = saveLayerKeys;
-  el("accent-save-btn").onclick = saveAccent;
-  el("accent-reset-btn").onclick = resetAccent;
+  bindClick("settings-btn", toggleHamburgerMenu);
+  bindClick("layer-key-save-btn", saveLayerKeys);
+  bindClick("accent-save-btn", saveAccent);
+  bindClick("accent-reset-btn", resetAccent);
   el("offline-min-zoom").onchange = updateOfflineEstimate;
   el("offline-max-zoom").onchange = updateOfflineEstimate;
   el("offline-min-zoom").oninput = updateOfflineEstimate;
   el("offline-max-zoom").oninput = updateOfflineEstimate;
-  el("offline-download-btn").onclick = startOfflineDownload;
-  el("offline-cancel-btn").onclick = cancelOfflineDownload;
-  el("offline-use-view-btn").onclick = () => useCurrentViewForOffline(true);
-  el("offline-region-search-btn").onclick = searchOfflineRegions;
-  el("offline-region-search").addEventListener("keydown", (event) => {
+  bindClick("offline-download-btn", startOfflineDownload);
+  bindClick("offline-cancel-btn", cancelOfflineDownload);
+  bindClick("offline-pause-btn", pauseOfflineDownload);
+  bindClick("offline-resume-btn", resumeOfflineDownload);
+  bindClick("offline-use-view-btn", () => useCurrentViewForOffline(true));
+  bindClick("offline-region-search-btn", searchOfflineRegions);
+  bindEvent("offline-region-search", "keydown", (event) => {
     if (event.key === "Enter") {
       event.preventDefault();
       searchOfflineRegions();
     }
   });
-  el("check-update-btn").onclick = () => loadVersionStatus(true);
-  el("update-app-btn").onclick = updateApp;
-  el("restart-app-btn").onclick = restartApp;
-  el("stop-app-btn").onclick = stopApp;
+  bindClick("check-update-btn", () => loadVersionStatus(true));
+  bindClick("update-app-btn", updateApp);
+  bindClick("restart-app-btn", restartApp);
+  bindClick("stop-app-btn", stopApp);
+  bindClick("menu-restart-btn", restartApp);
+  bindClick("menu-shutdown-btn", stopApp);
+  el("hamburger-menu")?.querySelectorAll("[data-settings-target]").forEach((item) => {
+    item.onclick = () => openSettingsFromMenu(item.dataset.settingsTarget);
+  });
   el("search-form").onsubmit = runSearch;
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && state.tool) clearTool();
     if (event.key === "Escape") hideSearchResults();
+    if (event.key === "Escape") setHamburgerOpen(false);
     if (event.key === "Enter" && state.tool && state.toolPoints.length >= 2) finishTool();
     if ((event.key === "Backspace" || event.key === "Delete") && state.tool && state.toolPoints.length) {
       event.preventDefault();
       undoToolPoint();
     }
+  });
+  document.addEventListener("click", (event) => {
+    if (!el("menu-wrap")?.contains(event.target)) setHamburgerOpen(false);
   });
 }
 
@@ -1140,35 +1222,103 @@ async function cancelOfflineDownload() {
   }
 }
 
+async function pauseOfflineDownload() {
+  if (!state.offlineJobId) return;
+  try {
+    await api(`/api/downloads/${state.offlineJobId}/pause`, { method: "POST" });
+    el("offline-status").textContent = "Paused.";
+    el("offline-pause-btn").hidden = true;
+    el("offline-resume-btn").hidden = false;
+    await loadDownloadQueue();
+  } catch (e) {
+    el("offline-status").textContent = `Pause failed: ${e.message}`;
+  }
+}
+
+async function resumeOfflineDownload() {
+  if (!state.offlineJobId) return;
+  try {
+    await api(`/api/downloads/${state.offlineJobId}/resume`, { method: "POST" });
+    el("offline-status").textContent = "Resuming...";
+    el("offline-pause-btn").hidden = false;
+    el("offline-resume-btn").hidden = true;
+    await loadDownloadQueue();
+  } catch (e) {
+    el("offline-status").textContent = `Resume failed: ${e.message}`;
+  }
+}
+
 async function loadTilesets() {
   const list = el("tilesets-list");
+  const summary = el("tilesets-summary");
   if (!list) return;
   try {
-    const layers = await api("/api/tile-layers");
-    const local = layers.filter((l) => l.source_url);
+    const data = await api("/api/tile-layers");
+    const local = (data.local || []).filter((l) => l.source_url);
+    const totalSize = local.reduce((sum, l) => sum + Number(l.size || 0), 0);
+    const totalTiles = local.reduce((sum, l) => sum + Number(l.tile_count || 0), 0);
+    if (summary) {
+      summary.textContent = local.length
+        ? `${local.length} downloaded maps · ${totalTiles.toLocaleString()} tiles · ${fmtBytes(totalSize)}`
+        : "No downloaded maps yet.";
+    }
     if (!local.length) {
       list.innerHTML = '<p class="field-help" style="color:var(--muted)">No tilesets downloaded yet.</p>';
       return;
     }
     list.innerHTML = local.map((l) => {
-      const mb = (l.size / 1024 / 1024).toFixed(1);
-      const date = l.mtime ? new Date(l.mtime * 1000).toLocaleDateString() : "—";
+      const date = l.mtime ? new Date(l.mtime * 1000).toLocaleString() : "-";
       const zoom = `z${l.minzoom}–${l.maxzoom}`;
-      const sub = [l.source_layer_name, zoom, `${mb} MB`, date].filter(Boolean).join(" · ");
+      const bounds = formatBounds(l.bounds);
+      const sub = [l.source_layer_name, zoom, `${Number(l.tile_count || 0).toLocaleString()} tiles`, fmtBytes(l.size), date].filter(Boolean).join(" · ");
       return `<div class="tileset-row">
         <div class="tileset-info">
-          <div style="font-weight:600;font-size:13px">${l.name}</div>
-          <div class="field-help">${sub}</div>
+          <div class="tileset-title">${esc(l.name)}</div>
+          <div class="field-help">${esc(sub)}</div>
+          <div class="tileset-meta">${esc(bounds)}</div>
+          <code class="tileset-url">${esc(l.map_app_tile_url || `/tiles/${l.id}/{z}/{x}/{y}.png`)}</code>
         </div>
-        <div style="display:flex;gap:6px;flex-shrink:0">
-          <button class="btn small" onclick="refreshTileset('${l.id}','${l.name.replace(/'/g,"\'")}')">Refresh</button>
-          <button class="btn small danger" onclick="deleteTileset('${l.id}','${l.name.replace(/'/g,"\'")}')">Delete</button>
+        <div class="tileset-actions">
+          <button class="btn small" data-action="use" data-id="${esc(l.id)}">Use</button>
+          <button class="btn small" data-action="repair" data-id="${esc(l.id)}" data-name="${esc(l.name)}">Repair</button>
+          <button class="btn small" data-action="refresh" data-id="${esc(l.id)}" data-name="${esc(l.name)}">Refresh</button>
+          <button class="btn small danger" data-action="delete" data-id="${esc(l.id)}" data-name="${esc(l.name)}">Delete</button>
         </div>
       </div>`;
     }).join("");
+    list.querySelectorAll("[data-action]").forEach((btn) => {
+      btn.onclick = () => {
+        const id = btn.dataset.id;
+        const name = btn.dataset.name || id;
+        if (btn.dataset.action === "use") useTileset(id);
+        if (btn.dataset.action === "repair") repairTileset(id, name);
+        if (btn.dataset.action === "refresh") refreshTileset(id, name);
+        if (btn.dataset.action === "delete") deleteTileset(id, name);
+      };
+    });
   } catch (e) {
+    if (summary) summary.textContent = "Failed to load downloaded maps.";
     list.innerHTML = '<p class="field-help" style="color:var(--muted)">Failed to load tilesets.</p>';
   }
+}
+
+function formatBounds(bounds) {
+  const parts = String(bounds || "").split(",").map(Number);
+  if (parts.length !== 4 || !parts.every(Number.isFinite)) return "Bounds unavailable";
+  const [west, south, east, north] = parts;
+  return `Bounds ${south.toFixed(4)}, ${west.toFixed(4)} to ${north.toFixed(4)}, ${east.toFixed(4)}`;
+}
+
+function useTileset(layerId) {
+  const value = `local:${layerId}`;
+  const select = el("layer-select");
+  if (![...select.options].some((o) => o.value === value)) {
+    loadLayers().then(() => useTileset(layerId)).catch((err) => appAlert(err.message, "Map Layer"));
+    return;
+  }
+  select.value = value;
+  setLayer(value);
+  el("settings-dialog").close();
 }
 
 async function deleteTileset(layerId, name) {
@@ -1177,7 +1327,7 @@ async function deleteTileset(layerId, name) {
   try {
     await api(`/api/tile-layers/${layerId}`, { method: "DELETE" });
     await loadTilesets();
-    await loadMapAppTileLayers({ force: true });
+    await loadLayers();
   } catch (e) {
     await appAlert(`Delete failed: ${e.message}`, "Error");
   }
@@ -1188,9 +1338,97 @@ async function refreshTileset(layerId, name) {
   if (!ok) return;
   try {
     const job = await api(`/api/tile-layers/${layerId}/refresh`, { method: "POST" });
-    await appAlert(`Refresh started: ${job.total} tiles. Close this dialog and re-open Offline Maps to monitor progress.`, "Refresh Started");
+    trackOfflineJob(job, `Refreshing "${name}": ${job.total} tiles.`);
   } catch (e) {
     await appAlert(`Refresh failed: ${e.message}`, "Error");
+  }
+}
+
+async function repairTileset(layerId, name) {
+  try {
+    const job = await api(`/api/tile-layers/${layerId}/repair`, { method: "POST" });
+    trackOfflineJob(job, `Repairing "${name}": ${job.total} missing tiles.`);
+  } catch (e) {
+    await appAlert(`Repair failed: ${e.message}`, "Error");
+  }
+}
+
+function trackOfflineJob(job, message) {
+  state.offlineJobId = job.id;
+  el("offline-progress").hidden = false;
+  el("offline-progress-bar").style.width = "0";
+  el("offline-status").textContent = message;
+  el("offline-cancel-btn").hidden = false;
+  el("offline-cancel-btn").disabled = false;
+  el("offline-pause-btn").hidden = false;
+  el("offline-resume-btn").hidden = true;
+  if (state.offlinePoll) clearInterval(state.offlinePoll);
+  state.offlinePoll = setInterval(() => pollOfflineJob(job.id).catch((err) => {
+    el("offline-status").textContent = err.message;
+  }), 1000);
+  pollOfflineJob(job.id).catch((err) => {
+    el("offline-status").textContent = err.message;
+  });
+  loadDownloadQueue();
+}
+
+async function updateAllTilesets() {
+  const ok = await appConfirm("Queue refresh jobs for all downloaded maps with stored source URLs?", "Update All Maps");
+  if (!ok) return;
+  try {
+    const data = await api("/api/tile-layers/update-all", { method: "POST" });
+    if (data.jobs?.length) trackOfflineJob(data.jobs[0], `Queued ${data.jobs.length} update jobs.`);
+    else await appAlert("No update jobs were queued.", "Update All Maps");
+    await loadDownloadQueue();
+  } catch (e) {
+    await appAlert(`Update all failed: ${e.message}`, "Error");
+  }
+}
+
+async function repairAllTilesets() {
+  try {
+    const data = await api("/api/tile-layers/repair-all", { method: "POST" });
+    if (data.jobs?.length) trackOfflineJob(data.jobs[0], `Queued ${data.jobs.length} repair jobs.`);
+    else await appAlert("No missing tiles found in downloaded maps.", "Repair Missing");
+    await loadDownloadQueue();
+  } catch (e) {
+    await appAlert(`Repair all failed: ${e.message}`, "Error");
+  }
+}
+
+async function loadDownloadQueue() {
+  const box = el("download-queue-list");
+  if (!box) return;
+  try {
+    const data = await api("/api/downloads");
+    const jobs = (data.jobs || []).filter((j) => !["done", "cancelled"].includes(j.status)).slice(0, 12);
+    if (!jobs.length) {
+      box.innerHTML = '<p class="field-help" style="color:var(--muted)">No queued or running jobs.</p>';
+      return;
+    }
+    box.innerHTML = jobs.map((j) => {
+      const pct = j.total ? Math.round((j.done / j.total) * 100) : 0;
+      return `<div class="queue-row">
+        <div class="queue-main">
+          <div class="tileset-title">${esc(j.name)} <span class="queue-kind">${esc(j.kind || "download")}</span></div>
+          <div class="field-help">${esc(j.status)} · ${Number(j.done || 0).toLocaleString()}/${Number(j.total || 0).toLocaleString()} tiles · ${Number(j.saved || 0).toLocaleString()} saved · ${Number(j.failed || 0).toLocaleString()} failed</div>
+          <div class="queue-progress"><span style="width:${pct}%"></span></div>
+        </div>
+        <div class="tileset-actions">
+          <button class="btn small" data-job-action="pause" data-id="${esc(j.id)}" ${["running", "queued"].includes(j.status) ? "" : "disabled"}>Pause</button>
+          <button class="btn small" data-job-action="resume" data-id="${esc(j.id)}" ${j.status === "paused" ? "" : "disabled"}>Resume</button>
+          <button class="btn small danger" data-job-action="cancel" data-id="${esc(j.id)}">Cancel</button>
+        </div>
+      </div>`;
+    }).join("");
+    box.querySelectorAll("[data-job-action]").forEach((btn) => {
+      btn.onclick = async () => {
+        await api(`/api/downloads/${btn.dataset.id}/${btn.dataset.jobAction}`, { method: "POST" });
+        await loadDownloadQueue();
+      };
+    });
+  } catch (e) {
+    box.innerHTML = '<p class="field-help" style="color:var(--muted)">Failed to load queue.</p>';
   }
 }
 
