@@ -907,11 +907,43 @@ async function loadLayers() {
   const data = await api("/api/tile-layers");
   const select = el("layer-select");
   select.innerHTML = "";
-  for (const layer of data.local) {
-    const opt = document.createElement("option");
-    opt.value = `local:${layer.id}`;
-    opt.textContent = `Local: ${layer.name}`;
-    select.appendChild(opt);
+  const panelList = el("layers-panel-list");
+  if (panelList) panelList.innerHTML = "";
+
+  function addPanelBtn(value, label) {
+    if (!panelList) return;
+    const btn = document.createElement("button");
+    btn.className = "layer-opt";
+    btn.dataset.value = value;
+    btn.textContent = label;
+    btn.type = "button";
+    btn.onclick = () => { setLayer(value); setLayersPanelOpen(false); };
+    panelList.appendChild(btn);
+  }
+
+  if (data.local.length) {
+    if (panelList) {
+      const lbl = document.createElement("div");
+      lbl.className = "layer-group-label";
+      lbl.textContent = "Local";
+      panelList.appendChild(lbl);
+    }
+    for (const layer of data.local) {
+      const opt = document.createElement("option");
+      opt.value = `local:${layer.id}`;
+      opt.textContent = `Local: ${layer.name}`;
+      opt.dataset.minzoom = layer.minzoom;
+      opt.dataset.maxzoom = layer.maxzoom;
+      select.appendChild(opt);
+      addPanelBtn(opt.value, layer.name);
+    }
+  }
+
+  if (data.online.length && panelList) {
+    const lbl = document.createElement("div");
+    lbl.className = "layer-group-label";
+    lbl.textContent = "Online";
+    panelList.appendChild(lbl);
   }
   for (const layer of data.online) {
     const opt = document.createElement("option");
@@ -922,7 +954,9 @@ async function loadLayers() {
     opt.dataset.maxzoom = layer.maxzoom;
     opt.dataset.keyProvider = layer.key_provider || "";
     select.appendChild(opt);
+    addPanelBtn(opt.value, layer.name);
   }
+
   const saved = localStorage.getItem("mapAppLayer");
   select.value = saved && [...select.options].some((o) => o.value === saved)
     ? saved
@@ -951,8 +985,13 @@ function resolveTileUrl(url, layerName = "selected layer") {
 function createTileLayer(value, magnifier = false) {
   const [type, id] = value.split(":");
   if (type === "local") {
+    const opt = [...el("layer-select").options].find((o) => o.value === value);
+    const maxNative = Number(opt?.dataset.maxzoom || 18);
+    const minNative = Number(opt?.dataset.minzoom || 0);
     return L.tileLayer(`/tiles/${id}/{z}/{x}/{y}.png`, {
-      maxZoom: 18,
+      minZoom: minNative,
+      maxNativeZoom: maxNative,
+      maxZoom: 21,
       attribution: "Local MBTiles",
       detectRetina: !magnifier,
     });
@@ -981,6 +1020,14 @@ function setLayer(value) {
   state.baseLayer = createTileLayer(value).addTo(state.map);
   syncMagnifierLayer();
   localStorage.setItem("mapAppLayer", value);
+  const select = el("layer-select");
+  if (select) select.value = value;
+  document.querySelectorAll("#layers-panel-list .layer-opt").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.value === value);
+  });
+  const opt = [...(select?.options || [])].find((o) => o.value === value);
+  const layersBtn = el("layers-btn");
+  if (layersBtn && opt) layersBtn.textContent = opt.textContent;
 }
 
 function openSettings(targetId = "") {
@@ -999,6 +1046,19 @@ function openSettings(targetId = "") {
       el(targetId)?.scrollIntoView({ block: "start", behavior: "smooth" });
     }, 80);
   }
+}
+
+function setLayersPanelOpen(open) {
+  const panel = el("layers-panel");
+  const btn = el("layers-btn");
+  if (!panel || !btn) return;
+  panel.hidden = !open;
+  btn.classList.toggle("active", open);
+}
+
+function toggleLayersPanel(event) {
+  event?.stopPropagation();
+  setLayersPanelOpen(el("layers-panel")?.hidden ?? true);
 }
 
 function setHamburgerOpen(open) {
@@ -1461,7 +1521,6 @@ function bindUi() {
   const omUrl = localStorage.getItem("mapAppOmSyncUrl");
   if (omUrl && el("om-sync-url")) el("om-sync-url").value = omUrl;
   el("marker-form").onsubmit = saveMarker;
-  el("layer-select").onchange = (event) => setLayer(event.target.value);
   bindClick("settings-btn", toggleHamburgerMenu);
   bindClick("layer-key-save-btn", saveLayerKeys);
   bindClick("accent-save-btn", saveAccent);
@@ -1504,6 +1563,7 @@ function bindUi() {
   });
   document.addEventListener("click", (event) => {
     if (!el("menu-wrap")?.contains(event.target)) setHamburgerOpen(false);
+    if (!el("layer-wrap")?.contains(event.target)) setLayersPanelOpen(false);
   });
 }
 
@@ -1587,6 +1647,7 @@ async function loadTilesets() {
         </div>
         <div class="tileset-actions">
           <button class="btn small" data-action="use" data-id="${esc(l.id)}">Use</button>
+          <button class="btn small" data-action="extend" data-id="${esc(l.id)}" data-name="${esc(l.name)}" data-minzoom="${l.minzoom}" data-maxzoom="${l.maxzoom}">Edit Zoom</button>
           <button class="btn small" data-action="repair" data-id="${esc(l.id)}" data-name="${esc(l.name)}">Repair</button>
           <button class="btn small" data-action="refresh" data-id="${esc(l.id)}" data-name="${esc(l.name)}">Refresh</button>
           <button class="btn small danger" data-action="delete" data-id="${esc(l.id)}" data-name="${esc(l.name)}">Delete</button>
@@ -1598,6 +1659,7 @@ async function loadTilesets() {
         const id = btn.dataset.id;
         const name = btn.dataset.name || id;
         if (btn.dataset.action === "use") useTileset(id);
+        if (btn.dataset.action === "extend") extendTileset(id, name, Number(btn.dataset.minzoom), Number(btn.dataset.maxzoom));
         if (btn.dataset.action === "repair") repairTileset(id, name);
         if (btn.dataset.action === "refresh") refreshTileset(id, name);
         if (btn.dataset.action === "delete") deleteTileset(id, name);
@@ -1637,6 +1699,66 @@ async function deleteTileset(layerId, name) {
     await loadLayers();
   } catch (e) {
     await appAlert(`Delete failed: ${e.message}`, "Error");
+  }
+}
+
+function appZoomDialog(name, currentMin, currentMax) {
+  return new Promise((resolve) => {
+    const dlg = document.createElement("dialog");
+    dlg.style.cssText = "background:var(--surface);color:var(--fg);border:1px solid var(--border);border-radius:10px;padding:22px 24px;min-width:260px;max-width:340px;box-shadow:0 8px 32px #0008";
+    dlg.innerHTML = `
+      <form method="dialog" style="display:flex;flex-direction:column;gap:14px">
+        <h2 style="margin:0;font-size:15px;font-weight:600">Edit Zoom Range</h2>
+        <p style="margin:0;font-size:13px;color:var(--muted)">"${esc(name)}" — current range: z${currentMin}–z${currentMax}</p>
+        <div style="display:flex;gap:12px">
+          <label style="flex:1;font-size:13px;display:flex;flex-direction:column;gap:5px">Min zoom
+            <input id="zoom-dlg-min" type="number" min="0" max="22" value="${currentMin}"
+              style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:14px;width:100%;box-sizing:border-box">
+          </label>
+          <label style="flex:1;font-size:13px;display:flex;flex-direction:column;gap:5px">Max zoom
+            <input id="zoom-dlg-max" type="number" min="0" max="22" value="${currentMax}"
+              style="background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:14px;width:100%;box-sizing:border-box">
+          </label>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
+          <button id="zoom-dlg-cancel" class="btn" value="cancel" type="button">Cancel</button>
+          <button class="btn primary" value="default" type="submit">Download</button>
+        </div>
+      </form>`;
+    document.body.appendChild(dlg);
+    const cleanup = () => { dlg.remove(); };
+    dlg.querySelector("form").onsubmit = (e) => {
+      e.preventDefault();
+      const minVal = parseInt(dlg.querySelector("#zoom-dlg-min").value, 10);
+      const maxVal = parseInt(dlg.querySelector("#zoom-dlg-max").value, 10);
+      cleanup();
+      resolve({ min: minVal, max: maxVal });
+    };
+    dlg.querySelector("#zoom-dlg-cancel").onclick = () => { cleanup(); resolve(null); };
+    dlg.oncancel = () => { cleanup(); resolve(null); };
+    dlg.showModal();
+    setTimeout(() => dlg.querySelector("#zoom-dlg-min")?.focus(), 60);
+  });
+}
+
+async function extendTileset(layerId, name, currentMin, currentMax) {
+  const result = await appZoomDialog(name, currentMin, currentMax);
+  if (result === null) return;
+  const minZ = Math.max(0, Math.min(22, Number.isFinite(result.min) ? result.min : currentMin));
+  const maxZ = Math.max(0, Math.min(22, Number.isFinite(result.max) ? result.max : currentMax));
+  if (minZ === currentMin && maxZ === currentMax) {
+    await appAlert("No zoom range change — nothing to add.", "Edit Zoom Range");
+    return;
+  }
+  try {
+    const job = await api(`/api/tile-layers/${layerId}/extend`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ min_zoom: minZ, max_zoom: maxZ }),
+    });
+    trackOfflineJob(job, `Extending "${name}" to z${minZ}–z${maxZ}: ${job.total} tiles.`);
+  } catch (e) {
+    await appAlert(`Extend failed: ${e.message}`, "Error");
   }
 }
 

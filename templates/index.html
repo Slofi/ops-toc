@@ -24,7 +24,13 @@
       <input id="search-input" type="search" placeholder="Search places" autocomplete="off">
       <button class="btn" id="search-btn" type="submit">Search</button>
     </form>
-    <select id="layer-select" title="Map layer"></select>
+    <select id="layer-select" hidden></select>
+    <div id="layer-wrap">
+      <button class="btn" id="layers-btn" onclick="toggleLayersPanel(event)">Layers</button>
+      <div id="layers-panel" hidden>
+        <div id="layers-panel-list"></div>
+      </div>
+    </div>
     <a class="btn" href="/api/export/geojson" target="_blank" rel="noopener">GeoJSON</a>
     <div id="menu-wrap">
       <button class="btn icon-btn" id="settings-btn" title="Menu" aria-haspopup="true" aria-expanded="false">☰</button>
