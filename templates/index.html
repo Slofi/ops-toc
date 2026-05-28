@@ -32,6 +32,9 @@
       </div>
     </div>
     <a class="btn" href="/api/export/geojson" target="_blank" rel="noopener">GeoJSON</a>
+    <button class="btn icon-btn" id="gps-btn" title="GPS position" onclick="gpsGoTo()">
+      <span id="gps-dot" class="gps-dot off"></span> GPS
+    </button>
     <div id="menu-wrap">
       <button class="btn icon-btn" id="settings-btn" title="Menu" aria-haspopup="true" aria-expanded="false">☰</button>
       <div id="hamburger-menu" hidden>
@@ -40,6 +43,7 @@
         <button class="menu-item" type="button" data-settings-target="tilesets-section">Downloaded Maps</button>
         <button class="menu-item" type="button" data-settings-target="queue-section">Download Queue</button>
         <button class="menu-item" type="button" data-settings-target="keys-section">Map Keys</button>
+        <button class="menu-item" type="button" data-settings-target="gps-section">GPS</button>
         <button class="menu-item" type="button" data-settings-target="appearance-section">Appearance</button>
         <button class="menu-item" type="button" data-settings-target="app-control-section">App Control</button>
         <button class="menu-item" type="button" id="menu-manual-btn">Manual</button>
@@ -246,6 +250,37 @@
         <div id="layer-key-status"></div>
         <div class="section-actions">
           <button class="btn primary" id="layer-key-save-btn" type="button">Save Keys</button>
+        </div>
+      </section>
+
+      <section class="settings-section" id="gps-section">
+        <h3>GPS</h3>
+        <p class="dialog-note">Two modes: <b>OM proxy</b> (recommended when OM is running — polls OM's GPS so only one app owns the serial port) or <b>Direct serial</b> (for standalone use without OM). When the GPIU is installed, configure it once in OM and proxy mode keeps working here automatically.</p>
+        <div class="settings-grid">
+          <label class="setting-row">
+            <span>Enable GPS</span>
+            <input type="checkbox" id="gps-enabled">
+          </label>
+          <label class="setting-row">
+            <span>Source</span>
+            <select id="gps-source-select" onchange="gpsSourceChanged()">
+              <option value="proxy">OM proxy (localhost:8082)</option>
+              <option value="direct">Direct serial port</option>
+            </select>
+          </label>
+          <div id="gps-port-row" class="setting-row" hidden>
+            <span>Port</span>
+            <div style="display:flex;gap:6px;align-items:center">
+              <select id="gps-port-select" style="flex:1"></select>
+              <button class="btn small" type="button" id="gps-scan-btn">Scan</button>
+            </div>
+          </div>
+        </div>
+        <div id="gps-status-row" class="gps-status-row" hidden>
+          <span id="gps-status-text" class="field-help"></span>
+        </div>
+        <div class="section-actions">
+          <button class="btn primary" type="button" id="gps-save-btn">Save GPS Settings</button>
         </div>
       </section>
 

@@ -814,3 +814,18 @@ textarea { resize: vertical; }
   height: 100%;
   background: var(--accent);
 }
+
+/* ── GPS ── */
+.gps-dot {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  vertical-align: middle;
+  margin-right: 3px;
+  flex-shrink: 0;
+}
+.gps-dot.fix    { background: #4ade80; box-shadow: 0 0 5px #4ade8099; }
+.gps-dot.acquiring { background: #fbbf24; box-shadow: 0 0 5px #fbbf2499; }
+.gps-dot.off    { background: #555; }
+.gps-status-row { padding: 6px 0 0; }
+.setting-row    { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 0; }

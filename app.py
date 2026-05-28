@@ -1873,5 +1873,52 @@ def api_repair_all_tile_layers():
         jobs.append(enqueue_download_job(job, payload))
     return jsonify({"ok": True, "jobs": jobs, "errors": errors})
 
+
+# ── GPS ───────────────────────────────────────────────────────────────────────
+
+import gps as _gps
+
+_gps.init(APP_ROOT)
+
+
+@app.route("/api/gps")
+def api_gps_get():
+    with _gps.gps_lock:
+        pos = dict(_gps.gps_state)
+        rt  = dict(_gps._gps_runtime)
+    cfg = _gps.load_config()
+    return jsonify({**cfg, **pos, **rt})
+
+
+@app.route("/api/gps", methods=["POST"])
+def api_gps_set():
+    data     = request.get_json(silent=True) or {}
+    enabled  = bool(data.get("enabled", False))
+    port     = str(data.get("port", "")).strip()
+    om_proxy = bool(data.get("om_proxy", False))
+    om_url   = str(data.get("om_url", "http://localhost:8082")).strip()
+    cfg = _gps.load_config()
+    cfg["enabled"]  = enabled
+    cfg["port"]     = port
+    cfg["om_proxy"] = om_proxy
+    cfg["om_url"]   = om_url
+    _gps.save_config(cfg)
+    if enabled:
+        if om_proxy and om_url:
+            _gps._start_proxy(om_url, fallback_port=port)
+        elif port:
+            _gps.gps_start(port)
+        else:
+            _gps.gps_stop()
+    else:
+        _gps.gps_stop()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/gps/ports")
+def api_gps_ports():
+    return jsonify({"ports": _gps.list_ports()})
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT, debug=False)

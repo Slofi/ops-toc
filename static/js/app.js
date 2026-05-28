@@ -1899,3 +1899,132 @@ function setZoomPreset(minZ, maxZ) {
   el("offline-max-zoom").value = maxZ;
   updateOfflineEstimate();
 }
+
+// ── GPS ────────────────────────────────────────────────────────────────────
+
+let _gpsState   = { fix: false, lat: null, lon: null, alt: null, sats: 0, sats_view: 0 };
+let _gpsEnabled = false;
+let _gpsMarker  = null;
+let _gpsTimer   = null;
+
+function _gpsUpdateDot() {
+  const dot = el("gps-dot");
+  if (!dot) return;
+  dot.className = "gps-dot " + (_gpsEnabled
+    ? (_gpsState.fix ? "fix" : "acquiring")
+    : "off");
+}
+
+function _gpsUpdateMarker() {
+  if (!_gpsState.fix || _gpsState.lat === null) {
+    if (_gpsMarker) { state.map.removeLayer(_gpsMarker); _gpsMarker = null; }
+    return;
+  }
+  const ll = [_gpsState.lat, _gpsState.lon];
+  if (!_gpsMarker) {
+    const icon = L.divIcon({
+      className: "",
+      html: '<div style="width:14px;height:14px;background:#3b82f6;border:2px solid #fff;border-radius:50%;box-shadow:0 0 6px #3b82f680"></div>',
+      iconSize: [14, 14], iconAnchor: [7, 7],
+    });
+    _gpsMarker = L.marker(ll, { icon, zIndexOffset: 1000 })
+      .bindPopup(() => {
+        const s = _gpsState;
+        return `<b>GPS Position</b><br>${s.lat.toFixed(6)}, ${s.lon.toFixed(6)}<br>Alt: ${s.alt ?? "—"}m · Sats: ${s.sats}`;
+      })
+      .addTo(state.map);
+  } else {
+    _gpsMarker.setLatLng(ll);
+  }
+}
+
+async function _gpsPoll() {
+  try {
+    const d = await api("/api/gps");
+    _gpsEnabled = d.enabled || false;
+    _gpsState   = { fix: d.fix, lat: d.lat, lon: d.lon, alt: d.alt, sats: d.sats, sats_view: d.sats_view };
+    _gpsUpdateDot();
+    _gpsUpdateMarker();
+    // update status text in settings panel if visible
+    const row = el("gps-status-row");
+    const txt = el("gps-status-text");
+    if (row && txt) {
+      if (!d.enabled) {
+        row.hidden = true;
+      } else {
+        row.hidden = false;
+        if (d.fix) {
+          txt.textContent = `Fix ✓ — ${Number(d.lat).toFixed(5)}, ${Number(d.lon).toFixed(5)} · Alt ${d.alt ?? "—"}m · Sats ${d.sats}`;
+        } else {
+          txt.textContent = `No fix — Sats in view: ${d.sats_view || 0}${d.error ? " · " + d.error : ""}`;
+        }
+      }
+    }
+  } catch (_) {}
+}
+
+function gpsGoTo() {
+  if (_gpsState.fix && _gpsState.lat !== null) {
+    state.map.setView([_gpsState.lat, _gpsState.lon], Math.max(state.map.getZoom(), 15));
+    if (_gpsMarker) _gpsMarker.openPopup();
+  }
+}
+
+async function gpsScanPorts() {
+  const sel = el("gps-port-select");
+  if (!sel) return;
+  try {
+    const d    = await api("/api/gps/ports");
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">— select port —</option>' +
+      (d.ports || []).map((p) => `<option value="${esc(p)}">${esc(p)}</option>`).join("");
+    if (prev) sel.value = prev;
+  } catch (_) {}
+}
+
+function gpsSourceChanged() {
+  const v   = (el("gps-source-select") || {}).value;
+  const row = el("gps-port-row");
+  if (row) row.hidden = (v !== "direct");
+}
+
+async function gpsSaveSettings() {
+  const enabled  = el("gps-enabled").checked;
+  const port     = (el("gps-port-select") || {}).value || "";
+  const src      = el("gps-source-select");
+  const om_proxy = src ? src.value === "proxy" : true;
+  await api("/api/gps", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled, port, om_proxy, om_url: "http://localhost:8082" }) });
+  await _gpsPoll();
+}
+
+async function initGps() {
+  const saveBtn = el("gps-save-btn");
+  const scanBtn = el("gps-scan-btn");
+  const srcSel  = el("gps-source-select");
+  if (saveBtn) saveBtn.onclick = gpsSaveSettings;
+  if (scanBtn) scanBtn.onclick = gpsScanPorts;
+  if (srcSel)  srcSel.onchange = gpsSourceChanged;
+  // Pre-populate settings panel when opened
+  document.querySelectorAll("[data-settings-target='gps-section']").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const d  = await api("/api/gps");
+      const cb = el("gps-enabled");
+      if (cb) cb.checked = d.enabled || false;
+      const src = el("gps-source-select");
+      if (src) { src.value = (d.om_proxy !== false) ? "proxy" : "direct"; gpsSourceChanged(); }
+      await gpsScanPorts();
+      const sel = el("gps-port-select");
+      if (sel && d.port) sel.value = d.port;
+      await _gpsPoll();
+    });
+  });
+  await _gpsPoll();
+  _gpsTimer = setInterval(_gpsPoll, 3000);
+}
+
+// Hook into existing DOMContentLoaded / init cycle
+document.addEventListener("DOMContentLoaded", () => {
+  // initMap is already called — hook GPS after a short delay to let map init settle
+  setTimeout(initGps, 500);
+});
