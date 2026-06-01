@@ -5,6 +5,10 @@ const state = {
   markerLayers: new Map(),
   drawings: new Map(),
   drawingLayers: new Map(),
+  tracks: new Map(),
+  trackLayers: new Map(),
+  recording: null,
+  recordingLayer: null,
   tool: null,
   toolPoints: [],
   toolMarkers: [],
@@ -23,7 +27,8 @@ const state = {
 };
 
 const el = (id) => document.getElementById(id);
-const DEFAULT_ACCENT = "#4ade80";
+const DEFAULT_ACCENT = "#e8b04f";
+const TRACK_COLOR = "#e8b04f";
 
 function bindClick(id, handler) {
   const node = el(id);
@@ -209,6 +214,21 @@ const MAP_APP_MANUAL_SECTIONS = [
       ["Undo Last", "Delete the latest point in the active drawing."],
       ["Finish", "Save the active drawing."],
       ["Cancel", "Discard the active drawing."]
+    ]
+  },
+  {
+    title: "GPS Tracks",
+    tags: "gps track trace record dongle gpx geojson edit share",
+    body: [
+      "GPS can run through OM proxy or direct serial. Record stores fixed GPS positions as a saved track with distance, timestamps, and altitude when available.",
+      "Saved tracks can be viewed on the map, renamed, exported as GPX or GeoJSON, converted into a drawing, or deleted."
+    ],
+    buttons: [
+      ["GPS", "Jump to the current GPS fix."],
+      ["Record", "Start or stop a GPS trace."],
+      ["Edit", "Rename a saved track."],
+      ["GPX", "Download one track as a GPX file."],
+      ["GeoJSON", "Open one track as GeoJSON for sharing."]
     ]
   },
   {
@@ -836,6 +856,236 @@ async function deleteDrawing(id) {
   await loadDrawings();
 }
 
+function distanceBetween(a, b) {
+  const radius = 6371008.8;
+  const lat1 = a.lat * Math.PI / 180;
+  const lat2 = b.lat * Math.PI / 180;
+  const dlat = lat2 - lat1;
+  const dlon = (b.lon - a.lon) * Math.PI / 180;
+  const h = Math.sin(dlat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dlon / 2) ** 2;
+  return 2 * radius * Math.asin(Math.sqrt(h));
+}
+
+function trackDistance(points) {
+  return points.reduce((sum, point, idx) => idx ? sum + distanceBetween(points[idx - 1], point) : 0, 0);
+}
+
+function trackPopup(track) {
+  return `
+    <div style="min-width:210px;max-width:280px">
+      <div style="color:var(--accent);font-weight:700;margin-bottom:4px">${esc(track.name)}</div>
+      ${track.description ? `<div style="margin-bottom:7px">${esc(track.description)}</div>` : ""}
+      <div style="color:var(--muted);font-size:11px;margin-bottom:8px">
+        ${track.points?.length || 0} pts - ${fmtDistance(track.distance_m || 0)}
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn small" onclick="editTrack(${track.id})">Edit</button>
+        <button class="btn small" onclick="downloadTrack(${track.id}, 'gpx')">GPX</button>
+        <button class="btn small" onclick="downloadTrack(${track.id}, 'geojson')">GeoJSON</button>
+        <button class="btn small" onclick="trackToDrawing(${track.id})">Drawing</button>
+        <button class="btn small danger" onclick="deleteTrack(${track.id})">Delete</button>
+      </div>
+    </div>`;
+}
+
+function renderTrack(track) {
+  const old = state.trackLayers.get(track.id);
+  if (old) state.map.removeLayer(old);
+  const points = track.points || [];
+  if (points.length < 2) return;
+  const layer = L.polyline(points.map((p) => [p.lat, p.lon]), {
+    color: track.color || TRACK_COLOR,
+    weight: 4,
+    opacity: 0.9,
+  }).addTo(state.map).bindPopup(trackPopup(track));
+  state.trackLayers.set(track.id, layer);
+}
+
+async function loadTracks() {
+  const tracks = await api("/api/tracks");
+  const active = new Set(tracks.map((track) => track.id));
+  for (const [id, layer] of state.trackLayers.entries()) {
+    if (!active.has(id)) {
+      state.map.removeLayer(layer);
+      state.trackLayers.delete(id);
+      state.tracks.delete(id);
+    }
+  }
+  tracks.forEach((track) => {
+    state.tracks.set(track.id, track);
+    renderTrack(track);
+  });
+  renderTrackList();
+}
+
+function renderTrackList() {
+  const list = el("track-list");
+  if (!list) return;
+  const tracks = [...state.tracks.values()].sort((a, b) => b.updated_at - a.updated_at);
+  if (!tracks.length) {
+    list.innerHTML = '<div class="empty">No GPS tracks yet. Press Record when GPS has a fix.</div>';
+    return;
+  }
+  list.innerHTML = tracks.map((track) => `
+    <div class="list-row" onclick="flyToTrack(${track.id})">
+      <div class="row-icon track-icon">trk</div>
+      <div class="row-main">
+        <div class="row-title">${esc(track.name)}</div>
+        <div class="row-sub">${track.points?.length || 0} pts - ${fmtDistance(track.distance_m || 0)}</div>
+      </div>
+      <div class="row-actions">
+        <button class="btn small" onclick="event.stopPropagation();editTrack(${track.id})">Edit</button>
+        <button class="btn small" onclick="event.stopPropagation();downloadTrack(${track.id}, 'gpx')">GPX</button>
+      </div>
+    </div>`).join("");
+}
+
+function flyToTrack(id) {
+  const layer = state.trackLayers.get(id);
+  if (!layer) return;
+  state.map.fitBounds(layer.getBounds().pad(0.2), { maxZoom: 16 });
+  setTimeout(() => layer.openPopup?.(), 160);
+}
+
+async function editTrack(id) {
+  const track = state.tracks.get(id);
+  if (!track) return;
+  const name = await appPrompt("Track name:", track.name, "Edit Track");
+  if (name === null) return;
+  const description = await appPrompt("Track description:", track.description || "", "Edit Track");
+  if (description === null) return;
+  try {
+    await api(`/api/tracks/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name.trim() || track.name, description }),
+    });
+    await loadTracks();
+  } catch (err) {
+    await appAlert(err.message, "Edit Track");
+  }
+}
+
+function downloadTrack(id, format) {
+  const suffix = format === "geojson" ? "geojson" : "gpx";
+  window.open(`/api/tracks/${id}/${suffix}`, "_blank", "noopener");
+}
+
+async function trackToDrawing(id) {
+  try {
+    await api(`/api/tracks/${id}/drawing`, { method: "POST" });
+    await loadDrawings();
+    await appAlert("Track copied to drawings.", "Track");
+  } catch (err) {
+    await appAlert(err.message, "Track");
+  }
+}
+
+async function deleteTrack(id) {
+  const track = state.tracks.get(id);
+  if (!track || !(await appConfirm(`Delete track "${track.name}"?`, "Delete Track"))) return;
+  await api(`/api/tracks/${id}`, { method: "DELETE" });
+  await loadTracks();
+}
+
+function updateRecordingLayer() {
+  if (!state.recording) return;
+  const points = state.recording.points;
+  if (state.recordingLayer) state.map.removeLayer(state.recordingLayer);
+  if (points.length < 2) {
+    state.recordingLayer = null;
+    return;
+  }
+  state.recordingLayer = L.polyline(points.map((p) => [p.lat, p.lon]), {
+    color: TRACK_COLOR,
+    weight: 5,
+    opacity: 0.95,
+    dashArray: "8 8",
+  }).addTo(state.map);
+}
+
+function setRecordingButton() {
+  const btn = el("track-record-btn");
+  if (!btn) return;
+  const active = Boolean(state.recording);
+  btn.classList.toggle("active", active);
+  btn.textContent = active ? `Stop (${state.recording.points.length})` : "Track";
+}
+
+function captureGpsPoint() {
+  if (!state.recording || !_gpsEnabled || !_gpsState.fix || _gpsState.lat === null || _gpsState.lon === null) return;
+  const point = {
+    lat: Number(_gpsState.lat),
+    lon: Number(_gpsState.lon),
+    alt: _gpsState.alt,
+    sats: _gpsState.sats || 0,
+    ts: Math.floor(Date.now() / 1000),
+    time: new Date().toISOString(),
+  };
+  const last = state.recording.points.at(-1);
+  if (last && distanceBetween(last, point) < 3 && point.ts - (last.ts || 0) < 10) return;
+  state.recording.points.push(point);
+  state.recording.ended_at = point.ts;
+  updateRecordingLayer();
+  setRecordingButton();
+  const distance = trackDistance(state.recording.points);
+  setBanner(`Recording GPS track - ${state.recording.points.length} pts - ${fmtDistance(distance)}`);
+}
+
+async function startTrackRecording() {
+  if (!_gpsEnabled) {
+    await appAlert("Enable GPS first.", "Track Recording");
+    return;
+  }
+  if (!_gpsState.fix || _gpsState.lat === null) {
+    await appAlert("Waiting for a GPS fix before recording.", "Track Recording");
+    return;
+  }
+  const ts = Math.floor(Date.now() / 1000);
+  state.recording = { points: [], started_at: ts, ended_at: ts };
+  captureGpsPoint();
+  setRecordingButton();
+}
+
+async function stopTrackRecording() {
+  const recording = state.recording;
+  if (!recording) return;
+  state.recording = null;
+  if (state.recordingLayer) {
+    state.map.removeLayer(state.recordingLayer);
+    state.recordingLayer = null;
+  }
+  setRecordingButton();
+  setBanner("");
+  if (recording.points.length < 2) {
+    await appAlert("Track discarded because it has fewer than two points.", "Track Recording");
+    return;
+  }
+  const name = await appPrompt("Track name:", `Track ${new Date().toLocaleString()}`, "Save Track");
+  if (name === null) return;
+  try {
+    await api("/api/tracks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: name.trim() || "GPS track",
+        color: TRACK_COLOR,
+        points: recording.points,
+        started_at: recording.started_at,
+        ended_at: recording.ended_at,
+      }),
+    });
+    await loadTracks();
+  } catch (err) {
+    await appAlert(err.message, "Save Track");
+  }
+}
+
+function toggleTrackRecording() {
+  if (state.recording) stopTrackRecording();
+  else startTrackRecording();
+}
+
 async function importGpxFile(event) {
   const input = event.target;
   const file = input.files?.[0];
@@ -847,9 +1097,9 @@ async function importGpxFile(event) {
   try {
     const result = await api("/api/import/gpx", { method: "POST", body: form });
     input.value = "";
-    if (status) status.textContent = `Imported ${result.markers || 0} markers and ${result.drawings || 0} drawings.`;
-    await Promise.all([loadMarkers(), loadDrawings()]);
-    await appAlert(`Imported ${result.markers || 0} markers and ${result.drawings || 0} drawings.`, "GPX Import");
+    if (status) status.textContent = `Imported ${result.markers || 0} markers, ${result.drawings || 0} drawings, and ${result.tracks || 0} tracks.`;
+    await Promise.all([loadMarkers(), loadDrawings(), loadTracks()]);
+    await appAlert(`Imported ${result.markers || 0} markers, ${result.drawings || 0} drawings, and ${result.tracks || 0} tracks.`, "GPX Import");
   } catch (err) {
     input.value = "";
     if (status) status.textContent = `Import failed: ${err.message}`;
@@ -1101,6 +1351,12 @@ function resetAccent() {
   localStorage.setItem("mapAppAccentColor", DEFAULT_ACCENT);
   el("accent-color-input").value = DEFAULT_ACCENT;
   applyAccentColor(DEFAULT_ACCENT);
+}
+
+function closeSettingsOnBackdrop(event) {
+  if (event.target === event.currentTarget) {
+    event.currentTarget.close();
+  }
 }
 
 function currentLayerOption() {
@@ -1510,6 +1766,8 @@ function bindUi() {
   bindClick("cancel-tool-btn", clearTool);
   bindClick("gpx-import-btn", () => el("gpx-import-file")?.click());
   bindEvent("gpx-import-file", "change", importGpxFile);
+  bindClick("track-record-btn", toggleTrackRecording);
+  bindClick("tracks-refresh-btn", loadTracks);
   bindClick("om-pull-btn", pullFromOverMesh);
   bindClick("om-push-btn", pushToOverMesh);
   bindClick("menu-manual-btn", openManual);
@@ -1522,6 +1780,7 @@ function bindUi() {
   if (omUrl && el("om-sync-url")) el("om-sync-url").value = omUrl;
   el("marker-form").onsubmit = saveMarker;
   bindClick("settings-btn", toggleHamburgerMenu);
+  bindEvent("settings-dialog", "click", closeSettingsOnBackdrop);
   bindClick("layer-key-save-btn", saveLayerKeys);
   bindClick("accent-save-btn", saveAccent);
   bindClick("accent-reset-btn", resetAccent);
@@ -1571,7 +1830,7 @@ async function boot() {
   bindUi();
   initMap();
   await loadLayers();
-  await Promise.all([loadMarkers(), loadDrawings()]);
+  await Promise.all([loadMarkers(), loadDrawings(), loadTracks()]);
 }
 
 boot().catch((err) => appAlert(err.message, "Startup Failed"));
@@ -1924,7 +2183,7 @@ function _gpsUpdateMarker() {
   if (!_gpsMarker) {
     const icon = L.divIcon({
       className: "",
-      html: '<div style="width:14px;height:14px;background:#3b82f6;border:2px solid #fff;border-radius:50%;box-shadow:0 0 6px #3b82f680"></div>',
+      html: '<div style="width:14px;height:14px;background:#e8b04f;border:2px solid #fff;border-radius:50%;box-shadow:0 0 6px rgba(232,176,79,0.65)"></div>',
       iconSize: [14, 14], iconAnchor: [7, 7],
     });
     _gpsMarker = L.marker(ll, { icon, zIndexOffset: 1000 })
@@ -1945,6 +2204,7 @@ async function _gpsPoll() {
     _gpsState   = { fix: d.fix, lat: d.lat, lon: d.lon, alt: d.alt, sats: d.sats, sats_view: d.sats_view };
     _gpsUpdateDot();
     _gpsUpdateMarker();
+    captureGpsPoint();
     // update status text in settings panel if visible
     const row = el("gps-status-row");
     const txt = el("gps-status-text");

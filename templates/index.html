@@ -35,6 +35,7 @@
     <button class="btn icon-btn" id="gps-btn" title="GPS position" onclick="gpsGoTo()">
       <span id="gps-dot" class="gps-dot off"></span> GPS
     </button>
+    <button class="btn" id="track-record-btn" title="Record a GPS track">Track</button>
     <div id="menu-wrap">
       <button class="btn icon-btn" id="settings-btn" title="Menu" aria-haspopup="true" aria-expanded="false">☰</button>
       <div id="hamburger-menu" hidden>
@@ -71,6 +72,13 @@
         </div>
       </div>
       <div id="drawing-list"></div>
+      <div class="panel-head border-top">
+        <div>
+          <div class="panel-title">Tracks</div>
+          <div class="panel-subtitle">Recorded GPS traces.</div>
+        </div>
+      </div>
+      <div id="track-list"></div>
     </aside>
 
     <section id="map-wrap">
@@ -160,6 +168,7 @@
           <button class="btn" id="gpx-import-btn" type="button">Import GPX</button>
           <a class="btn" href="/api/export/gpx">Export GPX</a>
           <a class="btn" href="/api/export/geojson" target="_blank" rel="noopener">Export GeoJSON</a>
+          <button class="btn" id="tracks-refresh-btn" type="button">Refresh Tracks</button>
         </div>
         <div class="section-actions">
           <button class="btn" id="om-pull-btn" type="button">Pull From OM</button>
@@ -288,7 +297,7 @@
         <h3>Appearance</h3>
         <p class="dialog-note">Uses the same light/dim derivation as OM so active controls stay readable on the dark UI.</p>
         <label>Accent colour
-          <input type="color" id="accent-color-input" value="#4ade80">
+          <input type="color" id="accent-color-input" value="#e8b04f">
         </label>
         <div class="section-actions">
           <button class="btn" id="accent-reset-btn" type="button">Reset</button>

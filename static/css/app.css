@@ -1,10 +1,10 @@
 :root {
-  --accent: #4ade80;
-  --accent-dim: #173923;
-  --accent-faint: rgba(74, 222, 128, 0.10);
-  --accent-mid: rgba(74, 222, 128, 0.30);
-  --accent-bg: rgba(74, 222, 128, 0.07);
-  --accent-muted: #5a9070;
+  --accent: #e8b04f;
+  --accent-dim: #33220b;
+  --accent-faint: rgba(232, 176, 79, 0.10);
+  --accent-mid: rgba(232, 176, 79, 0.30);
+  --accent-bg: rgba(232, 176, 79, 0.07);
+  --accent-muted: #a88449;
   --bg: #0b0b10;
   --bg2: #131318;
   --bg3: #1c1c24;
@@ -824,8 +824,18 @@ textarea { resize: vertical; }
   margin-right: 3px;
   flex-shrink: 0;
 }
-.gps-dot.fix    { background: #4ade80; box-shadow: 0 0 5px #4ade8099; }
+.gps-dot.fix    { background: #e8b04f; box-shadow: 0 0 5px rgba(232, 176, 79, 0.65); }
 .gps-dot.acquiring { background: #fbbf24; box-shadow: 0 0 5px #fbbf2499; }
 .gps-dot.off    { background: #555; }
 .gps-status-row { padding: 6px 0 0; }
 .setting-row    { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 0; }
+.track-icon {
+  border-color: rgba(232, 176, 79, 0.42);
+  background: rgba(232, 176, 79, 0.10);
+  color: #e8b04f;
+}
+#track-record-btn.active {
+  background: rgba(232, 176, 79, 0.14);
+  border-color: rgba(232, 176, 79, 0.58);
+  color: #e8b04f;
+}

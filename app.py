@@ -99,6 +99,23 @@ def init_db() -> None:
         )
         conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS tracks (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                name        TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                color       TEXT DEFAULT '#e8b04f',
+                points_json TEXT NOT NULL,
+                distance_m  REAL DEFAULT 0,
+                source      TEXT DEFAULT 'gps',
+                started_at  INTEGER,
+                ended_at    INTEGER,
+                created_at  INTEGER NOT NULL,
+                updated_at  INTEGER NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
             CREATE TABLE IF NOT EXISTS app_meta (
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -184,6 +201,26 @@ def _drawing_row(row: sqlite3.Row) -> dict[str, Any]:
         "kind": row["kind"],
         "color": row["color"] or "#f59e0b",
         "data": data,
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def _track_row(row: sqlite3.Row) -> dict[str, Any]:
+    try:
+        points = json.loads(row["points_json"])
+    except (TypeError, ValueError):
+        points = []
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "description": row["description"] or "",
+        "color": row["color"] or "#e8b04f",
+        "points": points if isinstance(points, list) else [],
+        "distance_m": row["distance_m"] or 0,
+        "source": row["source"] or "gps",
+        "started_at": row["started_at"],
+        "ended_at": row["ended_at"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -829,14 +866,49 @@ def drawing_feature(drawing: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def track_feature(track: dict[str, Any]) -> dict[str, Any] | None:
+    points = track.get("points") or []
+    if len(points) < 2:
+        return None
+    coords = []
+    for point in points:
+        coord = [point["lon"], point["lat"]]
+        if point.get("alt") is not None:
+            coord.append(point["alt"])
+        coords.append(coord)
+    return {
+        "type": "Feature",
+        "properties": {
+            "id": track["id"],
+            "name": track["name"],
+            "description": track.get("description") or "",
+            "color": track["color"],
+            "distance_m": track["distance_m"],
+            "source": track["source"],
+            "started_at": track["started_at"],
+            "ended_at": track["ended_at"],
+            "created_at": track["created_at"],
+            "updated_at": track["updated_at"],
+            "source_app": "map-app",
+            "source_type": "gps-track",
+        },
+        "geometry": {"type": "LineString", "coordinates": coords},
+    }
+
+
 def export_markings_feature_collection() -> dict[str, Any]:
     features = []
     with get_db() as conn:
         marker_rows = conn.execute("SELECT * FROM markers ORDER BY id").fetchall()
         drawing_rows = conn.execute("SELECT * FROM drawings ORDER BY id").fetchall()
+        track_rows = conn.execute("SELECT * FROM tracks ORDER BY id").fetchall()
     features.extend(marker_feature(_marker_row(r)) for r in marker_rows)
     for row in drawing_rows:
         feature = drawing_feature(_drawing_row(row))
+        if feature:
+            features.append(feature)
+    for row in track_rows:
+        feature = track_feature(_track_row(row))
         if feature:
             features.append(feature)
     for feature in features:
@@ -1008,15 +1080,26 @@ def gpx_text(markers: list[dict[str, Any]], drawings: list[dict[str, Any]]) -> b
         ET.SubElement(wpt, "type").text = marker.get("category") or "marker"
         ET.SubElement(wpt, "sym").text = marker.get("emoji") or "pin"
     for drawing in drawings:
-        points = (drawing.get("data") or {}).get("points") or []
+        if drawing.get("points"):
+            points = drawing.get("points") or []
+            kind = "gps-track"
+        else:
+            points = (drawing.get("data") or {}).get("points") or []
+            kind = drawing["kind"]
         if len(points) < 2:
             continue
         trk = ET.SubElement(gpx, "trk")
         ET.SubElement(trk, "name").text = drawing["name"]
-        ET.SubElement(trk, "type").text = drawing["kind"]
+        if drawing.get("description"):
+            ET.SubElement(trk, "desc").text = drawing["description"]
+        ET.SubElement(trk, "type").text = kind
         seg = ET.SubElement(trk, "trkseg")
         for point in points:
-            ET.SubElement(seg, "trkpt", {"lat": str(point["lat"]), "lon": str(point["lon"])})
+            trkpt = ET.SubElement(seg, "trkpt", {"lat": str(point["lat"]), "lon": str(point["lon"])})
+            if point.get("alt") is not None:
+                ET.SubElement(trkpt, "ele").text = str(point["alt"])
+            if point.get("time"):
+                ET.SubElement(trkpt, "time").text = str(point["time"])
     ET.indent(gpx, space="  ")
     return ET.tostring(gpx, encoding="utf-8", xml_declaration=True)
 
@@ -1035,10 +1118,61 @@ def _xml_points(nodes: list[ET.Element]) -> list[dict[str, float]]:
     points = []
     for node in nodes:
         try:
-            points.append({"lat": _float(node.attrib.get("lat"), "lat"), "lon": _float(node.attrib.get("lon"), "lon")})
+            point = {"lat": _float(node.attrib.get("lat"), "lat"), "lon": _float(node.attrib.get("lon"), "lon")}
+            ele = _xml_text(node, "ele")
+            if ele:
+                point["alt"] = _float(ele, "alt")
+            time_text = _xml_text(node, "time")
+            if time_text:
+                point["time"] = time_text
+            points.append(point)
         except ValueError:
             continue
     return points
+
+
+def _clean_track_points(points: list[Any]) -> list[dict[str, Any]]:
+    clean = []
+    for point in points:
+        if not isinstance(point, dict):
+            continue
+        out: dict[str, Any] = {"lat": _float(point.get("lat"), "lat"), "lon": _float(point.get("lon"), "lon")}
+        if point.get("alt") is not None:
+            out["alt"] = _float(point.get("alt"), "alt")
+        if point.get("time") is not None:
+            out["time"] = _clean_text(point.get("time"), 60)
+        if point.get("ts") is not None:
+            out["ts"] = _int(point.get("ts"), "ts")
+        if point.get("sats") is not None:
+            out["sats"] = _int(point.get("sats"), "sats")
+        clean.append(out)
+    return clean
+
+
+def _track_gpx_text(track: dict[str, Any]) -> bytes:
+    ET.register_namespace("", "http://www.topografix.com/GPX/1/1")
+    gpx = ET.Element(
+        "gpx",
+        {
+            "version": "1.1",
+            "creator": "Slofi Map App",
+            "xmlns": "http://www.topografix.com/GPX/1/1",
+        },
+    )
+    trk = ET.SubElement(gpx, "trk")
+    ET.SubElement(trk, "name").text = track["name"]
+    if track.get("description"):
+        ET.SubElement(trk, "desc").text = track["description"]
+    ET.SubElement(trk, "type").text = "gps-track"
+    seg = ET.SubElement(trk, "trkseg")
+    for point in track.get("points") or []:
+        trkpt = ET.SubElement(seg, "trkpt", {"lat": str(point["lat"]), "lon": str(point["lon"])})
+        if point.get("alt") is not None:
+            ET.SubElement(trkpt, "ele").text = str(point["alt"])
+        if point.get("time"):
+            ET.SubElement(trkpt, "time").text = str(point["time"])
+    ET.indent(gpx, space="  ")
+    return ET.tostring(gpx, encoding="utf-8", xml_declaration=True)
 
 
 def import_gpx_bytes(raw: bytes) -> dict[str, int]:
@@ -1051,6 +1185,7 @@ def import_gpx_bytes(raw: bytes) -> dict[str, int]:
     ts = now_ts()
     markers_added = 0
     drawings_added = 0
+    tracks_added = 0
     with get_db() as conn:
         for wpt in _xml_children(root, "wpt"):
             try:
@@ -1082,17 +1217,34 @@ def import_gpx_bytes(raw: bytes) -> dict[str, int]:
             drawings_added += 1
         for trk in _xml_children(root, "trk"):
             name = _clean_text(_xml_text(trk, "name", "GPX track"), 80, "GPX track") or "GPX track"
+            desc = _clean_text(_xml_text(trk, "desc"), 600)
             for idx, seg in enumerate(_xml_children(trk, "trkseg"), start=1):
                 points = _xml_points(_xml_children(seg, "trkpt"))
                 if len(points) < 2:
                     continue
                 seg_name = name if idx == 1 else f"{name} {idx}"
+                started_at = points[0].get("ts")
+                ended_at = points[-1].get("ts")
                 conn.execute(
-                    "INSERT INTO drawings (name,kind,color,data_json,created_at,updated_at) VALUES (?,?,?,?,?,?)",
-                    (seg_name, "line", "#f59e0b", json.dumps({"points": points, "distance_m": line_distance_m(points)}, separators=(",", ":")), ts, ts),
+                    """
+                    INSERT INTO tracks (name,description,color,points_json,distance_m,source,started_at,ended_at,created_at,updated_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        seg_name,
+                        desc,
+                        "#e8b04f",
+                        json.dumps(points, separators=(",", ":")),
+                        line_distance_m(points),
+                        "gpx-import",
+                        started_at,
+                        ended_at,
+                        ts,
+                        ts,
+                    ),
                 )
-                drawings_added += 1
-    return {"markers": markers_added, "drawings": drawings_added}
+                tracks_added += 1
+    return {"markers": markers_added, "drawings": drawings_added, "tracks": tracks_added}
 
 
 @app.route("/")
@@ -1577,6 +1729,141 @@ def api_delete_drawing(drawing_id: int):
     return jsonify({"ok": cur.rowcount > 0})
 
 
+@app.route("/api/tracks", methods=["GET"])
+def api_get_tracks():
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM tracks ORDER BY updated_at DESC, id DESC").fetchall()
+    return jsonify([_track_row(r) for r in rows])
+
+
+@app.route("/api/tracks", methods=["POST"])
+def api_create_track():
+    payload = request.get_json(silent=True) or {}
+    points = payload.get("points") if isinstance(payload.get("points"), list) else []
+    try:
+        clean_points = _clean_track_points(points)
+    except (ValueError, TypeError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    if len(clean_points) < 2:
+        return jsonify({"error": "At least two GPS points required"}), 400
+    ts = now_ts()
+    started_at = payload.get("started_at")
+    ended_at = payload.get("ended_at")
+    try:
+        started_at = _int(started_at, "started_at") if started_at is not None else clean_points[0].get("ts")
+        ended_at = _int(ended_at, "ended_at") if ended_at is not None else clean_points[-1].get("ts")
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    with get_db() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO tracks (name,description,color,points_json,distance_m,source,started_at,ended_at,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                _clean_text(payload.get("name"), 80, "GPS track") or "GPS track",
+                _clean_text(payload.get("description"), 600),
+                _clean_text(payload.get("color"), 16, "#e8b04f") or "#e8b04f",
+                json.dumps(clean_points, separators=(",", ":")),
+                line_distance_m(clean_points),
+                _clean_text(payload.get("source"), 40, "gps") or "gps",
+                started_at,
+                ended_at,
+                ts,
+                ts,
+            ),
+        )
+        row = conn.execute("SELECT * FROM tracks WHERE id=?", (cur.lastrowid,)).fetchone()
+    return jsonify({"ok": True, "track": _track_row(row)})
+
+
+@app.route("/api/tracks/<int:track_id>", methods=["PUT"])
+def api_update_track(track_id: int):
+    payload = request.get_json(silent=True) or {}
+    with get_db() as conn:
+        existing = conn.execute("SELECT * FROM tracks WHERE id=?", (track_id,)).fetchone()
+        if not existing:
+            return jsonify({"error": "Track not found"}), 404
+        current = _track_row(existing)
+        points = current["points"]
+        if "points" in payload:
+            raw_points = payload.get("points") if isinstance(payload.get("points"), list) else []
+            try:
+                points = _clean_track_points(raw_points)
+            except (ValueError, TypeError) as exc:
+                return jsonify({"error": str(exc)}), 400
+            if len(points) < 2:
+                return jsonify({"error": "At least two GPS points required"}), 400
+        name = _clean_text(payload.get("name", current["name"]), 80, current["name"]) or current["name"]
+        description = _clean_text(payload.get("description", current["description"]), 600)
+        color = _clean_text(payload.get("color", current["color"]), 16, current["color"]) or current["color"]
+        conn.execute(
+            """
+            UPDATE tracks
+            SET name=?,description=?,color=?,points_json=?,distance_m=?,updated_at=?
+            WHERE id=?
+            """,
+            (name, description, color, json.dumps(points, separators=(",", ":")), line_distance_m(points), now_ts(), track_id),
+        )
+        row = conn.execute("SELECT * FROM tracks WHERE id=?", (track_id,)).fetchone()
+    return jsonify({"ok": True, "track": _track_row(row)})
+
+
+@app.route("/api/tracks/<int:track_id>", methods=["DELETE"])
+def api_delete_track(track_id: int):
+    with get_db() as conn:
+        cur = conn.execute("DELETE FROM tracks WHERE id=?", (track_id,))
+    return jsonify({"ok": cur.rowcount > 0})
+
+
+@app.route("/api/tracks/<int:track_id>/geojson")
+def api_export_track_geojson(track_id: int):
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM tracks WHERE id=?", (track_id,)).fetchone()
+    if not row:
+        return jsonify({"error": "Track not found"}), 404
+    track = _track_row(row)
+    feature = track_feature(track)
+    if not feature:
+        return jsonify({"error": "Track has no exportable points"}), 400
+    return jsonify({"type": "FeatureCollection", "features": [feature]})
+
+
+@app.route("/api/tracks/<int:track_id>/gpx")
+def api_export_track_gpx(track_id: int):
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM tracks WHERE id=?", (track_id,)).fetchone()
+    if not row:
+        return jsonify({"error": "Track not found"}), 404
+    track = _track_row(row)
+    filename = f"{_safe_slug(track['name'], 'gps-track')}.gpx"
+    return Response(
+        _track_gpx_text(track),
+        mimetype="application/gpx+xml",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
+@app.route("/api/tracks/<int:track_id>/drawing", methods=["POST"])
+def api_track_to_drawing(track_id: int):
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM tracks WHERE id=?", (track_id,)).fetchone()
+        if not row:
+            return jsonify({"error": "Track not found"}), 404
+        track = _track_row(row)
+        points = [{"lat": p["lat"], "lon": p["lon"]} for p in track["points"]]
+        if len(points) < 2:
+            return jsonify({"error": "At least two points required"}), 400
+        ts = now_ts()
+        data = {"points": points, "distance_m": line_distance_m(points)}
+        cur = conn.execute(
+            "INSERT INTO drawings (name,kind,color,data_json,created_at,updated_at) VALUES (?,?,?,?,?,?)",
+            (track["name"], "line", track["color"], json.dumps(data, separators=(",", ":")), ts, ts),
+        )
+        drawing = conn.execute("SELECT * FROM drawings WHERE id=?", (cur.lastrowid,)).fetchone()
+    return jsonify({"ok": True, "drawing": _drawing_row(drawing)})
+
+
 @app.route("/api/measure", methods=["POST"])
 def api_measure():
     payload = request.get_json(silent=True) or {}
@@ -1650,8 +1937,10 @@ def api_export_gpx():
     with get_db() as conn:
         marker_rows = conn.execute("SELECT * FROM markers ORDER BY id").fetchall()
         drawing_rows = conn.execute("SELECT * FROM drawings ORDER BY id").fetchall()
+        track_rows = conn.execute("SELECT * FROM tracks ORDER BY id").fetchall()
     markers = [_marker_row(r) for r in marker_rows]
     drawings = [_drawing_row(r) for r in drawing_rows]
+    drawings.extend(_track_row(r) for r in track_rows)
     return Response(
         gpx_text(markers, drawings),
         mimetype="application/gpx+xml",
@@ -1841,6 +2130,58 @@ def api_extend_tile_layer(layer_id):
     }
     payload = {"tiles": tiles, "path": str(path), "url": url, "metadata": metadata}
     return jsonify(enqueue_download_job(job, payload))
+    return jsonify(enqueue_download_job(job, payload))
+
+
+@app.route("/api/tile-layers/<layer_id>/extend", methods=["POST"])
+def api_extend_tile_layer(layer_id):
+    """Download additional zoom levels into an existing tileset."""
+    layer = find_mbtiles(layer_id)
+    if not layer:
+        return jsonify({"error": "Tileset not found"}), 404
+    body = request.get_json(silent=True) or {}
+    try:
+        new_min = max(0, min(22, _int(body.get("min_zoom"), "min_zoom")))
+        new_max = max(0, min(22, _int(body.get("max_zoom"), "max_zoom")))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    if new_min > new_max:
+        new_min, new_max = new_max, new_min
+    url = layer.get("source_url", "")
+    if not url or "{z}" not in url:
+        return jsonify({"error": "No source URL stored for this tileset"}), 400
+    bounds_str = layer.get("bounds", "")
+    try:
+        west, south, east, north = [float(v) for v in bounds_str.split(",")]
+    except Exception:
+        return jsonify({"error": "No bounds stored for this tileset"}), 400
+    tiles = tiles_for_bounds({"south": south, "west": west, "north": north, "east": east}, new_min, new_max)
+    if not tiles:
+        return jsonify({"error": "No tiles in selected area/zoom range"}), 400
+    path = Path(layer["path"])
+    if MBTILES_DIR not in path.parents:
+        return jsonify({"error": "Cannot extend this tileset"}), 403
+    existing_min = int(layer.get("minzoom", new_min))
+    existing_max = int(layer.get("maxzoom", new_max))
+    merged_min = min(existing_min, new_min)
+    merged_max = max(existing_max, new_max)
+    name = layer.get("name", "Offline map")
+    layer_name = layer.get("source_layer_name", "Map layer")
+    fmt = layer.get("format", "png")
+    metadata = {
+        "name": name, "type": "baselayer", "version": "1",
+        "description": f"{layer_name} offline tiles from Map App",
+        "format": fmt, "minzoom": str(merged_min), "maxzoom": str(merged_max),
+        "bounds": bounds_str, "source_url": url,
+        "source_min_zoom": str(merged_min), "source_max_zoom": str(merged_max),
+        "source_layer_name": layer_name,
+    }
+    job_id = uuid.uuid4().hex[:12]
+    job = {
+        "id": job_id, "kind": "extend", "status": "queued", "name": name, "layer_name": layer_name,
+        "path": str(path), "total": len(tiles), "done": 0, "saved": 0, "failed": 0, "created_at": now_ts(),
+    }
+    payload = {"tiles": tiles, "path": str(path), "url": url, "metadata": metadata}
     return jsonify(enqueue_download_job(job, payload))
 
 
