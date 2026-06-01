@@ -2130,59 +2130,6 @@ def api_extend_tile_layer(layer_id):
     }
     payload = {"tiles": tiles, "path": str(path), "url": url, "metadata": metadata}
     return jsonify(enqueue_download_job(job, payload))
-    return jsonify(enqueue_download_job(job, payload))
-
-
-@app.route("/api/tile-layers/<layer_id>/extend", methods=["POST"])
-def api_extend_tile_layer(layer_id):
-    """Download additional zoom levels into an existing tileset."""
-    layer = find_mbtiles(layer_id)
-    if not layer:
-        return jsonify({"error": "Tileset not found"}), 404
-    body = request.get_json(silent=True) or {}
-    try:
-        new_min = max(0, min(22, _int(body.get("min_zoom"), "min_zoom")))
-        new_max = max(0, min(22, _int(body.get("max_zoom"), "max_zoom")))
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    if new_min > new_max:
-        new_min, new_max = new_max, new_min
-    url = layer.get("source_url", "")
-    if not url or "{z}" not in url:
-        return jsonify({"error": "No source URL stored for this tileset"}), 400
-    bounds_str = layer.get("bounds", "")
-    try:
-        west, south, east, north = [float(v) for v in bounds_str.split(",")]
-    except Exception:
-        return jsonify({"error": "No bounds stored for this tileset"}), 400
-    tiles = tiles_for_bounds({"south": south, "west": west, "north": north, "east": east}, new_min, new_max)
-    if not tiles:
-        return jsonify({"error": "No tiles in selected area/zoom range"}), 400
-    path = Path(layer["path"])
-    if MBTILES_DIR not in path.parents:
-        return jsonify({"error": "Cannot extend this tileset"}), 403
-    existing_min = int(layer.get("minzoom", new_min))
-    existing_max = int(layer.get("maxzoom", new_max))
-    merged_min = min(existing_min, new_min)
-    merged_max = max(existing_max, new_max)
-    name = layer.get("name", "Offline map")
-    layer_name = layer.get("source_layer_name", "Map layer")
-    fmt = layer.get("format", "png")
-    metadata = {
-        "name": name, "type": "baselayer", "version": "1",
-        "description": f"{layer_name} offline tiles from Map App",
-        "format": fmt, "minzoom": str(merged_min), "maxzoom": str(merged_max),
-        "bounds": bounds_str, "source_url": url,
-        "source_min_zoom": str(merged_min), "source_max_zoom": str(merged_max),
-        "source_layer_name": layer_name,
-    }
-    job_id = uuid.uuid4().hex[:12]
-    job = {
-        "id": job_id, "kind": "extend", "status": "queued", "name": name, "layer_name": layer_name,
-        "path": str(path), "total": len(tiles), "done": 0, "saved": 0, "failed": 0, "created_at": now_ts(),
-    }
-    payload = {"tiles": tiles, "path": str(path), "url": url, "metadata": metadata}
-    return jsonify(enqueue_download_job(job, payload))
 
 
 @app.route("/api/tile-layers/update-all", methods=["POST"])
