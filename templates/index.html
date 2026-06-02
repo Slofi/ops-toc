@@ -16,6 +16,7 @@
       <button class="main-tab" id="tab-btn-log"      onclick="showTab('log')">Log</button>
       <button class="main-tab" id="tab-btn-missions"  onclick="showTab('missions')">Missions</button>
       <button class="main-tab" id="tab-btn-map"       onclick="showTab('map')">Map</button>
+      <button class="main-tab" id="tab-btn-sop"       onclick="showTab('sop')">SOP</button>
     </div>
 
     <!-- Map-only tools — hidden on LOG / MISSIONS tabs -->
@@ -190,6 +191,299 @@
         <div id="map"></div>
       </section>
     </div><!-- end tab-map -->
+
+    <!-- ════════════════════════ SOP TAB ════ -->
+    <div id="tab-sop" class="tab-pane">
+      <div id="sop-wrap">
+
+        <!-- Page header -->
+        <div class="sop-page-header">
+          <div>
+            <div class="sop-page-kicker">OPS-TOC</div>
+            <div class="sop-page-name">Standard Operating Procedures</div>
+            <div class="sop-page-sub">Cyberdeck field operations · check items as done · reset per activation</div>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0">
+            <div class="sop-callout">Work top-to-bottom on activation. Log as you go — the log is the record, the SOP is the process. Reset a section to reuse it for the next phase.</div>
+            <button class="btn small danger" onclick="sopResetAll()">Reset All</button>
+          </div>
+        </div>
+
+        <div class="sop-sections">
+
+          <!-- ── 01 · Activation ── -->
+          <div class="sop-section" id="sop-sec-activate">
+            <div class="sop-section-head" onclick="sopToggle('activate')">
+              <div class="sop-section-labels">
+                <div class="sop-section-kicker">01 · Boot</div>
+                <div class="sop-section-name">Activation Sequence</div>
+              </div>
+              <div class="sop-progress">
+                <div class="sop-progress-bar"><div class="sop-progress-fill" id="sop-fill-activate"></div></div>
+                <span class="sop-progress-text" id="sop-text-activate">0/8</span>
+              </div>
+              <button class="btn small" onclick="event.stopPropagation();sopReset('activate')">Reset</button>
+              <span class="sop-collapse-arrow">▼</span>
+            </div>
+            <div class="sop-section-body" id="sop-body-activate">
+              <div class="sop-section-desc">Run before every activation. Nothing moves until all items are confirmed.</div>
+              <div class="sop-checklist">
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="activate" data-id="act-1" onchange="sopUpdate(this)"><span class="sop-item-text">Power on Cyberdeck — verify battery level on Dashboard<span class="sop-item-note">20% minimum for field use. Dashboard tile shows charge state.</span></span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="activate" data-id="act-2" onchange="sopUpdate(this)"><span class="sop-item-text">Dashboard loaded at :8080 — all tiles visible and status dots responding</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="activate" data-id="act-3" onchange="sopUpdate(this)"><span class="sop-item-text">GPS fix confirmed — green dot in header, coordinates visible<span class="sop-item-note">Settings → GPS to configure source. Allow 60–90s for cold fix.</span></span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="activate" data-id="act-4" onchange="sopUpdate(this)"><span class="sop-item-text">OverMesh running — :8082 tile active, node list populated</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="activate" data-id="act-5" onchange="sopUpdate(this)"><span class="sop-item-text">MC radio recognized — ttyACM0 / HT-n5262 (T114) connected and visible in OM<span class="sop-item-note">Check OM Nodes tab. If missing: replug USB, restart OM.</span></span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="activate" data-id="act-6" onchange="sopUpdate(this)"><span class="sop-item-text">MT node connected — ttyACM1 / Faketec (NRF52840) visible in OM Meshtastic panel</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="activate" data-id="act-7" onchange="sopUpdate(this)"><span class="sop-item-text">Offline maps available — MAP → Downloaded Maps shows relevant tileset<span class="sop-item-note">If missing: download before field use. Online is unreliable in the field.</span></span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="activate" data-id="act-8" onchange="sopUpdate(this)"><span class="sop-item-text">Open session log — LOG → SITREP entry: location, power state, radio status, intent</span></label>
+              </div>
+              <div class="sop-section-foot"><button class="btn small" onclick="sopReset('activate')">Reset Section</button></div>
+            </div>
+          </div>
+
+          <!-- ── 02 · Pre-Departure ── -->
+          <div class="sop-section" id="sop-sec-depart">
+            <div class="sop-section-head" onclick="sopToggle('depart')">
+              <div class="sop-section-labels">
+                <div class="sop-section-kicker">02 · Mobile</div>
+                <div class="sop-section-name">Pre-Departure</div>
+              </div>
+              <div class="sop-progress">
+                <div class="sop-progress-bar"><div class="sop-progress-fill" id="sop-fill-depart"></div></div>
+                <span class="sop-progress-text" id="sop-text-depart">0/6</span>
+              </div>
+              <button class="btn small" onclick="event.stopPropagation();sopReset('depart')">Reset</button>
+              <span class="sop-collapse-arrow">▼</span>
+            </div>
+            <div class="sop-section-body" id="sop-body-depart">
+              <div class="sop-section-desc">Complete before leaving any fixed position. No movement without a plan on record.</div>
+              <div class="sop-checklist">
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="depart" data-id="dep-1" onchange="sopUpdate(this)"><span class="sop-item-text">PLAN logged — objective, route, radio state, GPS state, risks, first checkpoint<span class="sop-item-note">If plan changes en route, log a new PLAN. Don't edit the departure record.</span></span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="depart" data-id="dep-2" onchange="sopUpdate(this)"><span class="sop-item-text">MC/MT connectivity confirmed — at least one station acknowledges before moving</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="depart" data-id="dep-3" onchange="sopUpdate(this)"><span class="sop-item-text">Battery adequate for planned duration<span class="sop-item-note">Estimate 15–20% buffer. High RF activity drains faster.</span></span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="depart" data-id="dep-4" onchange="sopUpdate(this)"><span class="sop-item-text">Offline maps cover planned area and zoom range</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="depart" data-id="dep-5" onchange="sopUpdate(this)"><span class="sop-item-text">POSITION logged at departure point with +GPS attached</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="depart" data-id="dep-6" onchange="sopUpdate(this)"><span class="sop-item-text">Mission / folder created in LOG for this activation — all entries tagged accordingly</span></label>
+              </div>
+              <div class="sop-section-foot"><button class="btn small" onclick="sopReset('depart')">Reset Section</button></div>
+            </div>
+          </div>
+
+          <!-- ── 03 · En Route ── -->
+          <div class="sop-section" id="sop-sec-enroute">
+            <div class="sop-section-head" onclick="sopToggle('enroute')">
+              <div class="sop-section-labels">
+                <div class="sop-section-kicker">03 · Mobile</div>
+                <div class="sop-section-name">En Route</div>
+              </div>
+              <div class="sop-progress">
+                <div class="sop-progress-bar"><div class="sop-progress-fill" id="sop-fill-enroute"></div></div>
+                <span class="sop-progress-text" id="sop-text-enroute">0/4</span>
+              </div>
+              <button class="btn small" onclick="event.stopPropagation();sopReset('enroute')">Reset</button>
+              <span class="sop-collapse-arrow">▼</span>
+            </div>
+            <div class="sop-section-body" id="sop-body-enroute">
+              <div class="sop-section-desc">Log as you move. Minimum entry per checkpoint. These are standing rules, not a one-time checklist — re-check as needed.</div>
+              <div class="sop-checklist">
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="enroute" data-id="en-1" onchange="sopUpdate(this)"><span class="sop-item-text">POSITION logged at each checkpoint, significant turn, or stop (+GPS when available)</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="enroute" data-id="en-2" onchange="sopUpdate(this)"><span class="sop-item-text">COMMS entry after any antenna, terrain, channel, or radio change — log result and retry plan if failed</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="enroute" data-id="en-3" onchange="sopUpdate(this)"><span class="sop-item-text">CONTACT for any new station heard for the first time — path, SNR, distance if known</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="enroute" data-id="en-4" onchange="sopUpdate(this)"><span class="sop-item-text">ALERT only for actionable risk — power loss, comms out, safety issue. Reserve it.</span></label>
+              </div>
+              <div class="sop-section-foot"><button class="btn small" onclick="sopReset('enroute')">Reset Section</button></div>
+            </div>
+          </div>
+
+          <!-- ── 04 · Arrival ── -->
+          <div class="sop-section" id="sop-sec-arrival">
+            <div class="sop-section-head" onclick="sopToggle('arrival')">
+              <div class="sop-section-labels">
+                <div class="sop-section-kicker">04 · Mobile</div>
+                <div class="sop-section-name">Arrival</div>
+              </div>
+              <div class="sop-progress">
+                <div class="sop-progress-bar"><div class="sop-progress-fill" id="sop-fill-arrival"></div></div>
+                <span class="sop-progress-text" id="sop-text-arrival">0/4</span>
+              </div>
+              <button class="btn small" onclick="event.stopPropagation();sopReset('arrival')">Reset</button>
+              <span class="sop-collapse-arrow">▼</span>
+            </div>
+            <div class="sop-section-body" id="sop-body-arrival">
+              <div class="sop-section-desc">Run on reaching any planned destination or stopping point.</div>
+              <div class="sop-checklist">
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="arrival" data-id="arr-1" onchange="sopUpdate(this)"><span class="sop-item-text">POSITION logged at destination with +GPS attached</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="arrival" data-id="arr-2" onchange="sopUpdate(this)"><span class="sop-item-text">SITREP — route complete, current status, contacts made, issues encountered</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="arrival" data-id="arr-3" onchange="sopUpdate(this)"><span class="sop-item-text">MAP — new known positions marked, tracks saved if recorded during movement</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="arrival" data-id="arr-4" onchange="sopUpdate(this)"><span class="sop-item-text">Open ACTION entries logged for any unresolved issues</span></label>
+              </div>
+              <div class="sop-section-foot"><button class="btn small" onclick="sopReset('arrival')">Reset Section</button></div>
+            </div>
+          </div>
+
+          <!-- ── 05 · Static Open ── -->
+          <div class="sop-section" id="sop-sec-static-open">
+            <div class="sop-section-head" onclick="sopToggle('static-open')">
+              <div class="sop-section-labels">
+                <div class="sop-section-kicker">05 · Static</div>
+                <div class="sop-section-name">Open Station</div>
+              </div>
+              <div class="sop-progress">
+                <div class="sop-progress-bar"><div class="sop-progress-fill" id="sop-fill-static-open"></div></div>
+                <span class="sop-progress-text" id="sop-text-static-open">0/5</span>
+              </div>
+              <button class="btn small" onclick="event.stopPropagation();sopReset('static-open')">Reset</button>
+              <span class="sop-collapse-arrow">▼</span>
+            </div>
+            <div class="sop-section-body" id="sop-body-static-open">
+              <div class="sop-section-desc">Run when setting up a fixed monitoring position. Log first, configure second.</div>
+              <div class="sop-checklist">
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="static-open" data-id="so-1" onchange="sopUpdate(this)"><span class="sop-item-text">SITREP — location, power state, GPS fix, MC/MT radios active, antenna setup, channels monitored</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="static-open" data-id="so-2" onchange="sopUpdate(this)"><span class="sop-item-text">RC/RPTR units verified reachable — log COMMS if contact failed</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="static-open" data-id="so-3" onchange="sopUpdate(this)"><span class="sop-item-text">Monitoring cycle set — SITREP every 30–60 min or on any meaningful state change</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="static-open" data-id="so-4" onchange="sopUpdate(this)"><span class="sop-item-text">GPS track recording started if monitoring a patrol area or perimeter</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="static-open" data-id="so-5" onchange="sopUpdate(this)"><span class="sop-item-text">Mission / folder created or confirmed active for this watch period</span></label>
+              </div>
+              <div class="sop-section-foot"><button class="btn small" onclick="sopReset('static-open')">Reset Section</button></div>
+            </div>
+          </div>
+
+          <!-- ── 06 · Static Close ── -->
+          <div class="sop-section" id="sop-sec-static-close">
+            <div class="sop-section-head" onclick="sopToggle('static-close')">
+              <div class="sop-section-labels">
+                <div class="sop-section-kicker">06 · Static</div>
+                <div class="sop-section-name">Close Station</div>
+              </div>
+              <div class="sop-progress">
+                <div class="sop-progress-bar"><div class="sop-progress-fill" id="sop-fill-static-close"></div></div>
+                <span class="sop-progress-text" id="sop-text-static-close">0/5</span>
+              </div>
+              <button class="btn small" onclick="event.stopPropagation();sopReset('static-close')">Reset</button>
+              <span class="sop-collapse-arrow">▼</span>
+            </div>
+            <div class="sop-section-body" id="sop-body-static-close">
+              <div class="sop-section-desc">Run before shutdown or handover. Export before power down.</div>
+              <div class="sop-checklist">
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="static-close" data-id="sc-1" onchange="sopUpdate(this)"><span class="sop-item-text">Final SITREP — current status, open items, next planned activation</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="static-close" data-id="sc-2" onchange="sopUpdate(this)"><span class="sop-item-text">All ACTION entries closed or explicitly marked carry-over in SITREP</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="static-close" data-id="sc-3" onchange="sopUpdate(this)"><span class="sop-item-text">Log exported — Settings → Log Export → JSON or TXT<span class="sop-item-note">Export before power down. Log lives in shared DB — export is the offline backup.</span></span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="static-close" data-id="sc-4" onchange="sopUpdate(this)"><span class="sop-item-text">Map — key positions saved as markers, track recording stopped and saved</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="static-close" data-id="sc-5" onchange="sopUpdate(this)"><span class="sop-item-text">Power down sequence — MT node → MC radio → GPS → Cyberdeck</span></label>
+              </div>
+              <div class="sop-section-foot"><button class="btn small" onclick="sopReset('static-close')">Reset Section</button></div>
+            </div>
+          </div>
+
+          <!-- ── 07 · Comms Degraded ── -->
+          <div class="sop-section" id="sop-sec-comms-down">
+            <div class="sop-section-head" onclick="sopToggle('comms-down')">
+              <div class="sop-section-labels">
+                <div class="sop-section-kicker">07 · Fault</div>
+                <div class="sop-section-name">Comms Degraded</div>
+              </div>
+              <div class="sop-progress">
+                <div class="sop-progress-bar"><div class="sop-progress-fill" id="sop-fill-comms-down"></div></div>
+                <span class="sop-progress-text" id="sop-text-comms-down">0/9</span>
+              </div>
+              <button class="btn small" onclick="event.stopPropagation();sopReset('comms-down')">Reset</button>
+              <span class="sop-collapse-arrow">▼</span>
+            </div>
+            <div class="sop-section-body" id="sop-body-comms-down">
+              <div class="sop-section-desc">On first sign of degradation: stop, log, diagnose in order. Do not skip steps.</div>
+              <div class="sop-checklist">
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="comms-down" data-id="cd-1" onchange="sopUpdate(this)"><span class="sop-item-text">ALERT logged — network affected, scope (partial/total), immediate mitigation step taken</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="comms-down" data-id="cd-2" onchange="sopUpdate(this)"><span class="sop-item-text">Physical check — cables seated, antenna connected, power to radio confirmed</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="comms-down" data-id="cd-3" onchange="sopUpdate(this)"><span class="sop-item-text">Serial check — ttyACM0 / ttyACM1 present in /dev (unplug/replug if missing)</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="comms-down" data-id="cd-4" onchange="sopUpdate(this)"><span class="sop-item-text">Restart OverMesh — Dashboard → OverMesh tile → Stop → Start</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="comms-down" data-id="cd-5" onchange="sopUpdate(this)"><span class="sop-item-text">Antenna repositioned — clear line-of-sight, away from metal surfaces</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="comms-down" data-id="cd-6" onchange="sopUpdate(this)"><span class="sop-item-text">Backup channel tried — if primary confirmed dead, switch channel and retest</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="comms-down" data-id="cd-7" onchange="sopUpdate(this)"><span class="sop-item-text">COMMS logged for each test attempt — state exactly what changed between attempts</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="comms-down" data-id="cd-8" onchange="sopUpdate(this)"><span class="sop-item-text">ACTION logged for each named corrective step — owner and status explicit</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="comms-down" data-id="cd-9" onchange="sopUpdate(this)"><span class="sop-item-text">SITREP when stable — what is restored, what remains degraded, next check time</span></label>
+              </div>
+              <div class="sop-section-foot"><button class="btn small" onclick="sopReset('comms-down')">Reset Section</button></div>
+            </div>
+          </div>
+
+          <!-- ── 08 · Remote Collector Run ── -->
+          <div class="sop-section" id="sop-sec-rc-run">
+            <div class="sop-section-head" onclick="sopToggle('rc-run')">
+              <div class="sop-section-labels">
+                <div class="sop-section-kicker">08 · Asset</div>
+                <div class="sop-section-name">Remote Collector Run</div>
+              </div>
+              <div class="sop-progress">
+                <div class="sop-progress-bar"><div class="sop-progress-fill" id="sop-fill-rc-run"></div></div>
+                <span class="sop-progress-text" id="sop-text-rc-run">0/4</span>
+              </div>
+              <button class="btn small" onclick="event.stopPropagation();sopReset('rc-run')">Reset</button>
+              <span class="sop-collapse-arrow">▼</span>
+            </div>
+            <div class="sop-section-body" id="sop-body-rc-run">
+              <div class="sop-section-desc">Run each time you collect from a remote RC unit. Treat each RC as a named remote station (e.g. Argus).</div>
+              <div class="sop-checklist">
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="rc-run" data-id="rc-1" onchange="sopUpdate(this)"><span class="sop-item-text">Approached/connected to RC — note RSSI on OM contact card<span class="sop-item-note">Log COMMS if approach attempt failed. State path and signal.</span></span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="rc-run" data-id="rc-2" onchange="sopUpdate(this)"><span class="sop-item-text">COMMS logged — OMCOLLECT command result, relay import outcome (success / failure / partial)</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="rc-run" data-id="rc-3" onchange="sopUpdate(this)"><span class="sop-item-text">INTEL logged — new stations found, strong signals, unusual paths, stale data, reliability assessment</span></label>
+                <label class="sop-item"><input type="checkbox" class="sop-check" data-section="rc-run" data-id="rc-4" onchange="sopUpdate(this)"><span class="sop-item-text">ACTION logged — next scheduled collection, follow-up items, any hardware issues noted</span></label>
+              </div>
+              <div class="sop-section-foot"><button class="btn small" onclick="sopReset('rc-run')">Reset Section</button></div>
+            </div>
+          </div>
+
+          <!-- ── 09 · Log Discipline (reference) ── -->
+          <div class="sop-section" id="sop-sec-log-ref">
+            <div class="sop-section-head" onclick="sopToggle('log-ref')">
+              <div class="sop-section-labels">
+                <div class="sop-section-kicker">09 · Reference</div>
+                <div class="sop-section-name">Log Discipline</div>
+              </div>
+              <span class="sop-collapse-arrow">▼</span>
+            </div>
+            <div class="sop-section-body" id="sop-body-log-ref">
+              <div class="sop-section-desc">Standing rules for every log entry. No checkboxes — these are always in effect.</div>
+              <div class="sop-rules">
+                <div class="sop-rule"><span class="sop-rule-tag">Time</span><span class="sop-rule-text">Every entry gets a timestamp. Use the Now button or attach GPS — it includes a timestamp. Never back-date.</span></div>
+                <div class="sop-rule"><span class="sop-rule-tag">Facts only</span><span class="sop-rule-text">Log what happened, not what you think happened. Use NOTE for unverified observations. Promote when facts are clear.</span></div>
+                <div class="sop-rule"><span class="sop-rule-tag">Confidence</span><span class="sop-rule-text">State it. Choose one: confirmed / likely / possible / unconfirmed / stale / inferred.</span></div>
+                <div class="sop-rule"><span class="sop-rule-tag">+GPS</span><span class="sop-rule-text">Attach when position matters. Never estimate coordinates — if no fix, note the absence and log a description instead.</span></div>
+                <div class="sop-rule"><span class="sop-rule-tag">Close loops</span><span class="sop-rule-text">Every ALERT and ACTION must be closed or explicitly superseded. An unclosed entry is an open task.</span></div>
+                <div class="sop-rule"><span class="sop-rule-tag">Chat ≠ Log</span><span class="sop-rule-text">Chat is for conversation. Log is for record. Keep them separate. If it happened and it matters, it goes in the log.</span></div>
+                <div class="sop-rule"><span class="sop-rule-tag">Missions</span><span class="sop-rule-text">Tag entries to a mission / folder for grouping. One mission per activation as a minimum. Rename, never delete if entries exist.</span></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ── 10 · Category Reference ── -->
+          <div class="sop-section" id="sop-sec-cat-ref">
+            <div class="sop-section-head" onclick="sopToggle('cat-ref')">
+              <div class="sop-section-labels">
+                <div class="sop-section-kicker">10 · Reference</div>
+                <div class="sop-section-name">Category Reference</div>
+              </div>
+              <span class="sop-collapse-arrow">▼</span>
+            </div>
+            <div class="sop-section-body" id="sop-body-cat-ref">
+              <div class="sop-section-desc">When in doubt, use NOTE and promote later. Reserve ALERT and ACTION for things that need a response now.</div>
+              <div class="sop-ref-grid">
+                <div class="sop-ref-card"><div class="sop-ref-card-title">NOTE</div><div class="sop-ref-card-body">Unverified observation. Not yet classified. Review and promote when facts are confirmed.</div></div>
+                <div class="sop-ref-card"><div class="sop-ref-card-title">SITREP</div><div class="sop-ref-card-body">Full status at a point in time. Network, assets, issues, intent, and next update time.</div></div>
+                <div class="sop-ref-card"><div class="sop-ref-card-title">PLAN</div><div class="sop-ref-card-body">Pre-move or pre-watch order. Objective, route, comms plan, risk, and reporting triggers.</div></div>
+                <div class="sop-ref-card"><div class="sop-ref-card-title">ALERT</div><div class="sop-ref-card-body">Actionable problem. Power, comms outage, weather, or safety. Needs a response now. Must be closed.</div></div>
+                <div class="sop-ref-card"><div class="sop-ref-card-title">ACTION</div><div class="sop-ref-card-body">Assigned task with owner and status. Must be closed or superseded when complete.</div></div>
+                <div class="sop-ref-card"><div class="sop-ref-card-title">COMMS</div><div class="sop-ref-card-body">Radio check, ping, message path, relay test, or failed contact. Log results, not the discussion around it.</div></div>
+                <div class="sop-ref-card"><div class="sop-ref-card-title">CONTACT</div><div class="sop-ref-card-body">New station identified. First heard, path, signal quality, and follow-up action.</div></div>
+                <div class="sop-ref-card"><div class="sop-ref-card-title">POSITION</div><div class="sop-ref-card-body">Own station, mobile node, RPTR, or remote asset location. GPS when available; state confidence if not.</div></div>
+                <div class="sop-ref-card"><div class="sop-ref-card-title">INTEL</div><div class="sop-ref-card-body">Observed pattern, RC find, signal, movement, or infrastructure. Tag and assess reliability.</div></div>
+                <div class="sop-ref-card"><div class="sop-ref-card-title">WEATHER</div><div class="sop-ref-card-body">Conditions affecting operations. Temperature, wind, precipitation, visibility. Note impact on RF.</div></div>
+              </div>
+            </div>
+          </div>
+
+        </div><!-- end sop-sections -->
+      </div><!-- end sop-wrap -->
+    </div><!-- end tab-sop -->
 
   </main>
 

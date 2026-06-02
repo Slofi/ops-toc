@@ -647,3 +647,70 @@ async function doLogImport() {
     toast('Network error', 'err');
   }
 }
+
+// ── SOP ───────────────────────────────────────────────────────────────
+
+const SOP_SECTIONS = ['activate','depart','enroute','arrival','static-open','static-close','comms-down','rc-run'];
+
+function sopKey(section, id) { return 'sop.' + section + '.' + id; }
+
+function sopUpdate(cb) {
+  const section = cb.dataset.section;
+  const id = cb.dataset.id;
+  if (cb.checked) {
+    localStorage.setItem(sopKey(section, id), '1');
+  } else {
+    localStorage.removeItem(sopKey(section, id));
+  }
+  cb.closest('.sop-item').classList.toggle('done', cb.checked);
+  sopRefreshSection(section);
+}
+
+function sopRefreshSection(section) {
+  const checks = document.querySelectorAll(`.sop-check[data-section="${section}"]`);
+  if (!checks.length) return;
+  const total = checks.length;
+  const done = Array.from(checks).filter(c => c.checked).length;
+  const fill = document.getElementById('sop-fill-' + section);
+  const text = document.getElementById('sop-text-' + section);
+  const sec  = document.getElementById('sop-sec-' + section);
+  if (fill) fill.style.width = (total ? (done / total * 100) : 0) + '%';
+  if (text) text.textContent = done + '/' + total;
+  if (sec)  sec.classList.toggle('complete', done === total && total > 0);
+}
+
+function sopReset(section) {
+  document.querySelectorAll(`.sop-check[data-section="${section}"]`).forEach(cb => {
+    localStorage.removeItem(sopKey(section, cb.dataset.id));
+    cb.checked = false;
+    cb.closest('.sop-item').classList.remove('done');
+  });
+  sopRefreshSection(section);
+}
+
+function sopResetAll() {
+  SOP_SECTIONS.forEach(sopReset);
+}
+
+function sopToggle(section) {
+  const body = document.getElementById('sop-body-' + section);
+  const head = body && body.previousElementSibling;
+  if (!body) return;
+  const hidden = body.hasAttribute('hidden');
+  body.toggleAttribute('hidden', !hidden);
+  if (head) head.classList.toggle('collapsed', !hidden);
+}
+
+function sopInit() {
+  document.querySelectorAll('.sop-check').forEach(cb => {
+    const section = cb.dataset.section;
+    const id = cb.dataset.id;
+    if (localStorage.getItem(sopKey(section, id))) {
+      cb.checked = true;
+      cb.closest('.sop-item').classList.add('done');
+    }
+  });
+  SOP_SECTIONS.forEach(sopRefreshSection);
+}
+
+document.addEventListener('DOMContentLoaded', sopInit);

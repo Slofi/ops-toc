@@ -53,8 +53,6 @@ journalctl --user -u map-app -f
 
 ## Pending
 
-- **Merge TOC-app into Map-app** — add LOG + MISSIONS tabs; wire to shared `overmesh_prefs.db` (`toc_log` table); retire log-app service and launcher tile. TOC-app's map tab goes away, replaced by Map-app's full map.
-- Deploy current Map-app to CD before starting the merge
 - Decide whether to support PMTiles in addition to MBTiles
 - Add KML import/export
 - Add marker categories, filters, and styling
@@ -67,6 +65,11 @@ journalctl --user -u map-app -f
 
 ## Changelog
 
+**2026-06-02** — Renamed to OPS-TOC. UI polish: font 15px, toolbar 56px, burger+GPS pinned right, UI zoom slider (80–130%) in Appearance. Custom split clipboard+pin SVG brand icon. Pushed to GitHub (26217d5).
+**2026-06-02** — Bug sweep 2: offline settings crash from LOG/MISSIONS tab fixed (prepareOfflineSection, updateOfflineEstimate, currentBoundsPayload, startOfflineDownload all guarded against null state.map). renderBody leading blank line on mission-tagged entries fixed. Deployed to CD (b2d799f).
+**2026-06-02** — Bug sweep 1: LOG/MISSIONS tabs were 300px wide (grid layout fix), GPS marker crashed every 3s when map not yet opened, edit entry reset timestamp to now. Deployed to CD (0be590e).
+**2026-06-02** — Deployed to CD (d2df5fd). log-app service disabled + retired, TOC-app launcher tile removed. Map App now owns all LOG + MISSIONS functionality on CD.
+**2026-06-02** — Merged TOC-app into Map App. Added LOG tab (entry composer, all 10 categories, mission/GPS attach, filter bar, timeline) and MISSIONS tab (mission manager). Backend adds /api/log/* routes sharing overmesh_prefs.db toc_log table with OM. Toolbar restructured: main tabs always visible, map tools hidden on LOG/MISSIONS. GPS status badge always visible. Map init deferred to first MAP tab open. Log export/import added to hamburger.
 **2026-05-25** — Pulled CD/GitHub download-management work to TestBox. Added richer downloaded map catalog, total map/tile/size summary, per-map Use/Repair/Refresh/Delete actions, queue panel, pause/resume/cancel controls, Repair Missing, Update All, safe `.part` replacement for refresh/update, and app-package-style settings UI. Current implementation uses an in-memory Flask queue with one worker thread. (Session continuation)
 **2026-05-25** — Added local SQLite persistence for download jobs. Jobs are stored in `download_jobs` inside `~/maps/map_app.db`; queued jobs survive restart, paused jobs remain paused until resumed, and running jobs are restored as queued so the app can retry them after restart. Not deployed to CD yet. (Session continuation)
 **2026-05-25** — Added local partial MBTiles resume and per-tile retry/backoff. Restarted/interrupted jobs now keep readable `.part` files, validate them, skip already-saved tiles, and fetch only missing tiles. Finished/error/cancelled job history is retained for 7 days by default via `MAP_APP_DOWNLOAD_JOB_RETENTION_DAYS`; tile retries default to 2 via `MAP_APP_TILE_DOWNLOAD_RETRIES`. Not deployed to CD yet. (Session continuation)
