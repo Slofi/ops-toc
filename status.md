@@ -15,7 +15,7 @@ updated:: 2026-06-02
 | **Service**   | ops-toc.service (user systemd, NOT enabled) |
 | **Data dir**  | ~/maps/ (DB + MBTiles shared with all CD apps) |
 | **Repo**      | github.com/Slofi/ops-toc |
-| **Latest pushed commit** | `ce5fa38 Fix OPS-TOC repair and log rendering bugs` |
+| **Latest pushed app commit** | `ce5fa38 Fix OPS-TOC repair and log rendering bugs` |
 
 ## Access
 
