@@ -2056,13 +2056,26 @@ def api_log_entries():
         limit = min(int(request.args.get("limit", 500)), 2000)
     except (ValueError, TypeError):
         limit = 500
-    with get_toc_db() as conn:
-        rows = conn.execute(
-            "SELECT id,ts,category,body FROM toc_log ORDER BY ts DESC LIMIT ?", (limit,)
-        ).fetchall()
-    entries = [_toc_annotate(_toc_row(r)) for r in rows]
+    where = []
+    params: list[Any] = []
     if cat and cat != "ALL":
-        entries = [e for e in entries if e["category"] == cat]
+        where.append("category = ?")
+        params.append(cat)
+    if miss:
+        where.append("(LOWER(body) LIKE ? OR LOWER(body) LIKE ?)")
+        params.append(f"%mission%folder:%{miss.lower()}%")
+        params.append(f"%mission:%{miss.lower()}%")
+    if search:
+        where.append("LOWER(body) LIKE ?")
+        params.append(f"%{search.lower()}%")
+    sql = "SELECT id,ts,category,body FROM toc_log"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY ts DESC LIMIT ?"
+    params.append(limit)
+    with get_toc_db() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    entries = [_toc_annotate(_toc_row(r)) for r in rows]
     if miss:
         entries = [e for e in entries if (e.get("mission") or "").lower() == miss.lower()]
     if search:
@@ -2140,8 +2153,8 @@ def api_log_missions_rename():
         for r in rows:
             body = r["body"] or ""
             m = _MISSION_RE.search(body)
-            if m and m.group(1).strip() == old:
-                new_body = _MISSION_RE.sub(f"**Mission / Folder:** {new}", body, count=1)
+            if m and m.group(1).strip().lower() == old.lower():
+                new_body = _MISSION_RE.sub(lambda _: f"**Mission / Folder:** {new}", body, count=1)
                 conn.execute("UPDATE toc_log SET body=? WHERE id=?", (new_body, r["id"]))
                 updated += 1
     return jsonify({"ok": True, "updated": updated})
@@ -2159,7 +2172,7 @@ def api_log_missions_delete():
         for r in rows:
             body = r["body"] or ""
             m = _MISSION_RE.search(body)
-            if m and m.group(1).strip() == name:
+            if m and m.group(1).strip().lower() == name.lower():
                 new_body = _MISSION_RE.sub("", body).lstrip("\n")
                 conn.execute("UPDATE toc_log SET body=? WHERE id=?", (new_body, r["id"]))
                 updated += 1
