@@ -1,13 +1,13 @@
 [Unit]
-Description=Standalone Map App
+Description=OPS-TOC
 After=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/Projects/map-app
+WorkingDirectory=%h/Projects/ops-toc
 Environment=MAP_APP_DATA_DIR=%h/maps
 Environment=MAP_APP_PORT=8090
-ExecStart=/usr/bin/python3 %h/Projects/map-app/app.py
+ExecStart=/usr/bin/python3 %h/Projects/ops-toc/app.py
 Restart=on-failure
 RestartSec=3
 

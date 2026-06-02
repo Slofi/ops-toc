@@ -12,43 +12,43 @@ updated:: 2026-06-02
 | **Status**    | Active — started via Dashboard tile, not enabled at boot |
 | **Port**      | 8090 |
 | **Host**      | Cyberdeck (rock-5b, 100.97.104.107) |
-| **Service**   | map-app.service (user systemd, NOT enabled) |
+| **Service**   | ops-toc.service (user systemd, NOT enabled) |
 | **Data dir**  | ~/maps/ (DB + MBTiles shared with all CD apps) |
 | **Repo**      | github.com/Slofi/ops-toc |
-| **Latest pushed commit** | `127e5d5 Fix TOC log filtering and mission updates` |
+| **Latest pushed commit** | `Rename local service to OPS-TOC` |
 
 ## Access
 
 | Resource | Value |
 |----------|-------|
 | App URL  | http://localhost:8090 (on CD) |
-| App path | ~/Projects/map-app/ |
-| Service  | systemctl --user start/stop/restart map-app |
+| App path | ~/Projects/ops-toc/ |
+| Service  | systemctl --user start/stop/restart ops-toc |
 
 ## Quick Commands
 
 **Start/stop:**
 ```bash
-systemctl --user start map-app
-systemctl --user stop map-app
-systemctl --user restart map-app
+systemctl --user start ops-toc
+systemctl --user stop ops-toc
+systemctl --user restart ops-toc
 ```
 
 **Logs:**
 ```bash
-journalctl --user -u map-app -f
+journalctl --user -u ops-toc -f
 ```
 
 ## Key Paths
 
 | Item | Path |
 |------|------|
-| App | ~/Projects/map-app/app.py |
-| Template | ~/Projects/map-app/templates/index.html |
-| JS | ~/Projects/map-app/static/js/app.js |
-| CSS | ~/Projects/map-app/static/css/app.css |
-| Venv | ~/Projects/map-app/venv/ |
-| Service | ~/.config/systemd/user/map-app.service |
+| App | ~/Projects/ops-toc/app.py |
+| Template | ~/Projects/ops-toc/templates/index.html |
+| JS | ~/Projects/ops-toc/static/js/app.js |
+| CSS | ~/Projects/ops-toc/static/css/app.css |
+| Venv | ~/Projects/ops-toc/venv/ |
+| Service | ~/.config/systemd/user/ops-toc.service |
 | DB | ~/maps/map_app.db |
 | MBTiles | ~/maps/mbtiles/ |
 | Shared log DB | ~/overmesh/overmesh_prefs.db (`toc_log`) |
@@ -60,7 +60,7 @@ journalctl --user -u map-app -f
 - LOG/MISSIONS read and write OM's shared `toc_log` table directly in `~/overmesh/overmesh_prefs.db`.
 - OM and OPS-TOC now share the same TOC category set, including `WEATHER`.
 - `log-app.service` / standalone TOC-app is retired, stopped, and disabled.
-- `map-app.service` remains the manual/Dashboard-controlled OPS-TOC service and is not enabled at boot.
+- `ops-toc.service` is the manual/Dashboard-controlled OPS-TOC service and is not enabled at boot.
 - Map data remains intentionally split: markers/drawings/tracks stay in `~/maps/map_app.db`; OM may consume map data read-only later but should not co-own map edit controls.
 
 ## Pending
@@ -77,8 +77,9 @@ journalctl --user -u map-app -f
 
 ## Changelog
 
-**2026-06-02** — GitHub repository renamed from `Slofi/map-app` to `Slofi/ops-toc`; local `origin` updated to `git@github.com:Slofi/ops-toc.git`. Local folder/service remain `map-app` for now to avoid Dashboard/service churn.
-**2026-06-02** — Codex compatibility/service pass: OPS-TOC log filtering now applies category/mission/search before the 500-row display limit, so older matching entries are found. Mission rename/remove is case-insensitive. OM was updated to support the shared `WEATHER` category. `log-app.service` was stopped/disabled; `map-app.service` is active but disabled at boot. Pushed to GitHub (`127e5d5` in `Slofi/ops-toc`, `aee724b` in `Slofi/overmesh`).
+**2026-06-02** — Local rename completed: checkout moved to `~/Projects/ops-toc`, user service renamed to `ops-toc.service`, Dashboard tile now launches OPS-TOC on port 8090, and stale `map-app.service` was retired. Shared DB names remain `~/maps/map_app.db` and `MAP_APP_*` for compatibility with other map consumers.
+**2026-06-02** — GitHub repository renamed from `Slofi/map-app` to `Slofi/ops-toc`; local `origin` updated to `git@github.com:Slofi/ops-toc.git`.
+**2026-06-02** — Codex compatibility/service pass: OPS-TOC log filtering now applies category/mission/search before the 500-row display limit, so older matching entries are found. Mission rename/remove is case-insensitive. OM was updated to support the shared `WEATHER` category. `log-app.service` was stopped/disabled; former `map-app.service` was active but disabled at boot. Pushed to GitHub (`127e5d5` in `Slofi/ops-toc`, `aee724b` in `Slofi/overmesh`).
 **2026-06-02** — Added SOP tab: 8 interactive checklist sections (Activation, Pre-Departure, En Route, Arrival, Open Station, Close Station, Comms Degraded, RC Run) + 2 reference sections (Log Discipline, Category Reference). Progress bars, collapse/expand, per-section and global reset, state persisted in localStorage. Pushed to GitHub (d0b9ea0).
 **2026-06-02** — Renamed to OPS-TOC. UI polish: font 15px, toolbar 56px, burger+GPS pinned right, UI zoom slider (80–130%) in Appearance. Custom split clipboard+pin SVG brand icon. Pushed to GitHub (26217d5).
 **2026-06-02** — Bug sweep 2: offline settings crash from LOG/MISSIONS tab fixed (prepareOfflineSection, updateOfflineEstimate, currentBoundsPayload, startOfflineDownload all guarded against null state.map). renderBody leading blank line on mission-tagged entries fixed. Deployed to CD (b2d799f).

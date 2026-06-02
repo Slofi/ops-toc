@@ -35,14 +35,14 @@ Default data paths:
 
 ## GPS And Tracks
 
-Map App has GPS support in two modes:
+OPS-TOC has GPS support in two modes:
 
 - OM proxy: polls OM's GPS endpoint so only OM owns the serial GPS device.
 - Direct serial: opens a local GPS dongle/serial port when running standalone.
 
 The toolbar `GPS` button jumps to the current fix. The toolbar `Track` button
 records a live dashed gold trace while GPS has a fix. Stopping the recording
-saves it as a first-class track in Map App's SQLite DB.
+saves it as a first-class track in OPS-TOC's SQLite DB.
 
 Saved tracks appear in the left side panel under `Tracks`, below markers and
 drawings. Track actions:
@@ -69,7 +69,7 @@ Track API:
 - `GET /api/markers` - read custom markers for OM overlay.
 - `GET /api/tracks` - read saved GPS tracks for TOC/OM integrations.
 - `GET /api/tile-layers` - list local MBTiles and online layers.
-- `GET /tiles/<layer>/<z>/<x>/<y>.png` - Map App's built-in local tile endpoint.
+- `GET /tiles/<layer>/<z>/<x>/<y>.png` - OPS-TOC's built-in local tile endpoint.
 - `GET /api/export/geojson` - export markers and drawings.
 - `POST /api/om/share-marker/<id>` - placeholder for later OM waypoint sharing.
 
@@ -90,7 +90,7 @@ shared server only when its `Use shared local tile DB` setting is enabled.
 
 ## Online Layers
 
-Map App mirrors the OM online layer catalog, including CARTO, Esri, Stadia/Stamen,
+OPS-TOC mirrors the OM online layer catalog, including CARTO, Esri, Stadia/Stamen,
 Thunderforest, and MapTiler layers. Thunderforest and MapTiler layers need API
 keys; use the `Keys` button in the toolbar. Keys are saved in browser
 localStorage with the same names OM uses:
@@ -109,10 +109,10 @@ colour is saved in browser localStorage as:
 mapAppAccentColor
 ```
 
-Map App derives readable accent and dim active-state colours the same way OM does.
+OPS-TOC derives readable accent and dim active-state colours the same way OM does.
 
 ## Place Search
 
-The toolbar search box calls Map App's backend `/api/search` route. The backend
-queries OpenStreetMap Nominatim with a Map App User-Agent and returns app-native
+The toolbar search box calls OPS-TOC's backend `/api/search` route. The backend
+queries OpenStreetMap Nominatim with an OPS-TOC User-Agent and returns app-native
 results; choosing a result pans/zooms the map and drops a temporary search marker.

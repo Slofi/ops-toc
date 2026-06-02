@@ -149,7 +149,7 @@ function appDialog({ title = "Message", message = "", mode = "alert", value = ""
   });
 }
 
-function appAlert(message, title = "Map App") {
+function appAlert(message, title = "OPS-TOC") {
   return appDialog({ title, message, mode: "alert" });
 }
 
@@ -190,9 +190,9 @@ const MAP_APP_MANUAL_SECTIONS = [
     title: "Map Basics",
     tags: "map layers search markers drawings ruler toolbar side panel",
     body: [
-      "Map App is the Cyberdeck map workspace. It owns local markers, drawings, measurements, offline tile downloads, and app-to-app marking exchange.",
+      "OPS-TOC is the Cyberdeck map workspace. It owns local markers, drawings, measurements, offline tile downloads, and app-to-app marking exchange.",
       "The layer selector switches between online layers and local MBTiles. Local layers appear after a download completes or after the shared tile server sees MBTiles in the shared folder.",
-      "The place search box uses the Map App backend to query Nominatim, then pans or zooms to the selected result."
+      "The place search box uses the OPS-TOC backend to query Nominatim, then pans or zooms to the selected result."
     ],
     buttons: [
       ["Markers", "Open or close the left panel with saved markers and drawings."],
@@ -205,14 +205,14 @@ const MAP_APP_MANUAL_SECTIONS = [
     title: "Markers",
     tags: "markers pins notes add edit delete category emoji om sync",
     body: [
-      "Markers are local Map App points. They have a name, optional description, icon text, and category.",
+      "Markers are local OPS-TOC points. They have a name, optional description, icon text, and category.",
       "Use Add Marker, then click the map. Existing markers can be edited or deleted from the marker popup or the left panel.",
-      "When pushed to OM through local sync, Map App markers become OM Self Notes. They are not broadcast as mesh waypoints."
+      "When pushed to OM through local sync, OPS-TOC markers become OM Self Notes. They are not broadcast as mesh waypoints."
     ],
     buttons: [
       ["Add Marker", "Start marker placement. Click the map to open the marker form."],
       ["Edit", "Change marker text, description, icon text, or category."],
-      ["Delete", "Remove the marker from Map App only."],
+      ["Delete", "Remove the marker from OPS-TOC only."],
       ["Push To OM", "Send markers to OM as local Self Notes."]
     ]
   },
@@ -269,7 +269,7 @@ const MAP_APP_MANUAL_SECTIONS = [
     title: "Download Queue",
     tags: "queue pause resume cancel eta speed retry partial resume update all repair all",
     body: [
-      "Downloads are queued so Map App does not hammer tile providers. The queue shows progress, saved/failed tiles, speed, and ETA.",
+      "Downloads are queued so OPS-TOC does not hammer tile providers. The queue shows progress, saved/failed tiles, speed, and ETA.",
       "Jobs are persisted in SQLite. Queued and paused jobs survive restart; interrupted jobs can resume from readable .part MBTiles files and skip already saved tiles.",
       "Finished, cancelled, and failed job records can be cleared without deleting downloaded maps."
     ],
@@ -287,15 +287,15 @@ const MAP_APP_MANUAL_SECTIONS = [
     tags: "gpx geojson import export overmesh om sync pull push markings overlays self notes",
     body: [
       "GPX import creates markers from waypoints and line drawings from tracks/routes. GPX export writes markers as waypoints and drawings as tracks.",
-      "Pull From OM imports OM Marks, Self Notes, and Overlays into Map App markers and drawings.",
-      "Push To OM sends Map App markers as OM Self Notes and drawings as OM Overlays. This is local-only and does not broadcast anything over the mesh."
+      "Pull From OM imports OM Marks, Self Notes, and Overlays into OPS-TOC markers and drawings.",
+      "Push To OM sends OPS-TOC markers as OM Self Notes and drawings as OM Overlays. This is local-only and does not broadcast anything over the mesh."
     ],
     buttons: [
-      ["Import GPX", "Read GPX waypoints, tracks, and routes into Map App."],
-      ["Export GPX", "Download Map App markings as GPX."],
-      ["Export GeoJSON", "Download Map App markings as GeoJSON."],
+      ["Import GPX", "Read GPX waypoints, tracks, and routes into OPS-TOC."],
+      ["Export GPX", "Download OPS-TOC markings as GPX."],
+      ["Export GeoJSON", "Download OPS-TOC markings as GeoJSON."],
       ["Pull From OM", "Import OM local map markings from the configured OM URL."],
-      ["Push To OM", "Send Map App markings to OM as local notes and overlays."]
+      ["Push To OM", "Send OPS-TOC markings to OM as local notes and overlays."]
     ]
   },
   {
@@ -303,7 +303,7 @@ const MAP_APP_MANUAL_SECTIONS = [
     tags: "settings accent keys thunderforest maptiler update restart shutdown version",
     body: [
       "Appearance controls the accent color. API keys are stored in this browser profile using the same localStorage key names as OM.",
-      "Version check compares the local git checkout to GitHub. Update pulls from GitHub and restarts Map App when successful.",
+      "Version check compares the local git checkout to GitHub. Update pulls from GitHub and restarts OPS-TOC when successful.",
       "Restart and Shutdown act on the user systemd service on the target device."
     ],
     buttons: [
@@ -311,8 +311,8 @@ const MAP_APP_MANUAL_SECTIONS = [
       ["Save Accent", "Store the current accent color in the browser profile."],
       ["Check Version", "Compare the running checkout with GitHub."],
       ["Update", "Run git pull and restart the service after success."],
-      ["Restart", "Restart map-app.service."],
-      ["Shutdown", "Stop map-app.service."]
+      ["Restart", "Restart ops-toc.service."],
+      ["Shutdown", "Stop ops-toc.service."]
     ]
   }
 ];
@@ -1151,7 +1151,7 @@ async function pullFromOverMesh() {
 }
 
 async function pushToOverMesh() {
-  const ok = await appConfirm("Push Map App markers and drawings to OverMesh? Markers become OM Self Notes; drawings become OM Overlays. Nothing is broadcast over the mesh.", "Push To OM");
+  const ok = await appConfirm("Push OPS-TOC markers and drawings to OverMesh? Markers become OM Self Notes; drawings become OM Overlays. Nothing is broadcast over the mesh.", "Push To OM");
   if (!ok) return;
   const status = el("data-transfer-status");
   if (status) status.textContent = "Pushing markings to OverMesh...";
@@ -1656,7 +1656,7 @@ async function restartApp() {
   if (restartBtn) restartBtn.disabled = true;
   if (menuRestartBtn) menuRestartBtn.disabled = true;
   setHamburgerOpen(false);
-  el("update-status").textContent = "Restarting Map App service...";
+  el("update-status").textContent = "Restarting OPS-TOC service...";
   try {
     await api("/api/service/restart", { method: "POST" });
     setTimeout(() => window.location.reload(), 3500);
@@ -1669,16 +1669,16 @@ async function restartApp() {
 
 async function stopApp() {
   setHamburgerOpen(false);
-  const ok = await appConfirm("Shutdown Map App? The page will stop responding until the service is started again.", "Shutdown");
+  const ok = await appConfirm("Shutdown OPS-TOC? The page will stop responding until the service is started again.", "Shutdown");
   if (!ok) return;
   const stopBtn = el("stop-app-btn");
   const menuShutdownBtn = el("menu-shutdown-btn");
   if (stopBtn) stopBtn.disabled = true;
   if (menuShutdownBtn) menuShutdownBtn.disabled = true;
-  el("update-status").textContent = "Stopping Map App service...";
+  el("update-status").textContent = "Stopping OPS-TOC service...";
   try {
     await api("/api/service/stop", { method: "POST" });
-    el("update-status").textContent = "Map App is stopping. Start it again from the dashboard when needed.";
+    el("update-status").textContent = "OPS-TOC is stopping. Start it again from the dashboard when needed.";
   } catch (err) {
     if (stopBtn) stopBtn.disabled = false;
     if (menuShutdownBtn) menuShutdownBtn.disabled = false;

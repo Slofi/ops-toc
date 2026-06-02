@@ -50,7 +50,7 @@ _active_jobs: set[str] = set()
 
 @app.after_request
 def add_cors_headers(resp):
-    # OM on the same machine reads Map App's tile catalog from localhost:8090.
+    # OM on the same machine reads OPS-TOC's tile catalog from localhost:8090.
     resp.headers["Access-Control-Allow-Origin"] = "*"
     resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
     resp.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,DELETE,OPTIONS"
@@ -362,7 +362,7 @@ def update_mbtiles_metadata(conn: sqlite3.Connection, metadata: dict[str, str]) 
 
 def service_action_soon(action: str) -> None:
     time.sleep(1)
-    subprocess.run(["systemctl", "--user", action, "map-app.service"], cwd=APP_ROOT, check=False)
+    subprocess.run(["systemctl", "--user", action, "ops-toc.service"], cwd=APP_ROOT, check=False)
 
 
 def run_git(args: list[str], timeout: int = 20) -> subprocess.CompletedProcess[str]:
@@ -391,7 +391,7 @@ def git_version_payload(check_remote: bool = False) -> dict[str, Any]:
     )
     if not payload["is_git"] or current.returncode != 0:
         payload["ok"] = False
-        payload["error"] = "Map App directory is not a usable git checkout."
+        payload["error"] = "OPS-TOC directory is not a usable git checkout."
         return payload
     if check_remote:
         ref = payload["branch"] if payload["branch"] and payload["branch"] != "HEAD" else "master"
@@ -649,7 +649,7 @@ def fetch_tile_data(url: str) -> bytes:
     last_error: Exception | None = None
     for attempt in range(TILE_DOWNLOAD_RETRIES + 1):
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "Slofi Map App/0.1"})
+            req = urllib.request.Request(url, headers={"User-Agent": "Slofi OPS-TOC/0.1"})
             with urllib.request.urlopen(req, timeout=12) as resp:
                 return resp.read()
         except Exception as exc:
@@ -756,7 +756,7 @@ def job_from_download_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], 
         "name": name,
         "type": "baselayer",
         "version": "1",
-        "description": f"{layer_name} offline tiles from Map App",
+        "description": f"{layer_name} offline tiles from OPS-TOC",
         "format": "jpg" if fmt in {"jpg", "jpeg"} else "png",
         "minzoom": str(min_zoom),
         "maxzoom": str(max_zoom),
@@ -809,7 +809,7 @@ def job_from_layer(layer: dict[str, Any], mode: str) -> tuple[dict[str, Any], di
     fmt = layer.get("format", "png")
     metadata = {
         "name": name, "type": "baselayer", "version": "1",
-        "description": f"{layer_name} offline tiles from Map App",
+        "description": f"{layer_name} offline tiles from OPS-TOC",
         "format": fmt, "minzoom": str(min_zoom), "maxzoom": str(max_zoom),
         "bounds": bounds_str, "source_url": url,
         "source_min_zoom": str(min_zoom), "source_max_zoom": str(max_zoom),
@@ -1074,12 +1074,12 @@ def gpx_text(markers: list[dict[str, Any]], drawings: list[dict[str, Any]]) -> b
         "gpx",
         {
             "version": "1.1",
-            "creator": "Slofi Map App",
+            "creator": "Slofi OPS-TOC",
             "xmlns": "http://www.topografix.com/GPX/1/1",
         },
     )
     meta = ET.SubElement(gpx, "metadata")
-    ET.SubElement(meta, "name").text = "Map App export"
+    ET.SubElement(meta, "name").text = "OPS-TOC export"
     for marker in markers:
         wpt = ET.SubElement(gpx, "wpt", {"lat": str(marker["lat"]), "lon": str(marker["lon"])})
         ET.SubElement(wpt, "name").text = marker["name"]
@@ -1163,7 +1163,7 @@ def _track_gpx_text(track: dict[str, Any]) -> bytes:
         "gpx",
         {
             "version": "1.1",
-            "creator": "Slofi Map App",
+            "creator": "Slofi OPS-TOC",
             "xmlns": "http://www.topografix.com/GPX/1/1",
         },
     )
@@ -1262,7 +1262,7 @@ def index():
 
 @app.route("/api/health")
 def api_health():
-    return jsonify({"ok": True, "service": "map-app", "port": PORT, "data_dir": str(DATA_DIR)})
+    return jsonify({"ok": True, "service": "ops-toc", "port": PORT, "data_dir": str(DATA_DIR)})
 
 
 @app.route("/api/version")
@@ -1286,13 +1286,13 @@ def api_update_app():
 @app.route("/api/service/restart", methods=["POST"])
 def api_restart_service():
     threading.Thread(target=service_action_soon, args=("restart",), daemon=True).start()
-    return jsonify({"ok": True, "message": "Restarting Map App service."})
+    return jsonify({"ok": True, "message": "Restarting OPS-TOC service."})
 
 
 @app.route("/api/service/stop", methods=["POST"])
 def api_stop_service():
     threading.Thread(target=service_action_soon, args=("stop",), daemon=True).start()
-    return jsonify({"ok": True, "message": "Stopping Map App service."})
+    return jsonify({"ok": True, "message": "Stopping OPS-TOC service."})
 
 
 @app.route("/api/tile-layers")
@@ -1496,7 +1496,7 @@ def api_search():
     req = urllib.request.Request(
         url,
         headers={
-            "User-Agent": "Slofi Map App/0.1 (local cyberdeck map search)",
+            "User-Agent": "Slofi OPS-TOC/0.1 (local cyberdeck map search)",
             "Accept": "application/json",
         },
     )
@@ -1952,7 +1952,7 @@ def api_export_gpx():
     return Response(
         gpx_text(markers, drawings),
         mimetype="application/gpx+xml",
-        headers={"Content-Disposition": "attachment; filename=map-app-export.gpx"},
+        headers={"Content-Disposition": "attachment; filename=ops-toc-export.gpx"},
     )
 
 
@@ -2389,7 +2389,7 @@ def api_extend_tile_layer(layer_id):
     fmt = layer.get("format", "png")
     metadata = {
         "name": name, "type": "baselayer", "version": "1",
-        "description": f"{layer_name} offline tiles from Map App",
+        "description": f"{layer_name} offline tiles from OPS-TOC",
         "format": fmt, "minzoom": str(merged_min), "maxzoom": str(merged_max),
         "bounds": bounds_str, "source_url": url,
         "source_min_zoom": str(merged_min), "source_max_zoom": str(merged_max),
