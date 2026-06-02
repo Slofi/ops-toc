@@ -1,11 +1,11 @@
 type:: project
 status:: active
-tags:: #map-app #leaflet #offline-maps #cyberdeck
+tags:: #ops-toc #map-app #leaflet #offline-maps #field-log #cyberdeck
 updated:: 2026-06-02
 
-# Map App
+# OPS-TOC
 
-> Standalone Leaflet map app for the Cyberdeck. Owns markers, drawings, and offline tile downloads. Shared tile DB feeds Sonde App, OM, and future apps.
+> OPS-TOC is the Cyberdeck's main map-management and field-operations app. It owns markers, drawings, GPS tracks, offline tile downloads, LOG, MISSIONS, and SOP. Shared tile DB feeds Sonde App, OM, and future apps.
 
 ## State
 
@@ -14,7 +14,8 @@ updated:: 2026-06-02
 | **Host**      | Cyberdeck (rock-5b, 100.97.104.107) |
 | **Service**   | map-app.service (user systemd, NOT enabled) |
 | **Data dir**  | ~/maps/ (DB + MBTiles shared with all CD apps) |
-| **Repo**      | github.com/Slofi/map-app (Codex manages, Claude can push from CD) |
+| **Repo**      | github.com/Slofi/map-app (legacy repo name; app name is OPS-TOC) |
+| **Latest pushed commit** | `127e5d5 Fix TOC log filtering and mission updates` |
 
 ## Access
 
@@ -50,6 +51,17 @@ journalctl --user -u map-app -f
 | Service | ~/.config/systemd/user/map-app.service |
 | DB | ~/maps/map_app.db |
 | MBTiles | ~/maps/mbtiles/ |
+| Shared log DB | ~/overmesh/overmesh_prefs.db (`toc_log`) |
+
+## Current Integration
+
+- OPS-TOC owns all map-specific controls: markers, drawings, GPS tracks, offline downloads, and downloaded-map management.
+- OPS-TOC owns the standalone field workflow: LOG, MISSIONS, and SOP tabs.
+- LOG/MISSIONS read and write OM's shared `toc_log` table directly in `~/overmesh/overmesh_prefs.db`.
+- OM and OPS-TOC now share the same TOC category set, including `WEATHER`.
+- `log-app.service` / standalone TOC-app is retired, stopped, and disabled.
+- `map-app.service` remains the manual/Dashboard-controlled OPS-TOC service and is not enabled at boot.
+- Map data remains intentionally split: markers/drawings/tracks stay in `~/maps/map_app.db`; OM may consume map data read-only later but should not co-own map edit controls.
 
 ## Pending
 
@@ -65,6 +77,8 @@ journalctl --user -u map-app -f
 
 ## Changelog
 
+**2026-06-02** — Codex compatibility/service pass: OPS-TOC log filtering now applies category/mission/search before the 500-row display limit, so older matching entries are found. Mission rename/remove is case-insensitive. OM was updated to support the shared `WEATHER` category. `log-app.service` was stopped/disabled; `map-app.service` is active but disabled at boot. Pushed to GitHub (`127e5d5` in `Slofi/map-app`, `aee724b` in `Slofi/overmesh`).
+**2026-06-02** — Added SOP tab: 8 interactive checklist sections (Activation, Pre-Departure, En Route, Arrival, Open Station, Close Station, Comms Degraded, RC Run) + 2 reference sections (Log Discipline, Category Reference). Progress bars, collapse/expand, per-section and global reset, state persisted in localStorage. Pushed to GitHub (d0b9ea0).
 **2026-06-02** — Renamed to OPS-TOC. UI polish: font 15px, toolbar 56px, burger+GPS pinned right, UI zoom slider (80–130%) in Appearance. Custom split clipboard+pin SVG brand icon. Pushed to GitHub (26217d5).
 **2026-06-02** — Bug sweep 2: offline settings crash from LOG/MISSIONS tab fixed (prepareOfflineSection, updateOfflineEstimate, currentBoundsPayload, startOfflineDownload all guarded against null state.map). renderBody leading blank line on mission-tagged entries fixed. Deployed to CD (b2d799f).
 **2026-06-02** — Bug sweep 1: LOG/MISSIONS tabs were 300px wide (grid layout fix), GPS marker crashed every 3s when map not yet opened, edit entry reset timestamp to now. Deployed to CD (0be590e).
@@ -88,16 +102,17 @@ journalctl --user -u map-app -f
 ## Architecture
 
 ```
-Map App (port 8090)
+OPS-TOC / Map App (port 8090)
   Flask backend           → serves HTML, markers, drawings, tile proxy
   Offline downloader      → downloads tiles from online sources
   Tile manager            → manages ~/maps/mbtiles/ (delete, refresh)
+  LOG/MISSIONS/SOP        → shares OM toc_log in ~/overmesh/overmesh_prefs.db
   Marker/drawing owner    → SQLite DB at ~/maps/map_app.db
         ↓ writes MBTiles to ~/maps/mbtiles/
 mbtileserver (port 8092)  → serves all apps: Sonde App, OM (opt-in), future apps
 ```
 
-**Design rule:** Map App owns all map-specific controls (markers, drawings, downloads). OM may consume map data read-only later but must not own add/edit/delete controls.
+**Design rule:** OPS-TOC owns all map-specific controls (markers, drawings, tracks, downloads). OM may consume map data read-only later but must not own add/edit/delete controls.
 
 ## Shared Tile Workflow
 

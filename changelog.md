@@ -1,4 +1,12 @@
-# Map App - Changelog
+# OPS-TOC / Map App - Changelog
+
+## 2026-06-02
+
+**[Codex]** - Renamed the running app to OPS-TOC after the TOC-app merge. OPS-TOC now owns the main map-management surface plus LOG, MISSIONS, and SOP. The map DB remains `~/maps/map_app.db`; the field log remains shared with OM through `~/overmesh/overmesh_prefs.db` table `toc_log`.
+
+**[Codex]** - Fixed shared log compatibility and service state. OPS-TOC now filters category/mission/search in SQL before applying the display limit, so older matching log rows are not hidden. Mission rename/remove is case-insensitive. OM now accepts and edits `WEATHER` entries, matching OPS-TOC's category set. The standalone `log-app.service` is stopped/disabled; `map-app.service` remains active for OPS-TOC but disabled at boot. Pushed OPS-TOC commit `127e5d5` and OM commit `aee724b`.
+
+**[Claude/Codex]** - Added SOP tab, LOG/MISSIONS tabs, OPS-TOC UI polish, deferred map initialization, fixed LOG/MISSIONS layout, GPS marker behavior before map initialization, edit timestamp preservation, offline settings guards when map is not initialized, and mission-tag rendering cleanup.
 
 ## 2026-05-25
 

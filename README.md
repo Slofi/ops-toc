@@ -1,15 +1,16 @@
-# Map App
+# OPS-TOC
 
-Standalone Leaflet map app for CD, Hand-Deck, and later OverMesh integration.
+OPS-TOC is the Cyberdeck's main map-management and field-operations app. It is the former standalone Map App after the TOC-app merge.
 
 ## Goals
 
 - Keep the map as its own app, not an OM tab.
 - Store downloaded/offline maps in one shared location.
-- Store custom markers in the Map app, with add/edit/delete controls here.
+- Store custom markers, drawings, GPS tracks, and downloaded-map controls in OPS-TOC.
 - Let OM consume markers/tiles later without owning the marker controls.
 - Record GPS traces from OM proxy or direct serial GPS and export them as GPX/GeoJSON.
-- Host TOC-app (Field Log) log/missions tabs after merge — single app replaces both.
+- Host the field LOG, MISSIONS, and SOP workflows in the same app.
+- Share LOG/MISSIONS with OM through the same `~/overmesh/overmesh_prefs.db` `toc_log` table.
 - Keep radio/mesh sharing as a later OM-backed action.
 
 ## Run
@@ -29,6 +30,7 @@ Default data paths:
 ```text
 /home/slofi/maps/map_app.db
 /home/slofi/maps/mbtiles/*.mbtiles
+/home/slofi/overmesh/overmesh_prefs.db  # shared toc_log with OM
 ```
 
 ## GPS And Tracks
@@ -71,20 +73,19 @@ Track API:
 - `GET /api/export/geojson` - export markers and drawings.
 - `POST /api/om/share-marker/<id>` - placeholder for later OM waypoint sharing.
 
-## TOC-app Integration
+## LOG / MISSIONS / SOP Integration
 
-TOC-app (Field Log) is being merged into Map App. The LOG and MISSIONS tabs will be
-added here, wired directly to the shared `overmesh_prefs.db` (`toc_log` table) that
-OM also reads/writes. The log-app service and launcher tile will be retired once the
-merge is complete.
+TOC-app (Field Log) has been merged into OPS-TOC. The old standalone `log-app.service`
+is retired, stopped, and disabled. OPS-TOC now owns LOG, MISSIONS, and SOP.
 
-- Map App owns all map controls (markers, drawings, tracks, downloads)
-- Log entries, missions, and structured templates move here as new tabs
+- OPS-TOC owns all map controls (markers, drawings, tracks, downloads)
+- LOG/MISSIONS are wired directly to the shared `overmesh_prefs.db` (`toc_log` table) that OM also reads/writes
 - DB split: log entries from `~/overmesh/overmesh_prefs.db`, markers/drawings/tracks from `~/maps/map_app.db`
-- TOC-app's map tab goes away — Map App's full map replaces it
+- Category compatibility with OM includes NOTE, PLAN, SITREP, ALERT, ACTION, COMMS, CONTACT, POSITION, INTEL, and WEATHER
+- SOP is app-local UI state stored in browser localStorage
 
 Shared CD tiles are served for other apps by `mbtileserver` on port `8092`, reading
-the same `/home/slofi/maps/mbtiles/` directory Map App writes to. OM consumes that
+the same `/home/slofi/maps/mbtiles/` directory OPS-TOC writes to. OM consumes that
 shared server only when its `Use shared local tile DB` setting is enabled.
 
 ## Online Layers
