@@ -1382,6 +1382,7 @@ function currentLayerDownloadDef() {
 
 function currentBoundsPayload() {
   if (state.offlineBounds) return { ...state.offlineBounds };
+  if (!state.map) return {}; // map not yet initialized; caller validates
   const b = state.map.getBounds();
   return {
     south: b.getSouth(),
@@ -1399,8 +1400,13 @@ async function updateOfflineEstimate() {
     el("offline-download-btn").disabled = true;
     return;
   }
-  const minZoom = Number(el("offline-min-zoom").value || state.map.getZoom());
-  const maxZoom = Number(el("offline-max-zoom").value || state.map.getZoom());
+  if (!state.offlineBounds && !state.map) {
+    estimate.textContent = "Open the Map tab first to set a download area.";
+    el("offline-download-btn").disabled = true;
+    return;
+  }
+  const minZoom = Number(el("offline-min-zoom").value || (state.map ? state.map.getZoom() : 12));
+  const maxZoom = Number(el("offline-max-zoom").value || (state.map ? state.map.getZoom() : 14));
   try {
     const data = await api("/api/download-estimate", {
       method: "POST",
@@ -1416,7 +1422,7 @@ async function updateOfflineEstimate() {
 }
 
 function prepareOfflineSection() {
-  const zoom = Math.round(state.map.getZoom());
+  const zoom = state.map ? Math.round(state.map.getZoom()) : 12;
   el("offline-min-zoom").value = Math.max(0, zoom - 1);
   el("offline-max-zoom").value = Math.min(18, zoom + 2);
   el("offline-name").value = `Map ${new Date().toISOString().slice(0, 10)}`;
@@ -1550,8 +1556,8 @@ async function startOfflineDownload() {
     return;
   }
   el("offline-download-btn").disabled = true;
-  const minZoom = Number(el("offline-min-zoom").value || state.map.getZoom());
-  const maxZoom = Number(el("offline-max-zoom").value || state.map.getZoom());
+  const minZoom = Number(el("offline-min-zoom").value || (state.map ? state.map.getZoom() : 12));
+  const maxZoom = Number(el("offline-max-zoom").value || (state.map ? state.map.getZoom() : 14));
   try {
     const job = await api("/api/downloads", {
       method: "POST",

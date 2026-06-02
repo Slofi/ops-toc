@@ -457,8 +457,8 @@ function renderBody(body) {
   if (!body) return '<em style="color:var(--muted)">—</em>';
   return body
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/\*\*(Mission|Mission \/ Folder):\*\*[^\n]*/gi, '')
-    .replace(/\*\*GPS:\*\*[^\n]*/g, '')
+    .replace(/\*\*(Mission|Mission \/ Folder):\*\*[^\n]*\n?/gi, '')
+    .replace(/\*\*GPS:\*\*[^\n]*\n?/g, '')
     .replace(/\*\*([^*\n]+):\*\*/g,'<span class="toc-field-key">$1:</span>')
     .replace(/\*\*([^*\n]+)\*\*/g,'<strong>$1</strong>')
     .replace(/\n{2,}/g,'<br><br>')
