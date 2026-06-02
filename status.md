@@ -14,7 +14,7 @@ updated:: 2026-06-02
 | **Host**      | Cyberdeck (rock-5b, 100.97.104.107) |
 | **Service**   | map-app.service (user systemd, NOT enabled) |
 | **Data dir**  | ~/maps/ (DB + MBTiles shared with all CD apps) |
-| **Repo**      | github.com/Slofi/map-app (legacy repo name; app name is OPS-TOC) |
+| **Repo**      | github.com/Slofi/ops-toc |
 | **Latest pushed commit** | `127e5d5 Fix TOC log filtering and mission updates` |
 
 ## Access
@@ -77,7 +77,8 @@ journalctl --user -u map-app -f
 
 ## Changelog
 
-**2026-06-02** — Codex compatibility/service pass: OPS-TOC log filtering now applies category/mission/search before the 500-row display limit, so older matching entries are found. Mission rename/remove is case-insensitive. OM was updated to support the shared `WEATHER` category. `log-app.service` was stopped/disabled; `map-app.service` is active but disabled at boot. Pushed to GitHub (`127e5d5` in `Slofi/map-app`, `aee724b` in `Slofi/overmesh`).
+**2026-06-02** — GitHub repository renamed from `Slofi/map-app` to `Slofi/ops-toc`; local `origin` updated to `git@github.com:Slofi/ops-toc.git`. Local folder/service remain `map-app` for now to avoid Dashboard/service churn.
+**2026-06-02** — Codex compatibility/service pass: OPS-TOC log filtering now applies category/mission/search before the 500-row display limit, so older matching entries are found. Mission rename/remove is case-insensitive. OM was updated to support the shared `WEATHER` category. `log-app.service` was stopped/disabled; `map-app.service` is active but disabled at boot. Pushed to GitHub (`127e5d5` in `Slofi/ops-toc`, `aee724b` in `Slofi/overmesh`).
 **2026-06-02** — Added SOP tab: 8 interactive checklist sections (Activation, Pre-Departure, En Route, Arrival, Open Station, Close Station, Comms Degraded, RC Run) + 2 reference sections (Log Discipline, Category Reference). Progress bars, collapse/expand, per-section and global reset, state persisted in localStorage. Pushed to GitHub (d0b9ea0).
 **2026-06-02** — Renamed to OPS-TOC. UI polish: font 15px, toolbar 56px, burger+GPS pinned right, UI zoom slider (80–130%) in Appearance. Custom split clipboard+pin SVG brand icon. Pushed to GitHub (26217d5).
 **2026-06-02** — Bug sweep 2: offline settings crash from LOG/MISSIONS tab fixed (prepareOfflineSection, updateOfflineEstimate, currentBoundsPayload, startOfflineDownload all guarded against null state.map). renderBody leading blank line on mission-tagged entries fixed. Deployed to CD (b2d799f).
