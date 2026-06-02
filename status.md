@@ -15,7 +15,7 @@ updated:: 2026-06-02
 | **Service**   | ops-toc.service (user systemd, NOT enabled) |
 | **Data dir**  | ~/maps/ (DB + MBTiles shared with all CD apps) |
 | **Repo**      | github.com/Slofi/ops-toc |
-| **Latest pushed commit** | `Rename local service to OPS-TOC` |
+| **Latest pushed commit** | `ce5fa38 Fix OPS-TOC repair and log rendering bugs` |
 
 ## Access
 
@@ -77,6 +77,7 @@ journalctl --user -u ops-toc -f
 
 ## Changelog
 
+**2026-06-02** — Final Codex bug sweep pushed to GitHub (`ce5fa38`): downloaded-map Repair endpoint now returns/enqueues repair jobs; LOG/MISSIONS rendering escapes mission names/categories from shared OM `toc_log`; OPS-TOC and Dashboard health verified.
 **2026-06-02** — Local rename completed: checkout moved to `~/Projects/ops-toc`, user service renamed to `ops-toc.service`, Dashboard tile now launches OPS-TOC on port 8090, and stale `map-app.service` was retired. Shared DB names remain `~/maps/map_app.db` and `MAP_APP_*` for compatibility with other map consumers.
 **2026-06-02** — GitHub repository renamed from `Slofi/map-app` to `Slofi/ops-toc`; local `origin` updated to `git@github.com:Slofi/ops-toc.git`.
 **2026-06-02** — Codex compatibility/service pass: OPS-TOC log filtering now applies category/mission/search before the 500-row display limit, so older matching entries are found. Mission rename/remove is case-insensitive. OM was updated to support the shared `WEATHER` category. `log-app.service` was stopped/disabled; former `map-app.service` was active but disabled at boot. Pushed to GitHub (`127e5d5` in `Slofi/ops-toc`, `aee724b` in `Slofi/overmesh`).
