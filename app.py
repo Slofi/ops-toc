@@ -2350,6 +2350,7 @@ def api_repair_tile_layer(layer_id):
     if error:
         message, status = error
         return jsonify({"error": message}), status
+    return jsonify(enqueue_download_job(job, payload))
 
 
 @app.route("/api/tile-layers/<layer_id>/extend", methods=["POST"])

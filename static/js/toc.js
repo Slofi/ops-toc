@@ -171,7 +171,11 @@ function jsSafe(s) {
   return String(s || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '');
 }
 
-function escAttr(s) { return String(s || '').replace(/"/g, '&quot;'); }
+function escAttr(s) { return esc(s); }
+function jsAttr(s) { return escAttr(jsSafe(s)); }
+function classToken(s) {
+  return String(s || '').replace(/[^a-zA-Z0-9_-]/g, '-');
+}
 
 // ── GPS header text ───────────────────────────────────────────────────
 function updateGpsHeaderText() {
@@ -430,18 +434,19 @@ function renderEntries() {
 function renderEntry(e) {
   const dt  = tocFormatTs(e.ts);
   const cat = e.category || 'NOTE';
+  const catClass = classToken(cat);
   const hasGps = e.lat != null;
   const gpsBadge = hasGps
     ? `<span class="has-gps-badge" title="Has GPS">⊙ GPS</span>`
     : '';
   const missBadge = e.mission
-    ? `<span class="mission-badge" onclick="setMissionFilter('${jsSafe(e.mission)}')" title="Filter by mission">${esc(e.mission)}</span>`
+    ? `<span class="mission-badge" onclick="setMissionFilter('${jsAttr(e.mission)}')" title="Filter by mission">${esc(e.mission)}</span>`
     : '';
   const isEditing = _editId === e.id ? ' editing' : '';
   return `<div class="toc-entry${isEditing}" id="entry-${e.id}">
   <div class="toc-entry-header">
     <span class="toc-entry-ts">${dt}</span>
-    <span class="toc-cat-badge toc-cat-${cat}">${cat}</span>
+    <span class="toc-cat-badge toc-cat-${catClass}">${esc(cat)}</span>
     ${missBadge}${gpsBadge}
     <div class="toc-entry-actions">
       <button class="btn small" onclick="editEntry(${e.id})">Edit</button>
@@ -517,10 +522,10 @@ function renderMissionsStrip() {
   strip.innerHTML = _missions.map(m =>
     `<span class="mission-chip${_missionFilter===m.name?' active':''}"
            data-mission="${escAttr(m.name)}"
-           onclick="setMissionFilter('${jsSafe(m.name)}'===_missionFilter?'':'${jsSafe(m.name)}')"
+           onclick="setMissionFilter('${jsAttr(m.name)}'===_missionFilter?'':'${jsAttr(m.name)}')"
            >${esc(m.name)}<span class="mc-count">${m.count}</span
-           ><button class="mc-btn" title="Rename" onclick="event.stopPropagation();renameMission('${jsSafe(m.name)}')">✎</button
-           ><button class="mc-btn" title="Remove mission tag" onclick="event.stopPropagation();deleteMission('${jsSafe(m.name)}')">×</button
+           ><button class="mc-btn" title="Rename" onclick="event.stopPropagation();renameMission('${jsAttr(m.name)}')">✎</button
+           ><button class="mc-btn" title="Remove mission tag" onclick="event.stopPropagation();deleteMission('${jsAttr(m.name)}')">×</button
     ></span>`
   ).join('');
 }
@@ -535,7 +540,7 @@ function renderMissionManager() {
   list.innerHTML = _missions.map(m => {
     const cats = Object.entries(m.categories || {}).sort((a, b) => b[1] - a[1]);
     const catHtml = cats.length
-      ? cats.map(([cat, n]) => `<span class="toc-cat-badge toc-cat-${esc(cat)}">${esc(cat)} ${n}</span>`).join('')
+      ? cats.map(([cat, n]) => `<span class="toc-cat-badge toc-cat-${classToken(cat)}">${esc(cat)} ${n}</span>`).join('')
       : '<span style="color:var(--muted)">No categories</span>';
     return `<div class="mission-card">
       <div class="mission-card-main">
@@ -544,9 +549,9 @@ function renderMissionManager() {
         <div class="mission-card-cats">${catHtml}</div>
       </div>
       <div class="mission-card-actions">
-        <button class="btn small" onclick="openMission('${jsSafe(m.name)}')">View</button>
-        <button class="btn small" onclick="renameMission('${jsSafe(m.name)}')">Rename</button>
-        <button class="btn small danger" onclick="deleteMission('${jsSafe(m.name)}')">Remove tag</button>
+        <button class="btn small" onclick="openMission('${jsAttr(m.name)}')">View</button>
+        <button class="btn small" onclick="renameMission('${jsAttr(m.name)}')">Rename</button>
+        <button class="btn small danger" onclick="deleteMission('${jsAttr(m.name)}')">Remove tag</button>
       </div>
     </div>`;
   }).join('');

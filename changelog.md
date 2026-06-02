@@ -2,6 +2,8 @@
 
 ## 2026-06-02
 
+**[Codex]** - Bug sweep after local OPS-TOC rename: fixed the downloaded-map Repair endpoint so it returns/enqueues the repair job instead of falling through with no response. Hardened LOG/MISSIONS rendering so mission names and categories from the shared OM `toc_log` DB are escaped before use in HTML attributes, inline handlers, and CSS class names. Verified OPS-TOC service, dashboard status, log/missions APIs, tile layers API, and JS/Python syntax checks.
+
 **[Codex]** - Completed the local rename after the GitHub repo rename: checkout moved to `~/Projects/ops-toc`, the user service is now `ops-toc.service`, stale `map-app.service` was retired, in-app restart/update controls target the new unit, and the Cyberdeck Dashboard tile now launches OPS-TOC on port 8090. Compatibility names for shared map data remain unchanged: `~/maps/map_app.db`, `MAP_APP_*`, and `map_app_tile_url`.
 
 **[Codex]** - Renamed the running app to OPS-TOC after the TOC-app merge. OPS-TOC now owns the main map-management surface plus LOG, MISSIONS, and SOP. The map DB remains `~/maps/map_app.db`; the field log remains shared with OM through `~/overmesh/overmesh_prefs.db` table `toc_log`.
