@@ -16,7 +16,7 @@
   --red: #ff5050;
   --green: #4ade80;
   --blue: #58a6ff;
-  --toolbar-h: 52px;
+  --toolbar-h: 56px;
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; scrollbar-width: thin; scrollbar-color: var(--border) var(--bg); }
@@ -31,7 +31,7 @@ html, body {
   overflow: hidden;
   background: var(--bg);
   color: var(--text);
-  font: 14px/1.35 "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font: 15px/1.4 "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
 body {
@@ -75,7 +75,6 @@ body {
   display: flex;
   align-items: center;
   gap: 5px;
-  margin-left: 8px;
   flex-shrink: 0;
 }
 .gps-header-text {
@@ -128,23 +127,22 @@ body {
   white-space: nowrap;
 }
 .brand-icon {
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border: 1px solid var(--accent-mid);
   border-radius: 5px;
   background: var(--accent-faint);
-  font-size: 12px;
-  line-height: 1;
+  flex-shrink: 0;
 }
 
 .spacer { flex: 1; }
 .sep { width: 1px; height: 22px; background: var(--border); }
 
 .btn, select, #search-input {
-  min-height: 30px;
+  min-height: 32px;
   background: transparent;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -165,7 +163,7 @@ body {
 .btn.primary { background: var(--accent-bg); border-color: var(--accent-mid); color: var(--accent); }
 .btn.danger { color: var(--red); border-color: rgba(255, 80, 80, 0.30); }
 .btn.danger:hover { border-color: rgba(255, 80, 80, 0.60); color: var(--red); }
-.btn.small { min-height: 24px; padding: 3px 8px; font-size: 0.65rem; }
+.btn.small { min-height: 26px; padding: 3px 8px; font-size: 0.65rem; }
 .icon-btn { min-width: 34px; padding-inline: 8px; font-size: 14px; line-height: 1; }
 #layer-wrap {
   position: relative;
@@ -215,6 +213,7 @@ body {
   position: relative;
   display: flex;
   align-items: center;
+  margin-left: auto;
 }
 #hamburger-menu {
   position: absolute;

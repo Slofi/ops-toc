@@ -88,6 +88,23 @@ function currentAccentColor() {
   return getComputedStyle(document.documentElement).getPropertyValue("--accent").trim() || DEFAULT_ACCENT;
 }
 
+function applyUIZoom(pct) {
+  const scale = Math.min(130, Math.max(80, Number(pct) || 100));
+  document.documentElement.style.zoom = (scale / 100).toString();
+}
+
+function saveZoom() {
+  const pct = Number(el("ui-zoom-input")?.value || 100);
+  localStorage.setItem("mapAppUIZoom", pct);
+  applyUIZoom(pct);
+}
+
+function resetZoom() {
+  localStorage.removeItem("mapAppUIZoom");
+  if (el("ui-zoom-input")) { el("ui-zoom-input").value = 100; el("ui-zoom-value").textContent = "100%"; }
+  applyUIZoom(100);
+}
+
 function appDialog({ title = "Message", message = "", mode = "alert", value = "", placeholder = "" }) {
   return new Promise((resolve) => {
     const dialog = el("app-dialog");
@@ -1284,6 +1301,8 @@ function openSettings(targetId = "") {
   el("tf-api-key-input").value = localStorage.getItem("thunderforestApiKey") || "";
   el("mt-api-key-input").value = localStorage.getItem("mapTilerApiKey") || "";
   el("accent-color-input").value = localStorage.getItem("mapAppAccentColor") || currentAccentColor();
+  const savedZoom = Number(localStorage.getItem("mapAppUIZoom") || 100);
+  if (el("ui-zoom-input")) { el("ui-zoom-input").value = savedZoom; el("ui-zoom-value").textContent = savedZoom + "%"; }
   el("layer-key-status").textContent = "";
   el("update-status").textContent = "";
   el("version-summary").textContent = "Checking version...";
@@ -1761,6 +1780,7 @@ function initMap() {
 
 function bindUi() {
   applyAccentColor(localStorage.getItem("mapAppAccentColor") || DEFAULT_ACCENT);
+  applyUIZoom(localStorage.getItem("mapAppUIZoom") || 100);
   bindClick("markers-btn", () => setSidePanelClosed(!el("side-panel").classList.contains("closed")));
   bindClick("close-panel-btn", () => setSidePanelClosed(true));
   bindClick("add-marker-btn", () => startTool("marker"));
@@ -1790,6 +1810,13 @@ function bindUi() {
   bindClick("layer-key-save-btn", saveLayerKeys);
   bindClick("accent-save-btn", saveAccent);
   bindClick("accent-reset-btn", resetAccent);
+  bindClick("zoom-save-btn", saveZoom);
+  bindClick("zoom-reset-btn", resetZoom);
+  bindEvent("ui-zoom-input", "input", () => {
+    const pct = el("ui-zoom-input").value;
+    el("ui-zoom-value").textContent = pct + "%";
+    applyUIZoom(pct);
+  });
   el("offline-min-zoom").onchange = updateOfflineEstimate;
   el("offline-max-zoom").onchange = updateOfflineEstimate;
   el("offline-min-zoom").oninput = updateOfflineEstimate;

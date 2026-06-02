@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>Map App</title>
+  <title>OPS-TOC</title>
   <link rel="stylesheet" href="/static/leaflet/leaflet.css">
   <link rel="stylesheet" href="/static/css/app.css">
 </head>
 <body>
   <header id="toolbar">
-    <div class="brand"><span class="brand-icon">◇</span><span>Map App</span></div>
+    <div class="brand"><span class="brand-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><defs><clipPath id="bci-cb"><polygon points="0,0 19,0 0,19"/></clipPath><clipPath id="bci-mp"><polygon points="20,1 20,20 1,20"/></clipPath></defs><g clip-path="url(#bci-cb)"><rect x="1.5" y="4.5" width="10.5" height="13" rx="1.5" stroke-width="1.3"/><rect x="4.5" y="2.5" width="4.5" height="3.5" rx="1.2" stroke-width="1.1"/><line x1="3.5" y1="9.5" x2="10.5" y2="9.5" stroke-width="1"/><line x1="3.5" y1="12.5" x2="10.5" y2="12.5" stroke-width="1"/></g><g clip-path="url(#bci-mp)"><circle cx="14" cy="10" r="3" stroke-width="1.3"/><circle cx="14" cy="10" r="1.2" fill="currentColor" stroke="none"/><line x1="14" y1="13" x2="14" y2="17.5" stroke-width="1.3"/></g></svg></span><span>OPS-TOC</span></div>
 
     <!-- Main tabs — always visible -->
     <div class="main-tabs">
@@ -17,12 +17,6 @@
       <button class="main-tab" id="tab-btn-missions"  onclick="showTab('missions')">Missions</button>
       <button class="main-tab" id="tab-btn-map"       onclick="showTab('map')">Map</button>
     </div>
-
-    <!-- GPS status — always visible, updated by toc.js -->
-    <span class="gps-header-badge">
-      <span id="gps-dot" class="gps-dot off"></span>
-      <span id="gps-header-text" class="gps-header-text"></span>
-    </span>
 
     <!-- Map-only tools — hidden on LOG / MISSIONS tabs -->
     <div id="map-tools">
@@ -54,8 +48,12 @@
       <button class="btn" id="track-record-btn" title="Record a GPS track">Track</button>
     </div>
 
-    <!-- Hamburger — always visible -->
+    <!-- Hamburger + GPS badge — always visible, pinned to right -->
     <div id="menu-wrap">
+      <span class="gps-header-badge">
+        <span id="gps-dot" class="gps-dot off"></span>
+        <span id="gps-header-text" class="gps-header-text"></span>
+      </span>
       <button class="btn icon-btn" id="settings-btn" title="Menu" aria-haspopup="true" aria-expanded="false">☰</button>
       <div id="hamburger-menu" hidden>
         <button class="menu-item" type="button" data-settings-target="data-section">Map Import / Export</button>
@@ -69,8 +67,8 @@
         <button class="menu-item" type="button" data-settings-target="app-control-section">App Control</button>
         <button class="menu-item" type="button" id="menu-manual-btn">Manual</button>
         <div class="menu-sep"></div>
-        <button class="menu-item" type="button" id="menu-restart-btn">Restart Map App</button>
-        <button class="menu-item danger" type="button" id="menu-shutdown-btn">Shutdown Map App</button>
+        <button class="menu-item" type="button" id="menu-restart-btn">Restart OPS-TOC</button>
+        <button class="menu-item danger" type="button" id="menu-shutdown-btn">Shutdown OPS-TOC</button>
       </div>
     </div>
   </header>
@@ -242,7 +240,7 @@
   <dialog id="manual-dialog">
     <form method="dialog" id="manual-form">
       <div class="settings-head">
-        <h2>Map App Manual</h2>
+        <h2>OPS-TOC Manual</h2>
         <button class="btn small" value="cancel">Close</button>
       </div>
       <div class="manual-search-row">
@@ -423,6 +421,17 @@
         <div class="section-actions">
           <button class="btn" id="accent-reset-btn" type="button">Reset</button>
           <button class="btn primary" id="accent-save-btn" type="button">Save Colour</button>
+        </div>
+        <label style="margin-top:14px">UI Zoom
+          <div style="display:flex;align-items:center;gap:10px;margin-top:6px">
+            <input type="range" id="ui-zoom-input" min="80" max="130" step="5" value="100" style="flex:1;accent-color:var(--accent)">
+            <span id="ui-zoom-value" style="min-width:38px;text-align:right;color:var(--text);font-size:13px;font-variant-numeric:tabular-nums">100%</span>
+          </div>
+        </label>
+        <p class="field-help">Scales the entire interface. Useful on high-DPI or small screens. Takes effect immediately.</p>
+        <div class="section-actions">
+          <button class="btn" id="zoom-reset-btn" type="button">Reset Zoom</button>
+          <button class="btn primary" id="zoom-save-btn" type="button">Save Zoom</button>
         </div>
       </section>
 
