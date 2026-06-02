@@ -308,11 +308,16 @@ async function saveEntry() {
 
   const url    = _editId ? `/api/log/entries/${_editId}` : '/api/log/entries';
   const method = _editId ? 'PUT' : 'POST';
+  const payload = { category: cat, body: fullBody };
+  if (_editId) {
+    const orig = _entries.find(x => x.id === _editId);
+    if (orig) payload.ts = orig.ts; // preserve original timestamp on edit
+  }
   try {
     const r = await fetch(url, {
       method,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ category: cat, body: fullBody }),
+      body: JSON.stringify(payload),
     });
     const d = await r.json();
     if (!r.ok) { toast(d.error || 'Error saving', 'err'); return; }

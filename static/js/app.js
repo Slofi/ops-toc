@@ -484,7 +484,7 @@ function invalidateMapSoon() {
 
 function setSidePanelClosed(closed) {
   el("side-panel").classList.toggle("closed", closed);
-  el("main").classList.toggle("panel-closed", closed);
+  el("tab-map").classList.toggle("panel-closed", closed);
   invalidateMapSoon();
 }
 
@@ -2194,6 +2194,7 @@ function _gpsUpdateDot() {
 }
 
 function _gpsUpdateMarker() {
+  if (!state.map) return; // map not initialized yet (deferred until MAP tab opened)
   if (!_gpsState.fix || _gpsState.lat === null) {
     if (_gpsMarker) { state.map.removeLayer(_gpsMarker); _gpsMarker = null; }
     return;
