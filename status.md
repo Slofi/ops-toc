@@ -1,7 +1,7 @@
 type:: project
 status:: active
 tags:: #map-app #leaflet #offline-maps #cyberdeck
-updated:: 2026-05-25
+updated:: 2026-06-02
 
 # Map App
 
@@ -53,6 +53,8 @@ journalctl --user -u map-app -f
 
 ## Pending
 
+- **Merge TOC-app into Map-app** — add LOG + MISSIONS tabs; wire to shared `overmesh_prefs.db` (`toc_log` table); retire log-app service and launcher tile. TOC-app's map tab goes away, replaced by Map-app's full map.
+- Deploy current Map-app to CD before starting the merge
 - Decide whether to support PMTiles in addition to MBTiles
 - Add KML import/export
 - Add marker categories, filters, and styling
@@ -188,3 +190,10 @@ API keys stored in browser localStorage: `thunderforestApiKey`, `mapTilerApiKey`
 | `/api/tile-layers/repair-all` | POST | Queue repair jobs for all refreshable tilesets |
 | `/api/om/share-marker/<id>` | POST | Placeholder, returns 501 |
 | `/api/download-estimate` | POST | Estimate tile count before download |
+| `/api/tracks` | GET | List saved GPS tracks |
+| `/api/tracks` | POST | Save a new GPS track |
+| `/api/tracks/<id>` | PUT | Update track name/description/color |
+| `/api/tracks/<id>` | DELETE | Delete track |
+| `/api/tracks/<id>/gpx` | GET | Export track as GPX |
+| `/api/tracks/<id>/geojson` | GET | Export track as GeoJSON |
+| `/api/tracks/<id>/drawing` | POST | Convert track to a drawing |

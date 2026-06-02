@@ -9,7 +9,7 @@ Standalone Leaflet map app for CD, Hand-Deck, and later OverMesh integration.
 - Store custom markers in the Map app, with add/edit/delete controls here.
 - Let OM consume markers/tiles later without owning the marker controls.
 - Record GPS traces from OM proxy or direct serial GPS and export them as GPX/GeoJSON.
-- Let TOC-app reference and log Map App tracks without merging the codebases.
+- Host TOC-app (Field Log) log/missions tabs after merge — single app replaces both.
 - Keep radio/mesh sharing as a later OM-backed action.
 
 ## Run
@@ -73,20 +73,19 @@ Track API:
 
 ## TOC-app Integration
 
-TOC-app stays a separate app and reads Map App over HTTP instead of merging
-repositories. TOC-app's Map tab can:
+TOC-app (Field Log) is being merged into Map App. The LOG and MISSIONS tabs will be
+added here, wired directly to the shared `overmesh_prefs.db` (`toc_log` table) that
+OM also reads/writes. The log-app service and launcher tile will be retired once the
+merge is complete.
 
-- check Map App status at `http://localhost:8090`
-- list saved Map App tracks
-- open per-track GPX/GeoJSON exports
-- write a selected Map App track into the shared OM/TOC `toc_log` table as a
-  `POSITION` entry
+- Map App owns all map controls (markers, drawings, tracks, downloads)
+- Log entries, missions, and structured templates move here as new tabs
+- DB split: log entries from `~/overmesh/overmesh_prefs.db`, markers/drawings/tracks from `~/maps/map_app.db`
+- TOC-app's map tab goes away — Map App's full map replaces it
 
 Shared CD tiles are served for other apps by `mbtileserver` on port `8092`, reading
 the same `/home/slofi/maps/mbtiles/` directory Map App writes to. OM consumes that
 shared server only when its `Use shared local tile DB` setting is enabled.
-Marker creation, editing, deletion, drawing, measurement, and export controls stay
-in Map App.
 
 ## Online Layers
 

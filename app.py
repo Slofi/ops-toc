@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import calendar
 import gzip
 import io
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sqlite3
@@ -28,6 +30,12 @@ DEFAULT_MBTILES = os.environ.get("MAP_APP_DEFAULT_MBTILES", "")
 PORT = int(os.environ.get("MAP_APP_PORT", "8090"))
 DOWNLOAD_JOB_RETENTION_DAYS = int(os.environ.get("MAP_APP_DOWNLOAD_JOB_RETENTION_DAYS", "7"))
 TILE_DOWNLOAD_RETRIES = int(os.environ.get("MAP_APP_TILE_DOWNLOAD_RETRIES", "2"))
+
+# TOC log — shared with OM via overmesh_prefs.db
+OM_PREFS_DB = os.environ.get("TOC_LOG_DB", os.path.expanduser("~/overmesh/overmesh_prefs.db"))
+_MISSION_RE = re.compile(r'\*\*(?:Mission|Mission\s*/\s*Folder):\*\*\s*(.+)', re.I)
+_POS_RE     = re.compile(r'\*\*GPS:\*\*\s*(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)', re.I)
+_LOG_CATS   = {'NOTE', 'PLAN', 'SITREP', 'ALERT', 'ACTION', 'COMMS', 'CONTACT', 'POSITION', 'INTEL', 'WEATHER'}
 
 app = Flask(__name__)
 download_jobs: dict[str, dict[str, Any]] = {}
@@ -1982,6 +1990,257 @@ def api_om_share_marker(marker_id: int):
 init_db()
 cleanup_download_job_history()
 load_download_jobs()
+
+
+# ── TOC log helpers ────────────────────────────────────────────────────
+
+def get_toc_db() -> sqlite3.Connection:
+    conn = sqlite3.connect(OM_PREFS_DB)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _init_toc_db() -> None:
+    with get_toc_db() as conn:
+        conn.execute("""CREATE TABLE IF NOT EXISTS toc_log (
+            id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts       INTEGER NOT NULL,
+            category TEXT NOT NULL DEFAULT 'NOTE',
+            body     TEXT NOT NULL
+        )""")
+
+
+def _norm_log_cat(v: Any) -> str:
+    c = (v or "NOTE").strip().upper()
+    return c if c in _LOG_CATS else "NOTE"
+
+
+def _norm_log_ts(v: Any) -> int:
+    if v in (None, ""):
+        return int(time.time())
+    try:
+        ts = int(float(v))
+    except (TypeError, ValueError):
+        return int(time.time())
+    if ts > 10_000_000_000:
+        ts = ts // 1000
+    return max(0, ts)
+
+
+def _toc_row(r: sqlite3.Row) -> dict:
+    return {"id": r["id"], "ts": r["ts"], "category": r["category"], "body": r["body"]}
+
+
+def _toc_annotate(e: dict) -> dict:
+    m = _MISSION_RE.search(e["body"] or "")
+    e["mission"] = m.group(1).strip() if m else None
+    p = _POS_RE.search(e["body"] or "")
+    if p:
+        e["lat"] = float(p.group(1))
+        e["lon"] = float(p.group(2))
+    return e
+
+
+_init_toc_db()
+
+
+# ── TOC log routes ─────────────────────────────────────────────────────
+
+@app.route("/api/log/entries")
+def api_log_entries():
+    cat    = request.args.get("category", "").upper()
+    miss   = request.args.get("mission", "")
+    search = request.args.get("search", "")
+    try:
+        limit = min(int(request.args.get("limit", 500)), 2000)
+    except (ValueError, TypeError):
+        limit = 500
+    with get_toc_db() as conn:
+        rows = conn.execute(
+            "SELECT id,ts,category,body FROM toc_log ORDER BY ts DESC LIMIT ?", (limit,)
+        ).fetchall()
+    entries = [_toc_annotate(_toc_row(r)) for r in rows]
+    if cat and cat != "ALL":
+        entries = [e for e in entries if e["category"] == cat]
+    if miss:
+        entries = [e for e in entries if (e.get("mission") or "").lower() == miss.lower()]
+    if search:
+        s = search.lower()
+        entries = [e for e in entries if s in e["body"].lower()]
+    return jsonify(entries)
+
+
+@app.route("/api/log/entries", methods=["POST"])
+def api_log_entries_add():
+    d    = request.get_json(silent=True) or {}
+    body = (d.get("body") or "").strip()
+    if not body:
+        return jsonify({"error": "Body required"}), 400
+    cat = _norm_log_cat(d.get("category"))
+    ts  = _norm_log_ts(d.get("ts"))
+    with get_toc_db() as conn:
+        cur = conn.execute("INSERT INTO toc_log (ts,category,body) VALUES (?,?,?)", (ts, cat, body))
+        eid = cur.lastrowid
+    return jsonify({"ok": True, **_toc_annotate({"id": eid, "ts": ts, "category": cat, "body": body})})
+
+
+@app.route("/api/log/entries/<int:eid>", methods=["PUT", "PATCH"])
+def api_log_entries_update(eid):
+    d    = request.get_json(silent=True) or {}
+    body = (d.get("body") or "").strip()
+    if not body:
+        return jsonify({"error": "Body required"}), 400
+    cat = _norm_log_cat(d.get("category"))
+    ts  = _norm_log_ts(d.get("ts"))
+    with get_toc_db() as conn:
+        cur = conn.execute("UPDATE toc_log SET ts=?,category=?,body=? WHERE id=?", (ts, cat, body, eid))
+        if cur.rowcount == 0:
+            return jsonify({"error": "Not found"}), 404
+    return jsonify({"ok": True, **_toc_annotate({"id": eid, "ts": ts, "category": cat, "body": body})})
+
+
+@app.route("/api/log/entries/<int:eid>", methods=["DELETE"])
+def api_log_entries_delete(eid):
+    with get_toc_db() as conn:
+        cur = conn.execute("DELETE FROM toc_log WHERE id=?", (eid,))
+        if cur.rowcount == 0:
+            return jsonify({"error": "Not found"}), 404
+    return jsonify({"ok": True})
+
+
+@app.route("/api/log/missions")
+def api_log_missions():
+    with get_toc_db() as conn:
+        rows = conn.execute("SELECT ts,category,body FROM toc_log").fetchall()
+    missions: dict = {}
+    for r in rows:
+        m = _MISSION_RE.search(r["body"] or "")
+        if m:
+            name = m.group(1).strip()
+            key  = name.lower()
+            cur  = missions.setdefault(key, {"name": name, "count": 0, "last_ts": 0, "categories": {}})
+            cur["count"] += 1
+            cur["last_ts"] = max(cur["last_ts"], int(r["ts"] or 0))
+            cat  = r["category"] or "NOTE"
+            cur["categories"][cat] = cur["categories"].get(cat, 0) + 1
+    return jsonify(sorted(missions.values(), key=lambda x: (-x["last_ts"], x["name"].lower())))
+
+
+@app.route("/api/log/missions/rename", methods=["PUT"])
+def api_log_missions_rename():
+    d   = request.get_json(silent=True) or {}
+    old = (d.get("old_name") or "").strip()
+    new = (d.get("new_name") or "").strip()
+    if not old or not new:
+        return jsonify({"error": "old_name and new_name required"}), 400
+    with get_toc_db() as conn:
+        rows = conn.execute("SELECT id,body FROM toc_log").fetchall()
+        updated = 0
+        for r in rows:
+            body = r["body"] or ""
+            m = _MISSION_RE.search(body)
+            if m and m.group(1).strip() == old:
+                new_body = _MISSION_RE.sub(f"**Mission / Folder:** {new}", body, count=1)
+                conn.execute("UPDATE toc_log SET body=? WHERE id=?", (new_body, r["id"]))
+                updated += 1
+    return jsonify({"ok": True, "updated": updated})
+
+
+@app.route("/api/log/missions/delete", methods=["POST"])
+def api_log_missions_delete():
+    d    = request.get_json(silent=True) or {}
+    name = (d.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "name required"}), 400
+    with get_toc_db() as conn:
+        rows = conn.execute("SELECT id,body FROM toc_log").fetchall()
+        updated = 0
+        for r in rows:
+            body = r["body"] or ""
+            m = _MISSION_RE.search(body)
+            if m and m.group(1).strip() == name:
+                new_body = _MISSION_RE.sub("", body).lstrip("\n")
+                conn.execute("UPDATE toc_log SET body=? WHERE id=?", (new_body, r["id"]))
+                updated += 1
+    return jsonify({"ok": True, "updated": updated})
+
+
+@app.route("/api/log/stats")
+def api_log_stats():
+    with get_toc_db() as conn:
+        rows = conn.execute(
+            "SELECT category,COUNT(*) as n FROM toc_log GROUP BY category ORDER BY n DESC"
+        ).fetchall()
+    return jsonify([{"category": r["category"], "count": r["n"]} for r in rows])
+
+
+@app.route("/api/log/export")
+def api_log_export():
+    fmt = request.args.get("fmt", "txt")
+    with get_toc_db() as conn:
+        rows = conn.execute("SELECT id,ts,category,body FROM toc_log ORDER BY ts ASC").fetchall()
+    entries = [_toc_row(r) for r in rows]
+    if fmt == "json":
+        return Response(
+            json.dumps(entries, indent=2),
+            mimetype="application/json",
+            headers={"Content-Disposition": 'attachment; filename="field_log.json"'},
+        )
+    lines = []
+    for e in entries:
+        dt = time.strftime("%Y-%m-%d %H:%M:%SZ", time.gmtime(e["ts"]))
+        lines.append(f"[{dt}] [{e['category']}]\n{e['body']}\n")
+    return Response(
+        "\n".join(lines),
+        mimetype="text/plain",
+        headers={"Content-Disposition": 'attachment; filename="field_log.txt"'},
+    )
+
+
+@app.route("/api/log/import", methods=["POST"])
+def api_log_import():
+    if request.files:
+        upload = request.files.get("file")
+        raw = upload.read().decode("utf-8", errors="replace") if upload else ""
+    else:
+        d   = request.get_json(silent=True) or {}
+        raw = d.get("data", "")
+    entries = []
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            for item in parsed:
+                if isinstance(item, dict) and item.get("body"):
+                    entries.append({
+                        "ts": _norm_log_ts(item.get("ts")),
+                        "category": _norm_log_cat(item.get("category")),
+                        "body": str(item.get("body", "")).strip(),
+                    })
+    except (json.JSONDecodeError, TypeError):
+        _TXT_RE = re.compile(
+            r'\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2})?Z?)\] \[([A-Z]+)\]\n(.*?)(?=\n\n\[|\Z)',
+            re.S | re.M,
+        )
+        for m in _TXT_RE.finditer(raw):
+            try:
+                dt_raw = m.group(1)
+                struct = time.strptime(dt_raw.rstrip("Z")[:19], "%Y-%m-%d %H:%M:%S")
+                ts = calendar.timegm(struct) if dt_raw.endswith("Z") else int(time.mktime(struct))
+            except Exception:
+                ts = int(time.time())
+            entries.append({
+                "ts": ts,
+                "category": _norm_log_cat(m.group(2)),
+                "body": m.group(3).strip(),
+            })
+    if not entries:
+        return jsonify({"error": "No importable entries found"}), 400
+    with get_toc_db() as conn:
+        for e in entries:
+            conn.execute("INSERT INTO toc_log (ts,category,body) VALUES (?,?,?)",
+                         (e["ts"], e["category"], e["body"]))
+    return jsonify({"ok": True, "imported": len(entries)})
 
 
 

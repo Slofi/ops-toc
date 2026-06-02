@@ -10,36 +10,56 @@
 <body>
   <header id="toolbar">
     <div class="brand"><span class="brand-icon">◇</span><span>Map App</span></div>
-    <button class="btn" id="markers-btn">Markers</button>
-    <button class="btn" id="add-marker-btn">Add Marker</button>
-    <span class="sep"></span>
-    <button class="btn" id="measure-btn">Ruler</button>
-    <button class="btn" id="draw-line-btn">Draw Line</button>
-    <button class="btn" id="draw-poly-btn">Draw Area</button>
-    <button class="btn" id="undo-point-btn" hidden>Undo Last</button>
-    <button class="btn" id="finish-tool-btn" hidden>Finish</button>
-    <button class="btn danger" id="cancel-tool-btn" hidden>Cancel</button>
-    <span class="spacer"></span>
-    <form id="search-form" role="search">
-      <input id="search-input" type="search" placeholder="Search places" autocomplete="off">
-      <button class="btn" id="search-btn" type="submit">Search</button>
-    </form>
-    <select id="layer-select" hidden></select>
-    <div id="layer-wrap">
-      <button class="btn" id="layers-btn" onclick="toggleLayersPanel(event)">Layers</button>
-      <div id="layers-panel" hidden>
-        <div id="layers-panel-list"></div>
-      </div>
+
+    <!-- Main tabs — always visible -->
+    <div class="main-tabs">
+      <button class="main-tab" id="tab-btn-log"      onclick="showTab('log')">Log</button>
+      <button class="main-tab" id="tab-btn-missions"  onclick="showTab('missions')">Missions</button>
+      <button class="main-tab" id="tab-btn-map"       onclick="showTab('map')">Map</button>
     </div>
-    <a class="btn" href="/api/export/geojson" target="_blank" rel="noopener">GeoJSON</a>
-    <button class="btn icon-btn" id="gps-btn" title="GPS position" onclick="gpsGoTo()">
-      <span id="gps-dot" class="gps-dot off"></span> GPS
-    </button>
-    <button class="btn" id="track-record-btn" title="Record a GPS track">Track</button>
+
+    <!-- GPS status — always visible, updated by toc.js -->
+    <span class="gps-header-badge">
+      <span id="gps-dot" class="gps-dot off"></span>
+      <span id="gps-header-text" class="gps-header-text"></span>
+    </span>
+
+    <!-- Map-only tools — hidden on LOG / MISSIONS tabs -->
+    <div id="map-tools">
+      <button class="btn" id="markers-btn">Markers</button>
+      <button class="btn" id="add-marker-btn">Add Marker</button>
+      <span class="sep"></span>
+      <button class="btn" id="measure-btn">Ruler</button>
+      <button class="btn" id="draw-line-btn">Draw Line</button>
+      <button class="btn" id="draw-poly-btn">Draw Area</button>
+      <button class="btn" id="undo-point-btn" hidden>Undo Last</button>
+      <button class="btn" id="finish-tool-btn" hidden>Finish</button>
+      <button class="btn danger" id="cancel-tool-btn" hidden>Cancel</button>
+      <span class="spacer"></span>
+      <form id="search-form" role="search">
+        <input id="search-input" type="search" placeholder="Search places" autocomplete="off">
+        <button class="btn" id="search-btn" type="submit">Search</button>
+      </form>
+      <select id="layer-select" hidden></select>
+      <div id="layer-wrap">
+        <button class="btn" id="layers-btn" onclick="toggleLayersPanel(event)">Layers</button>
+        <div id="layers-panel" hidden>
+          <div id="layers-panel-list"></div>
+        </div>
+      </div>
+      <a class="btn" href="/api/export/geojson" target="_blank" rel="noopener">GeoJSON</a>
+      <button class="btn icon-btn" id="gps-btn" title="GPS position" onclick="gpsGoTo()">
+        ⊙ GPS
+      </button>
+      <button class="btn" id="track-record-btn" title="Record a GPS track">Track</button>
+    </div>
+
+    <!-- Hamburger — always visible -->
     <div id="menu-wrap">
       <button class="btn icon-btn" id="settings-btn" title="Menu" aria-haspopup="true" aria-expanded="false">☰</button>
       <div id="hamburger-menu" hidden>
-        <button class="menu-item" type="button" data-settings-target="data-section">Import / Export</button>
+        <button class="menu-item" type="button" data-settings-target="data-section">Map Import / Export</button>
+        <button class="menu-item" type="button" data-settings-target="log-section">Log Export / Import</button>
         <button class="menu-item" type="button" data-settings-target="offline-section">Offline Download</button>
         <button class="menu-item" type="button" data-settings-target="tilesets-section">Downloaded Maps</button>
         <button class="menu-item" type="button" data-settings-target="queue-section">Download Queue</button>
@@ -55,47 +75,130 @@
     </div>
   </header>
 
+  <!-- ── Tab content area ── -->
   <main id="main">
-    <aside id="side-panel">
-      <div class="panel-head">
-        <div>
-          <div class="panel-title">Markers</div>
-          <div class="panel-subtitle">Owned by Map App. OM should consume these later.</div>
-        </div>
-        <button class="btn small" id="close-panel-btn">Close</button>
-      </div>
-      <div id="marker-list"></div>
-      <div class="panel-head border-top">
-        <div>
-          <div class="panel-title">Drawings</div>
-          <div class="panel-subtitle">Lines, areas, saved ruler paths.</div>
-        </div>
-      </div>
-      <div id="drawing-list"></div>
-      <div class="panel-head border-top">
-        <div>
-          <div class="panel-title">Tracks</div>
-          <div class="panel-subtitle">Recorded GPS traces.</div>
-        </div>
-      </div>
-      <div id="track-list"></div>
-    </aside>
 
-    <section id="map-wrap">
-      <div id="banner"></div>
-      <div id="measure-card">
-        <div class="card-title">Ruler</div>
-        <div id="measure-total">0 m</div>
-        <div id="measure-help">Tap points on the map. Drag points to adjust.</div>
+    <!-- ════════════════════════ LOG TAB ════ -->
+    <div id="tab-log" class="tab-pane active">
+
+      <!-- Composer -->
+      <div class="toc-panel" id="composer-panel">
+        <div class="toc-panel-header">
+          <span id="composer-title">New Entry</span>
+          <div class="toc-header-btns">
+            <button class="btn small" id="btn-cancel-edit" onclick="cancelEdit()" style="display:none">Cancel</button>
+            <button class="btn primary" onclick="saveEntry()">Save</button>
+          </div>
+        </div>
+        <div class="composer-body">
+          <div class="composer-row">
+            <select id="cat-select" onchange="onCatChange()">
+              <option value="NOTE">NOTE</option>
+              <option value="SITREP">SITREP</option>
+              <option value="PLAN">PLAN</option>
+              <option value="ALERT">ALERT</option>
+              <option value="ACTION">ACTION</option>
+              <option value="COMMS">COMMS</option>
+              <option value="CONTACT">CONTACT</option>
+              <option value="POSITION">POSITION</option>
+              <option value="INTEL">INTEL</option>
+              <option value="WEATHER">WEATHER</option>
+            </select>
+            <input type="text" id="mission-input" placeholder="Mission / Folder (optional)"
+                   list="missions-datalist" autocomplete="off">
+            <datalist id="missions-datalist"></datalist>
+            <button class="btn small" onclick="insertNow()">Now</button>
+            <button class="btn small" id="btn-gps-attach" onclick="attachGPS()">+GPS</button>
+          </div>
+          <div id="composer-fields"></div>
+          <div id="gps-line" class="gps-attach-line" style="display:none"></div>
+        </div>
       </div>
-      <div id="search-results" class="floating-panel" hidden></div>
-      <div id="magnifier" aria-hidden="true">
-        <div id="magnifier-map"></div>
+
+      <!-- Filter bar -->
+      <div class="filter-bar">
+        <div class="cat-filter-row" id="cat-filter-row"></div>
+        <div class="search-row">
+          <input type="text" id="log-search-input" placeholder="Search entries..."
+                 oninput="debounceSearch(this.value)">
+          <select id="mission-filter" onchange="setMissionFilter(this.value)">
+            <option value="">All missions</option>
+          </select>
+        </div>
       </div>
-      <div id="map"></div>
-    </section>
+
+      <!-- Missions strip -->
+      <div id="missions-strip" class="missions-strip"></div>
+
+      <!-- Timeline -->
+      <div id="timeline" class="timeline"></div>
+    </div><!-- end tab-log -->
+
+    <!-- ════════════════════════ MISSIONS TAB ════ -->
+    <div id="tab-missions" class="tab-pane">
+      <div class="toc-panel">
+        <div class="toc-panel-header">
+          <span>Mission / Folder Management</span>
+          <div class="toc-header-btns">
+            <button class="btn small" onclick="loadMissions()">Refresh</button>
+          </div>
+        </div>
+        <div class="mission-manager-intro">
+          Mission / Folder groups related entries without changing the shared OM database schema.
+          Rename updates the tag across all matching entries. Remove tag keeps entries and clears only that folder name.
+        </div>
+        <div id="mission-manager-list" class="mission-manager-list"></div>
+      </div>
+    </div><!-- end tab-missions -->
+
+    <!-- ════════════════════════ MAP TAB ════ -->
+    <div id="tab-map" class="tab-pane">
+      <aside id="side-panel">
+        <div class="panel-head">
+          <div>
+            <div class="panel-title">Markers</div>
+            <div class="panel-subtitle">Owned by Map App. OM consumes read-only.</div>
+          </div>
+          <button class="btn small" id="close-panel-btn">Close</button>
+        </div>
+        <div id="marker-list"></div>
+        <div class="panel-head border-top">
+          <div>
+            <div class="panel-title">Drawings</div>
+            <div class="panel-subtitle">Lines, areas, saved ruler paths.</div>
+          </div>
+        </div>
+        <div id="drawing-list"></div>
+        <div class="panel-head border-top">
+          <div>
+            <div class="panel-title">Tracks</div>
+            <div class="panel-subtitle">Recorded GPS traces.</div>
+          </div>
+        </div>
+        <div id="track-list"></div>
+      </aside>
+
+      <section id="map-wrap">
+        <div id="banner"></div>
+        <div id="measure-card">
+          <div class="card-title">Ruler</div>
+          <div id="measure-total">0 m</div>
+          <div id="measure-help">Tap points on the map. Drag points to adjust.</div>
+        </div>
+        <div id="search-results" class="floating-panel" hidden></div>
+        <div id="magnifier" aria-hidden="true">
+          <div id="magnifier-map"></div>
+        </div>
+        <div id="map"></div>
+      </section>
+    </div><!-- end tab-map -->
+
   </main>
 
+  <!-- ── Toast (for Log/Missions feedback) ── -->
+  <div id="toast"></div>
+
+  <!-- ── Marker dialog ── -->
   <dialog id="marker-dialog">
     <form method="dialog" id="marker-form">
       <h2 id="marker-title">Marker</h2>
@@ -158,7 +261,7 @@
       </div>
 
       <section class="settings-section" id="data-section">
-        <h3>Import / Export</h3>
+        <h3>Map Import / Export</h3>
         <p class="dialog-note">GPX waypoints import as markers. GPX tracks and routes import as line drawings.</p>
         <label>OverMesh URL
           <input id="om-sync-url" autocomplete="off" spellcheck="false" value="http://localhost:8082">
@@ -176,6 +279,22 @@
         </div>
         <p class="field-help">Pull imports OM Marks, Self Notes, and Overlays into Map App. Push sends Map App markers as OM Self Notes and drawings as OM Overlays. Nothing is broadcast over the mesh.</p>
         <div id="data-transfer-status" class="field-help"></div>
+      </section>
+
+      <section class="settings-section" id="log-section">
+        <h3>Log Export / Import</h3>
+        <p class="dialog-note">Exports and imports field log entries shared with OM (toc_log table).</p>
+        <div class="section-actions">
+          <a class="btn" href="/api/log/export?fmt=json">Export JSON</a>
+          <a class="btn" href="/api/log/export?fmt=txt">Export TXT</a>
+        </div>
+        <label>Import (paste JSON or TXT)
+          <textarea id="log-import-input" rows="4" placeholder="Paste JSON or TXT export here..."></textarea>
+        </label>
+        <div id="log-import-status" class="field-help"></div>
+        <div class="section-actions">
+          <button class="btn primary" id="log-import-btn" type="button" onclick="doLogImport()">Import</button>
+        </div>
       </section>
 
       <section class="settings-section" id="offline-section">
@@ -245,6 +364,7 @@
           <button class="btn" id="download-clear-finished-btn" type="button" onclick="clearFinishedDownloads()">Clear Finished</button>
         </div>
       </section>
+
       <section class="settings-section" id="keys-section">
         <h3>Map Layer Keys</h3>
         <p class="dialog-note">Keys are saved in this browser profile and use the same storage names as OverMesh.</p>
@@ -264,7 +384,7 @@
 
       <section class="settings-section" id="gps-section">
         <h3>GPS</h3>
-        <p class="dialog-note">Two modes: <b>OM proxy</b> (recommended when OM is running — polls OM's GPS so only one app owns the serial port) or <b>Direct serial</b> (for standalone use without OM). When the GPIU is installed, configure it once in OM and proxy mode keeps working here automatically.</p>
+        <p class="dialog-note">Two modes: <b>OM proxy</b> (recommended when OM is running — polls OM's GPS so only one app owns the serial port) or <b>Direct serial</b> (for standalone use without OM).</p>
         <div class="settings-grid">
           <label class="setting-row">
             <span>Enable GPS</span>
@@ -299,6 +419,7 @@
         <label>Accent colour
           <input type="color" id="accent-color-input" value="#e8b04f">
         </label>
+        <div id="accent-swatch" style="display:none"></div>
         <div class="section-actions">
           <button class="btn" id="accent-reset-btn" type="button">Reset</button>
           <button class="btn primary" id="accent-save-btn" type="button">Save Colour</button>
@@ -323,5 +444,6 @@
 
   <script src="/static/leaflet/leaflet.js"></script>
   <script src="/static/js/app.js"></script>
+  <script src="/static/js/toc.js"></script>
 </body>
 </html>

@@ -1826,11 +1826,23 @@ function bindUi() {
   });
 }
 
-async function boot() {
-  bindUi();
+let _mapDataLoaded = false;
+
+async function initMapAndData() {
+  if (state.map) {
+    // already initialized — just invalidate size in case it was hidden
+    setTimeout(() => state.map.invalidateSize(), 60);
+    return;
+  }
   initMap();
   await loadLayers();
   await Promise.all([loadMarkers(), loadDrawings(), loadTracks()]);
+  _mapDataLoaded = true;
+}
+
+async function boot() {
+  bindUi();
+  // Map init deferred until MAP tab is first opened
 }
 
 boot().catch((err) => appAlert(err.message, "Startup Failed"));
@@ -2172,6 +2184,13 @@ function _gpsUpdateDot() {
   dot.className = "gps-dot " + (_gpsEnabled
     ? (_gpsState.fix ? "fix" : "acquiring")
     : "off");
+  // also update the always-visible GPS header text for LOG/MISSIONS tabs
+  const txt = el("gps-header-text");
+  if (txt) {
+    txt.textContent = (_gpsEnabled && _gpsState.fix && _gpsState.lat != null)
+      ? `${Number(_gpsState.lat).toFixed(4)}, ${Number(_gpsState.lon).toFixed(4)}`
+      : "";
+  }
 }
 
 function _gpsUpdateMarker() {
