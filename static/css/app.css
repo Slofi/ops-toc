@@ -164,6 +164,7 @@ body {
 .btn.danger { color: var(--red); border-color: rgba(255, 80, 80, 0.30); }
 .btn.danger:hover { border-color: rgba(255, 80, 80, 0.60); color: var(--red); }
 .btn.small { min-height: 26px; padding: 3px 8px; font-size: 0.65rem; }
+.btn.btn-soft { background: var(--accent-bg); border-color: var(--accent-mid); color: var(--accent); opacity: 0.6; }
 .icon-btn { min-width: 34px; padding-inline: 8px; font-size: 14px; line-height: 1; }
 #layer-wrap {
   position: relative;

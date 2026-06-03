@@ -146,7 +146,12 @@ function appDialog({ title = "Message", message = "", mode = "alert", value = ""
     };
     dialog.onclose = () => cleanup();
     dialog.showModal();
-    if (mode === "prompt") setTimeout(() => input.focus(), 60);
+    if (mode === "prompt") setTimeout(() => {
+      input.focus();
+      input.onkeydown = (e) => {
+        if (e.key === "Enter") { e.preventDefault(); form.requestSubmit(el("app-dialog-ok")); }
+      };
+    }, 60);
   });
 }
 
@@ -1230,14 +1235,15 @@ async function stopTrackRecording() {
     await appAlert("Track discarded because it has fewer than two points.", "Track Recording");
     return;
   }
-  const name = await appPrompt("Track name:", `Track ${new Date().toLocaleString()}`, "Save Track");
-  if (name === null) return;
+  const defaultName = `Track ${new Date().toLocaleString()}`;
+  const nameInput = await appPrompt("Track name (Enter or OK to save):", defaultName, "Save Track");
+  const name = (nameInput !== null ? nameInput.trim() : "") || defaultName;
   try {
     const result = await api("/api/tracks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        name: name.trim() || "GPS track",
+        name,
         color: TRACK_COLOR,
         points: recording.points,
         started_at: recording.started_at,
@@ -1253,9 +1259,19 @@ async function stopTrackRecording() {
   }
 }
 
-function toggleTrackRecording() {
-  if (state.recording) stopTrackRecording();
-  else startTrackRecording();
+async function toggleTrackRecording() {
+  if (state.recording) {
+    const pts = state.recording.points.length;
+    const dist = fmtDistance(trackDistance(state.recording.points));
+    const ok = await appConfirm(
+      `Stop recording? ${pts} point${pts !== 1 ? "s" : ""} captured (${dist}).`,
+      "Stop Recording"
+    );
+    if (!ok) return;
+    stopTrackRecording();
+  } else {
+    startTrackRecording();
+  }
 }
 
 async function importGpxFile(event) {
@@ -1931,7 +1947,7 @@ function initMap() {
       state.magnifierMap.setView(state.magnifierLatLng, state.map.getZoom(), { animate: false });
     }
   });
-  state.map.on("dragstart", () => { _gpsFollow = false; _updateGpsBtn(); });
+  state.map.on("dragstart", () => { _gpsFollowMode = 0; _updateGpsBtn(); });
 }
 
 function bindUi() {
@@ -2366,13 +2382,23 @@ let _gpsState   = { fix: false, lat: null, lon: null, alt: null, sats: 0, sats_v
 let _gpsEnabled = false;
 let _gpsMarker  = null;
 let _gpsTimer   = null;
-let _gpsFollow  = false;
+// GPS follow modes: 0=off, 1=soft (pan when near edge), 2=hard (always centered)
+let _gpsFollowMode = 0;
+
+const _GPS_MODE_LABEL = ["⊙ GPS", "⊙ GPS soft", "⊙ GPS lock"];
+const _GPS_MODE_TITLE = [
+  "GPS position — click for hard follow",
+  "GPS soft follow — pans when near edge — click to lock / drag to stop",
+  "GPS locked — always centered — click for soft / drag to stop",
+];
 
 function _updateGpsBtn() {
   const btn = el("gps-btn");
   if (!btn) return;
-  btn.classList.toggle("active", _gpsFollow);
-  btn.title = _gpsFollow ? "GPS — following (drag map to stop)" : "GPS position";
+  btn.textContent = _GPS_MODE_LABEL[_gpsFollowMode];
+  btn.title = _GPS_MODE_TITLE[_gpsFollowMode];
+  btn.classList.toggle("active", _gpsFollowMode === 2);
+  btn.classList.toggle("btn-soft", _gpsFollowMode === 1);
 }
 
 function _gpsUpdateDot() {
@@ -2412,8 +2438,15 @@ function _gpsUpdateMarker() {
   } else {
     _gpsMarker.setLatLng(ll);
   }
-  if (_gpsFollow) {
+  if (_gpsFollowMode === 2) {
     state.map.panTo(ll, { animate: true, duration: 0.8 });
+  } else if (_gpsFollowMode === 1) {
+    const sz = state.map.getSize();
+    const pt = state.map.latLngToContainerPoint(ll);
+    const m = 0.22;
+    if (pt.x < sz.x * m || pt.x > sz.x * (1 - m) || pt.y < sz.y * m || pt.y > sz.y * (1 - m)) {
+      state.map.panTo(ll, { animate: true, duration: 0.6 });
+    }
   }
 }
 
@@ -2444,10 +2477,13 @@ async function _gpsPoll() {
 }
 
 function gpsGoTo() {
-  if (!state.map || !_gpsState.fix || _gpsState.lat === null) return;
-  _gpsFollow = true;
+  if (!state.map) return;
+  // Cycle: off(0) → hard(2) → soft(1) → off(0)
+  _gpsFollowMode = _gpsFollowMode === 0 ? 2 : (_gpsFollowMode === 2 ? 1 : 0);
   _updateGpsBtn();
-  state.map.setView([_gpsState.lat, _gpsState.lon], Math.max(state.map.getZoom(), 15));
+  if (_gpsFollowMode > 0 && _gpsState.fix && _gpsState.lat !== null) {
+    state.map.setView([_gpsState.lat, _gpsState.lon], Math.max(state.map.getZoom(), 15));
+  }
 }
 
 async function gpsScanPorts() {
