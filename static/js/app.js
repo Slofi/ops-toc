@@ -7,6 +7,7 @@ const state = {
   drawingLayers: new Map(),
   tracks: new Map(),
   trackLayers: new Map(),
+  trackVisible: new Map(),
   recording: null,
   recordingLayer: null,
   tool: null,
@@ -883,18 +884,141 @@ function distanceBetween(a, b) {
   return 2 * radius * Math.asin(Math.sqrt(h));
 }
 
+const _trackCache = {};
+
+function fmtDuration(secs) {
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function trackStats(track) {
+  const pts = track.points;
+  if (!pts || pts.length < 2) return null;
+  const duration = (pts.at(-1).ts || 0) - (pts[0].ts || 0);
+  const dist = track.distance_m || trackDistance(pts);
+  const avgKmh = duration > 0 ? dist / duration * 3.6 : 0;
+  let maxKmh = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const d = distanceBetween(pts[i - 1], pts[i]);
+    const dt = Math.max((pts[i].ts || 0) - (pts[i - 1].ts || 0), 1);
+    const spd = d / dt * 3.6;
+    if (spd < 250) maxKmh = Math.max(maxKmh, spd);
+  }
+  const alts = pts.map(p => p.alt != null ? Number(p.alt) : null).filter(a => a !== null);
+  let elevGain = 0, elevLoss = 0;
+  for (let i = 1; i < alts.length; i++) {
+    const diff = alts[i] - alts[i - 1];
+    if (diff > 2) elevGain += diff;
+    else if (diff < -2) elevLoss += Math.abs(diff);
+  }
+  return { dist, duration, avgKmh, maxKmh, elevGain, elevLoss, hasAlt: alts.length > 0 };
+}
+
+function trackSegmentColor(ratio) {
+  const r = ratio < 0.5 ? Math.round(510 * ratio) : 255;
+  const g = ratio < 0.5 ? 210 : Math.round(210 * (1 - (ratio - 0.5) * 2));
+  return `rgb(${r},${g},0)`;
+}
+
+function showTrackColorLegend(mode) {
+  let legend = el("track-color-legend");
+  if (!legend) {
+    legend = document.createElement("div");
+    legend.id = "track-color-legend";
+    legend.style.cssText = "position:fixed;bottom:72px;right:16px;z-index:1500;pointer-events:none";
+    document.body.appendChild(legend);
+  }
+  const label = mode === "speed" ? "Speed" : "Altitude";
+  const lo = mode === "speed" ? "slow" : "low";
+  const hi = mode === "speed" ? "fast" : "high";
+  legend.innerHTML = `<div style="background:var(--surface1);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:11px">
+    <div style="font-weight:600;margin-bottom:4px;color:var(--text)">${label}</div>
+    <div style="width:90px;height:8px;background:linear-gradient(to right,rgb(0,210,0),rgb(255,210,0),rgb(255,0,0));border-radius:2px"></div>
+    <div style="display:flex;justify-content:space-between;color:var(--muted);margin-top:2px"><span>${lo}</span><span>${hi}</span></div>
+  </div>`;
+  legend.hidden = false;
+}
+
+function hideTrackColorLegend() {
+  const l = el("track-color-legend");
+  if (l) l.hidden = true;
+}
+
+function renderTrackColored(trackId, mode) {
+  const track = _trackCache[trackId];
+  if (!track || !state.map) return;
+  const pts = track.points;
+  if (!pts || pts.length < 2) return;
+  const old = state.trackLayers.get(track.id);
+  if (old) state.map.removeLayer(old);
+
+  let values = [];
+  if (mode === "speed") {
+    for (let i = 1; i < pts.length; i++) {
+      const d = distanceBetween(pts[i - 1], pts[i]);
+      const dt = Math.max((pts[i].ts || 0) - (pts[i - 1].ts || 0), 1);
+      values.push(d / dt * 3.6);
+    }
+    const clean = values.filter(v => v < 250);
+    const maxV = clean.length ? Math.max(...clean) : 1;
+    values = values.map(v => Math.min(v, 250) / (maxV || 1));
+  } else {
+    const alts = pts.map(p => p.alt != null ? Number(p.alt) : null);
+    const valid = alts.filter(a => a !== null);
+    if (!valid.length) { renderTrack(track); return; }
+    const minA = Math.min(...valid), maxA = Math.max(...valid);
+    const range = maxA - minA || 1;
+    for (let i = 1; i < pts.length; i++) {
+      const a = ((alts[i - 1] ?? minA) + (alts[i] ?? minA)) / 2;
+      values.push((a - minA) / range);
+    }
+  }
+
+  const group = L.layerGroup();
+  for (let i = 1; i < pts.length; i++) {
+    L.polyline([[pts[i - 1].lat, pts[i - 1].lon], [pts[i].lat, pts[i].lon]], {
+      color: trackSegmentColor(values[i - 1] || 0), weight: 5, opacity: 0.95,
+    }).addTo(group);
+  }
+  group.bindPopup(trackPopup(track));
+  group.addTo(state.map);
+  state.trackLayers.set(track.id, group);
+  state.trackVisible.set(track.id, true);
+  renderTrackList();
+  showTrackColorLegend(mode);
+}
+
 function trackDistance(points) {
   return points.reduce((sum, point, idx) => idx ? sum + distanceBetween(points[idx - 1], point) : 0, 0);
 }
 
 function trackPopup(track) {
+  _trackCache[track.id] = track;
+  const stats = trackStats(track);
+  const statsHtml = stats ? `
+    <table style="width:100%;font-size:11px;margin:6px 0 4px;border-collapse:collapse">
+      <tr><td style="color:var(--muted);padding:1px 6px 1px 0">Distance</td><td>${fmtDistance(stats.dist)}</td></tr>
+      ${stats.duration > 0 ? `<tr><td style="color:var(--muted);padding:1px 6px 1px 0">Duration</td><td>${fmtDuration(stats.duration)}</td></tr>` : ""}
+      <tr><td style="color:var(--muted);padding:1px 6px 1px 0">Avg speed</td><td>${stats.avgKmh.toFixed(1)} km/h</td></tr>
+      <tr><td style="color:var(--muted);padding:1px 6px 1px 0">Max speed</td><td>${stats.maxKmh.toFixed(1)} km/h</td></tr>
+      ${stats.hasAlt ? `<tr><td style="color:var(--muted);padding:1px 6px 1px 0">Elev ↑</td><td>+${Math.round(stats.elevGain)} m</td></tr>
+      <tr><td style="color:var(--muted);padding:1px 6px 1px 0">Elev ↓</td><td>−${Math.round(stats.elevLoss)} m</td></tr>` : ""}
+    </table>
+    <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px;align-items:center">
+      <span style="font-size:10px;color:var(--muted)">Color:</span>
+      <button class="btn small" onclick="renderTrackColored(${track.id},'speed')">Speed</button>
+      <button class="btn small" onclick="renderTrackColored(${track.id},'alt')">Altitude</button>
+      <button class="btn small" onclick="renderTrack(_trackCache[${track.id}]);hideTrackColorLegend()">Reset</button>
+    </div>` : "";
   return `
-    <div style="min-width:210px;max-width:280px">
+    <div style="min-width:220px;max-width:290px">
       <div style="color:var(--accent);font-weight:700;margin-bottom:4px">${esc(track.name)}</div>
-      ${track.description ? `<div style="margin-bottom:7px">${esc(track.description)}</div>` : ""}
-      <div style="color:var(--muted);font-size:11px;margin-bottom:8px">
-        ${track.points?.length || 0} pts - ${fmtDistance(track.distance_m || 0)}
-      </div>
+      ${track.description ? `<div style="margin-bottom:6px">${esc(track.description)}</div>` : ""}
+      ${statsHtml}
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button class="btn small" onclick="editTrack(${track.id})">Edit</button>
         <button class="btn small" onclick="downloadTrack(${track.id}, 'gpx')">GPX</button>
@@ -906,16 +1030,20 @@ function trackPopup(track) {
 }
 
 function renderTrack(track) {
-  const old = state.trackLayers.get(track.id);
-  if (old) state.map.removeLayer(old);
+  _trackCache[track.id] = track;
+  if (state.map) {
+    const old = state.trackLayers.get(track.id);
+    if (old) state.map.removeLayer(old);
+  }
   const points = track.points || [];
   if (points.length < 2) return;
   const layer = L.polyline(points.map((p) => [p.lat, p.lon]), {
     color: track.color || TRACK_COLOR,
     weight: 4,
     opacity: 0.9,
-  }).addTo(state.map).bindPopup(trackPopup(track));
+  }).bindPopup(trackPopup(track));
   state.trackLayers.set(track.id, layer);
+  if (state.map && state.trackVisible.get(track.id)) layer.addTo(state.map);
 }
 
 async function loadTracks() {
@@ -940,24 +1068,48 @@ function renderTrackList() {
   if (!list) return;
   const tracks = [...state.tracks.values()].sort((a, b) => b.updated_at - a.updated_at);
   if (!tracks.length) {
-    list.innerHTML = '<div class="empty">No GPS tracks yet. Press Record when GPS has a fix.</div>';
+    list.innerHTML = '<div class="empty">No GPS tracks yet. Press Track when GPS has a fix.</div>';
     return;
   }
-  list.innerHTML = tracks.map((track) => `
-    <div class="list-row" onclick="flyToTrack(${track.id})">
-      <div class="row-icon track-icon">trk</div>
+  list.innerHTML = tracks.map((track) => {
+    const vis = !!state.trackVisible.get(track.id);
+    return `
+    <div class="list-row" onclick="toggleTrackVisibility(${track.id})" title="${vis ? "Click to hide" : "Click to show on map"}">
+      <div class="row-icon track-icon" style="background:${vis ? "var(--accent)" : "var(--surface2)"};color:${vis ? "#111" : "var(--muted)"}">trk</div>
       <div class="row-main">
         <div class="row-title">${esc(track.name)}</div>
-        <div class="row-sub">${track.points?.length || 0} pts - ${fmtDistance(track.distance_m || 0)}</div>
+        <div class="row-sub">${track.points?.length || 0} pts · ${fmtDistance(track.distance_m || 0)}</div>
       </div>
       <div class="row-actions">
+        <button class="btn small" onclick="event.stopPropagation();flyToTrack(${track.id})">Fly</button>
         <button class="btn small" onclick="event.stopPropagation();editTrack(${track.id})">Edit</button>
-        <button class="btn small" onclick="event.stopPropagation();downloadTrack(${track.id}, 'gpx')">GPX</button>
+        <button class="btn small" onclick="event.stopPropagation();downloadTrack(${track.id},'gpx')">GPX</button>
       </div>
-    </div>`).join("");
+    </div>`;
+  }).join("");
+}
+
+function toggleTrackVisibility(id) {
+  if (!state.map) return;
+  const vis = !state.trackVisible.get(id);
+  state.trackVisible.set(id, vis);
+  const layer = state.trackLayers.get(id);
+  if (layer) {
+    if (vis) layer.addTo(state.map);
+    else state.map.removeLayer(layer);
+  }
+  if (!vis) hideTrackColorLegend();
+  renderTrackList();
 }
 
 function flyToTrack(id) {
+  if (!state.map) return;
+  if (!state.trackVisible.get(id)) {
+    state.trackVisible.set(id, true);
+    const l = state.trackLayers.get(id);
+    if (l) l.addTo(state.map);
+    renderTrackList();
+  }
   const layer = state.trackLayers.get(id);
   if (!layer) return;
   state.map.fitBounds(layer.getBounds().pad(0.2), { maxZoom: 16 });
@@ -1081,7 +1233,7 @@ async function stopTrackRecording() {
   const name = await appPrompt("Track name:", `Track ${new Date().toLocaleString()}`, "Save Track");
   if (name === null) return;
   try {
-    await api("/api/tracks", {
+    const result = await api("/api/tracks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1092,7 +1244,10 @@ async function stopTrackRecording() {
         ended_at: recording.ended_at,
       }),
     });
+    const newId = result?.track?.id;
+    if (newId != null) state.trackVisible.set(newId, true);
     await loadTracks();
+    if (newId != null) flyToTrack(newId);
   } catch (err) {
     await appAlert(err.message, "Save Track");
   }
@@ -1776,6 +1931,7 @@ function initMap() {
       state.magnifierMap.setView(state.magnifierLatLng, state.map.getZoom(), { animate: false });
     }
   });
+  state.map.on("dragstart", () => { _gpsFollow = false; _updateGpsBtn(); });
 }
 
 function bindUi() {
@@ -2210,6 +2366,14 @@ let _gpsState   = { fix: false, lat: null, lon: null, alt: null, sats: 0, sats_v
 let _gpsEnabled = false;
 let _gpsMarker  = null;
 let _gpsTimer   = null;
+let _gpsFollow  = false;
+
+function _updateGpsBtn() {
+  const btn = el("gps-btn");
+  if (!btn) return;
+  btn.classList.toggle("active", _gpsFollow);
+  btn.title = _gpsFollow ? "GPS — following (drag map to stop)" : "GPS position";
+}
 
 function _gpsUpdateDot() {
   const dot = el("gps-dot");
@@ -2248,6 +2412,9 @@ function _gpsUpdateMarker() {
   } else {
     _gpsMarker.setLatLng(ll);
   }
+  if (_gpsFollow) {
+    state.map.panTo(ll, { animate: true, duration: 0.8 });
+  }
 }
 
 async function _gpsPoll() {
@@ -2277,10 +2444,10 @@ async function _gpsPoll() {
 }
 
 function gpsGoTo() {
-  if (_gpsState.fix && _gpsState.lat !== null) {
-    state.map.setView([_gpsState.lat, _gpsState.lon], Math.max(state.map.getZoom(), 15));
-    if (_gpsMarker) _gpsMarker.openPopup();
-  }
+  if (!state.map || !_gpsState.fix || _gpsState.lat === null) return;
+  _gpsFollow = true;
+  _updateGpsBtn();
+  state.map.setView([_gpsState.lat, _gpsState.lon], Math.max(state.map.getZoom(), 15));
 }
 
 async function gpsScanPorts() {
