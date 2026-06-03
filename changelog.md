@@ -1,5 +1,13 @@
 # OPS-TOC / Map App - Changelog
 
+## 2026-06-03
+
+**[Claude]** — Fixed track save dialog losing the track on mobile. Root cause: mobile Chromium backdrop tap fires only the `close` event on `<dialog>`, not `cancel`. The old `onclose` handler only called `cleanup()` without resolving the promise, so the async chain hung and the API save call never ran. Fix: added a `settled` guard and made `onclose` always resolve the promise (to null), regardless of close path. In `stopTrackRecording`, when the dialog resolves to null (dismissed/cancelled), the track now auto-saves with a default name and shows a 6-second banner: "Track auto-saved as '…' — rename from track list". Track is never silently lost. (`c45e38e`)
+
+**[Claude]** — Added **Discard** button to the toolbar. Appears (red, danger style) only while a GPS recording is active. Asks for confirmation, then clears the recording without saving. Previously the only way to discard a recording was to stop it, name it, save it, then delete it from the track list. (`c45e38e`)
+
+**[Claude]** — Consolidated git repo to `~/Projects/ops-toc/`. Previously: `.git` lived in `~/Projects/map-app/`; the workflow was edit in `ops-toc/`, copy files to `map-app/`, commit from there. This made the in-app git-pull update fail with 500 (run_git ran in `ops-toc/` which had no `.git`). Fix: pushed the outstanding commit from `map-app/`, then `git init` + remote + fetch + reset --hard in `ops-toc/`. All future commits go directly from `ops-toc/`. `map-app/` is now stale/unused.
+
 ## 2026-06-02
 
 **[Codex]** - Bug sweep after local OPS-TOC rename: fixed the downloaded-map Repair endpoint so it returns/enqueues the repair job instead of falling through with no response. Hardened LOG/MISSIONS rendering so mission names and categories from the shared OM `toc_log` DB are escaped before use in HTML attributes, inline handlers, and CSS class names. Verified OPS-TOC service, dashboard status, log/missions APIs, tile layers API, and JS/Python syntax checks.

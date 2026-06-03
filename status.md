@@ -1,7 +1,7 @@
 type:: project
 status:: active
 tags:: #ops-toc #map-app #leaflet #offline-maps #field-log #cyberdeck
-updated:: 2026-06-02
+updated:: 2026-06-03
 
 # OPS-TOC
 
@@ -15,7 +15,8 @@ updated:: 2026-06-02
 | **Service**   | ops-toc.service (user systemd, NOT enabled) |
 | **Data dir**  | ~/maps/ (DB + MBTiles shared with all CD apps) |
 | **Repo**      | github.com/Slofi/ops-toc |
-| **Latest pushed app commit** | `ce5fa38 Fix OPS-TOC repair and log rendering bugs` |
+| **Git location** | `~/Projects/ops-toc/` (direct — no longer via map-app/) |
+| **Latest pushed app commit** | `c45e38e Fix track save dialog + add Discard button` |
 
 ## Access
 
@@ -77,6 +78,8 @@ journalctl --user -u ops-toc -f
 
 ## Changelog
 
+**2026-06-03** — Fixed track save dialog never resolving on mobile (backdrop tap fires only `onclose`, not `oncancel`, leaving the promise hung). Added `settled` guard + `onclose` now always resolves promise. Auto-save with default name when dialog is dismissed; banner notifies user. Added **Discard** button (red, toolbar, visible only during recording) with confirm before discarding live recording. Committed `c45e38e`, pushed to GitHub.
+**2026-06-03** — Git repo consolidated: `~/Projects/ops-toc/` is now the real git checkout (was `~/Projects/map-app/`). In-app update (git pull + service restart) now works. `map-app/` is stale/unused. All future commits go directly from `ops-toc/`.
 **2026-06-02** — Final Codex bug sweep pushed to GitHub (`ce5fa38`): downloaded-map Repair endpoint now returns/enqueues repair jobs; LOG/MISSIONS rendering escapes mission names/categories from shared OM `toc_log`; OPS-TOC and Dashboard health verified.
 **2026-06-02** — Local rename completed: checkout moved to `~/Projects/ops-toc`, user service renamed to `ops-toc.service`, Dashboard tile now launches OPS-TOC on port 8090, and stale `map-app.service` was retired. Shared DB names remain `~/maps/map_app.db` and `MAP_APP_*` for compatibility with other map consumers.
 **2026-06-02** — GitHub repository renamed from `Slofi/map-app` to `Slofi/ops-toc`; local `origin` updated to `git@github.com:Slofi/ops-toc.git`.
