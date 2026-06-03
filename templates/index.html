@@ -521,7 +521,7 @@
     <form method="dialog" id="app-dialog-form">
       <h2 id="app-dialog-title">Message</h2>
       <p id="app-dialog-message" class="dialog-note"></p>
-      <label id="app-dialog-input-label" hidden>Value
+      <label id="app-dialog-input-label" hidden>
         <input id="app-dialog-input">
       </label>
       <div class="dialog-actions">
@@ -744,6 +744,15 @@
       </section>
     </form>
   </dialog>
+
+  <!-- Track chart panel — shown when a track popup is open -->
+  <div id="track-chart-panel" hidden>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px">
+      <span id="track-chart-title" style="font-size:11px;font-weight:700;color:var(--accent);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px"></span>
+      <button class="btn small" onclick="hideTrackChart()" style="flex-shrink:0;margin-left:8px">✕</button>
+    </div>
+    <div id="track-chart-body"></div>
+  </div>
 
   <script src="/static/leaflet/leaflet.js"></script>
   <script src="/static/js/app.js"></script>

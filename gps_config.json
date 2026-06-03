@@ -1,0 +1,6 @@
+{
+  "enabled": true,
+  "port": "",
+  "om_proxy": true,
+  "om_url": "http://localhost:8082"
+}

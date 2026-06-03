@@ -900,19 +900,25 @@ function fmtDuration(secs) {
   return `${s}s`;
 }
 
+function speedPercentile(arr, p) {
+  if (!arr.length) return 0;
+  const s = [...arr].sort((a, b) => a - b);
+  return s[Math.min(Math.floor(s.length * p), s.length - 1)];
+}
+
 function trackStats(track) {
   const pts = track.points;
   if (!pts || pts.length < 2) return null;
   const duration = (pts.at(-1).ts || 0) - (pts[0].ts || 0);
   const dist = track.distance_m || trackDistance(pts);
   const avgKmh = duration > 0 ? dist / duration * 3.6 : 0;
-  let maxKmh = 0;
+  const rawSpeeds = [];
   for (let i = 1; i < pts.length; i++) {
     const d = distanceBetween(pts[i - 1], pts[i]);
     const dt = Math.max((pts[i].ts || 0) - (pts[i - 1].ts || 0), 1);
-    const spd = d / dt * 3.6;
-    if (spd < 250) maxKmh = Math.max(maxKmh, spd);
+    rawSpeeds.push(d / dt * 3.6);
   }
+  const maxKmh = speedPercentile(rawSpeeds, 0.95);
   const alts = pts.map(p => p.alt != null ? Number(p.alt) : null).filter(a => a !== null);
   let elevGain = 0, elevLoss = 0;
   for (let i = 1; i < alts.length; i++) {
@@ -920,7 +926,9 @@ function trackStats(track) {
     if (diff > 2) elevGain += diff;
     else if (diff < -2) elevLoss += Math.abs(diff);
   }
-  return { dist, duration, avgKmh, maxKmh, elevGain, elevLoss, hasAlt: alts.length > 0 };
+  const minAlt = alts.length ? Math.min(...alts) : null;
+  const maxAlt = alts.length ? Math.max(...alts) : null;
+  return { dist, duration, avgKmh, maxKmh, elevGain, elevLoss, hasAlt: alts.length > 0, minAlt, maxAlt, startTs: pts[0].ts || null };
 }
 
 function trackSegmentColor(ratio) {
@@ -929,7 +937,7 @@ function trackSegmentColor(ratio) {
   return `rgb(${r},${g},0)`;
 }
 
-function showTrackColorLegend(mode) {
+function showTrackColorLegend(mode, stats) {
   let legend = el("track-color-legend");
   if (!legend) {
     legend = document.createElement("div");
@@ -940,10 +948,19 @@ function showTrackColorLegend(mode) {
   const label = mode === "speed" ? "Speed" : "Altitude";
   const lo = mode === "speed" ? "slow" : "low";
   const hi = mode === "speed" ? "fast" : "high";
+  let extraHtml = "";
+  if (stats) {
+    if (mode === "speed") {
+      extraHtml = `<div style="color:var(--text);margin-top:5px;font-size:11px;line-height:1.6">top: <b>${stats.maxKmh.toFixed(0)} km/h</b><br>avg: ${stats.avgKmh.toFixed(0)} km/h</div>`;
+    } else if (stats.minAlt !== null && stats.maxAlt !== null) {
+      extraHtml = `<div style="color:var(--text);margin-top:5px;font-size:11px;line-height:1.6">${Math.round(stats.minAlt)} m → <b>${Math.round(stats.maxAlt)} m</b></div>`;
+    }
+  }
   legend.innerHTML = `<div style="background:var(--surface1);border:1px solid var(--border);border-radius:6px;padding:6px 10px;font-size:11px">
     <div style="font-weight:600;margin-bottom:4px;color:var(--text)">${label}</div>
     <div style="width:90px;height:8px;background:linear-gradient(to right,rgb(0,210,0),rgb(255,210,0),rgb(255,0,0));border-radius:2px"></div>
     <div style="display:flex;justify-content:space-between;color:var(--muted);margin-top:2px"><span>${lo}</span><span>${hi}</span></div>
+    ${extraHtml}
   </div>`;
   legend.hidden = false;
 }
@@ -968,9 +985,8 @@ function renderTrackColored(trackId, mode) {
       const dt = Math.max((pts[i].ts || 0) - (pts[i - 1].ts || 0), 1);
       values.push(d / dt * 3.6);
     }
-    const clean = values.filter(v => v < 250);
-    const maxV = clean.length ? Math.max(...clean) : 1;
-    values = values.map(v => Math.min(v, 250) / (maxV || 1));
+    const maxV = speedPercentile(values, 0.95) || 1;
+    values = values.map(v => Math.min(v, maxV) / maxV);
   } else {
     const alts = pts.map(p => p.alt != null ? Number(p.alt) : null);
     const valid = alts.filter(a => a !== null);
@@ -983,41 +999,131 @@ function renderTrackColored(trackId, mode) {
     }
   }
 
-  const group = L.layerGroup();
+  const group = L.featureGroup();
   for (let i = 1; i < pts.length; i++) {
     L.polyline([[pts[i - 1].lat, pts[i - 1].lon], [pts[i].lat, pts[i].lon]], {
       color: trackSegmentColor(values[i - 1] || 0), weight: 5, opacity: 0.95,
     }).addTo(group);
   }
+  L.marker([pts[0].lat, pts[0].lon], { icon: makeTrackEndIcon('S', '#27ae60'), zIndexOffset: 10 }).addTo(group);
+  L.marker([pts.at(-1).lat, pts.at(-1).lon], { icon: makeTrackEndIcon('E', '#e74c3c'), zIndexOffset: 10 }).addTo(group);
   group.bindPopup(trackPopup(track));
+  group.on('popupopen', () => showTrackChart(track));
+  group.on('popupclose', hideTrackChart);
   group.addTo(state.map);
   state.trackLayers.set(track.id, group);
   state.trackVisible.set(track.id, true);
   renderTrackList();
-  showTrackColorLegend(mode);
+  showTrackColorLegend(mode, trackStats(track));
 }
 
 function trackDistance(points) {
   return points.reduce((sum, point, idx) => idx ? sum + distanceBetween(points[idx - 1], point) : 0, 0);
 }
 
+function makeTrackEndIcon(label, bg) {
+  return L.divIcon({
+    className: '',
+    html: `<div class="track-pin" style="background:${bg}">${label}</div>`,
+    iconSize: [20, 20],
+    iconAnchor: [10, 10],
+  });
+}
+
+function makeChartSvg(values, color, w, h) {
+  if (!values || values.length < 2) return '';
+  const pad = 3;
+  const minV = Math.min(...values);
+  const maxV = Math.max(...values);
+  const range = maxV - minV || 1;
+  const n = values.length;
+  const xs = values.map((_, i) => pad + (i / (n - 1)) * (w - 2 * pad));
+  const ys = values.map(v => h - pad - ((v - minV) / range) * (h - 2 * pad));
+  const line = xs.map((x, i) => `${x.toFixed(1)},${ys[i].toFixed(1)}`).join(' ');
+  const fill = `${xs[0].toFixed(1)},${(h - pad).toFixed(1)} ` + line + ` ${xs.at(-1).toFixed(1)},${(h - pad).toFixed(1)}`;
+  return `<svg width="${w}" height="${h}" style="display:block;overflow:visible">` +
+    `<polygon points="${fill}" fill="${color}" fill-opacity="0.2"/>` +
+    `<polyline points="${line}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round"/>` +
+    `</svg>`;
+}
+
+function showTrackChart(track) {
+  const pts = (track.points || []).filter(p => p.lat != null);
+  if (pts.length < 2) return;
+  const panel = el('track-chart-panel');
+  if (!panel) return;
+  const titleEl = el('track-chart-title');
+  if (titleEl) titleEl.textContent = track.name;
+
+  const rawSpeedVals = [];
+  for (let i = 1; i < pts.length; i++) {
+    const d = distanceBetween(pts[i - 1], pts[i]);
+    const dt = Math.max((pts[i].ts || 0) - (pts[i - 1].ts || 0), 1);
+    rawSpeedVals.push(d / dt * 3.6);
+  }
+  const speedCap = speedPercentile(rawSpeedVals, 0.95) || 1;
+  const speedVals = rawSpeedVals.map(v => Math.min(v, speedCap));
+  const altVals = pts.map(p => p.alt != null ? Number(p.alt) : null).filter(a => a !== null);
+
+  const CW = 165, CH = 58;
+  let html = `<div style="display:flex;gap:14px">`;
+
+  html += `<div>`;
+  html += `<div style="color:var(--muted);font-size:10px;letter-spacing:.05em;margin-bottom:3px">SPEED  km/h</div>`;
+  if (speedVals.some(v => v > 0.5)) {
+    html += makeChartSvg(speedVals, '#e8b04f', CW, CH);
+    const maxS = speedCap.toFixed(0);
+    const avgS = (speedVals.reduce((a, b) => a + b, 0) / speedVals.length).toFixed(0);
+    html += `<div style="font-size:10px;color:var(--muted);margin-top:3px">top <b style="color:var(--text)">${maxS}</b> &nbsp; avg <b style="color:var(--text)">${avgS}</b></div>`;
+  } else {
+    html += `<div style="color:var(--muted);font-size:10px;height:${CH}px;display:flex;align-items:center">no data</div>`;
+  }
+  html += `</div>`;
+
+  html += `<div>`;
+  html += `<div style="color:var(--muted);font-size:10px;letter-spacing:.05em;margin-bottom:3px">ALTITUDE  m</div>`;
+  if (altVals.length > 1) {
+    html += makeChartSvg(altVals, '#4fc3f7', CW, CH);
+    const minA = Math.round(Math.min(...altVals));
+    const maxA = Math.round(Math.max(...altVals));
+    html += `<div style="font-size:10px;color:var(--muted);margin-top:3px">range <b style="color:var(--text)">${minA}–${maxA} m</b></div>`;
+  } else {
+    html += `<div style="color:var(--muted);font-size:10px;height:${CH}px;display:flex;align-items:center">no data</div>`;
+  }
+  html += `</div>`;
+
+  html += `</div>`;
+  const body = el('track-chart-body');
+  if (body) body.innerHTML = html;
+  panel.hidden = false;
+}
+
+function hideTrackChart() {
+  const panel = el('track-chart-panel');
+  if (panel) panel.hidden = true;
+}
+
 function trackPopup(track) {
   _trackCache[track.id] = track;
   const stats = trackStats(track);
+  const pts = track.points || [];
+  const startTime = stats?.startTs ? new Date(stats.startTs * 1000).toLocaleString([], {day:"2-digit",month:"2-digit",year:"2-digit",hour:"2-digit",minute:"2-digit"}) : null;
   const statsHtml = stats ? `
     <table style="width:100%;font-size:11px;margin:6px 0 4px;border-collapse:collapse">
       <tr><td style="color:var(--muted);padding:1px 6px 1px 0">Distance</td><td>${fmtDistance(stats.dist)}</td></tr>
       ${stats.duration > 0 ? `<tr><td style="color:var(--muted);padding:1px 6px 1px 0">Duration</td><td>${fmtDuration(stats.duration)}</td></tr>` : ""}
-      <tr><td style="color:var(--muted);padding:1px 6px 1px 0">Avg speed</td><td>${stats.avgKmh.toFixed(1)} km/h</td></tr>
-      <tr><td style="color:var(--muted);padding:1px 6px 1px 0">Max speed</td><td>${stats.maxKmh.toFixed(1)} km/h</td></tr>
-      ${stats.hasAlt ? `<tr><td style="color:var(--muted);padding:1px 6px 1px 0">Elev ↑</td><td>+${Math.round(stats.elevGain)} m</td></tr>
-      <tr><td style="color:var(--muted);padding:1px 6px 1px 0">Elev ↓</td><td>−${Math.round(stats.elevLoss)} m</td></tr>` : ""}
+      ${stats.avgKmh > 0 ? `<tr><td style="color:var(--muted);padding:1px 6px 1px 0">Avg speed</td><td>${stats.avgKmh.toFixed(1)} km/h</td></tr>` : ""}
+      ${stats.maxKmh > 0 ? `<tr><td style="color:var(--muted);padding:1px 6px 1px 0">Max speed</td><td>${stats.maxKmh.toFixed(1)} km/h</td></tr>` : ""}
+      ${stats.hasAlt ? `<tr><td style="color:var(--muted);padding:1px 6px 1px 0">Alt range</td><td>${Math.round(stats.minAlt)}–${Math.round(stats.maxAlt)} m</td></tr>
+      <tr><td style="color:var(--muted);padding:1px 6px 1px 0">Elev ↑↓</td><td>+${Math.round(stats.elevGain)} / −${Math.round(stats.elevLoss)} m</td></tr>` : ""}
+      <tr><td style="color:var(--muted);padding:1px 6px 1px 0">Points</td><td>${pts.length}</td></tr>
+      ${startTime ? `<tr><td style="color:var(--muted);padding:1px 6px 1px 0">Recorded</td><td>${startTime}</td></tr>` : ""}
     </table>
     <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px;align-items:center">
       <span style="font-size:10px;color:var(--muted)">Color:</span>
       <button class="btn small" onclick="renderTrackColored(${track.id},'speed')">Speed</button>
       <button class="btn small" onclick="renderTrackColored(${track.id},'alt')">Altitude</button>
-      <button class="btn small" onclick="renderTrack(_trackCache[${track.id}]);hideTrackColorLegend()">Reset</button>
+      <button class="btn small" onclick="renderTrack(_trackCache[${track.id}]);hideTrackColorLegend()">Plain</button>
     </div>` : "";
   return `
     <div style="min-width:220px;max-width:290px">
@@ -1025,7 +1131,7 @@ function trackPopup(track) {
       ${track.description ? `<div style="margin-bottom:6px">${esc(track.description)}</div>` : ""}
       ${statsHtml}
       <div style="display:flex;gap:6px;flex-wrap:wrap">
-        <button class="btn small" onclick="editTrack(${track.id})">Edit</button>
+        <button class="btn small" onclick="editTrack(${track.id})">Rename</button>
         <button class="btn small" onclick="downloadTrack(${track.id}, 'gpx')">GPX</button>
         <button class="btn small" onclick="downloadTrack(${track.id}, 'geojson')">GeoJSON</button>
         <button class="btn small" onclick="trackToDrawing(${track.id})">Drawing</button>
@@ -1042,13 +1148,17 @@ function renderTrack(track) {
   }
   const points = track.points || [];
   if (points.length < 2) return;
-  const layer = L.polyline(points.map((p) => [p.lat, p.lon]), {
-    color: track.color || TRACK_COLOR,
-    weight: 4,
-    opacity: 0.9,
-  }).bindPopup(trackPopup(track));
-  state.trackLayers.set(track.id, layer);
-  if (state.map && state.trackVisible.get(track.id)) layer.addTo(state.map);
+  const group = L.featureGroup();
+  L.polyline(points.map(p => [p.lat, p.lon]), {
+    color: track.color || TRACK_COLOR, weight: 4, opacity: 0.9,
+  }).addTo(group);
+  L.marker([points[0].lat, points[0].lon], { icon: makeTrackEndIcon('S', '#27ae60'), zIndexOffset: 10 }).addTo(group);
+  L.marker([points.at(-1).lat, points.at(-1).lon], { icon: makeTrackEndIcon('E', '#e74c3c'), zIndexOffset: 10 }).addTo(group);
+  group.bindPopup(trackPopup(track));
+  group.on('popupopen', () => showTrackChart(track));
+  group.on('popupclose', hideTrackChart);
+  state.trackLayers.set(track.id, group);
+  if (state.map && state.trackVisible.get(track.id)) group.addTo(state.map);
 }
 
 async function loadTracks() {
@@ -1078,16 +1188,19 @@ function renderTrackList() {
   }
   list.innerHTML = tracks.map((track) => {
     const vis = !!state.trackVisible.get(track.id);
+    const dateStr = track.updated_at ? new Date(track.updated_at * 1000).toLocaleDateString([], {day:"2-digit",month:"2-digit",year:"2-digit"}) : "";
+    const pts = track.points?.length || 0;
+    const distStr = fmtDistance(track.distance_m || 0);
     return `
     <div class="list-row" onclick="toggleTrackVisibility(${track.id})" title="${vis ? "Click to hide" : "Click to show on map"}">
       <div class="row-icon track-icon" style="background:${vis ? "var(--accent)" : "var(--surface2)"};color:${vis ? "#111" : "var(--muted)"}">trk</div>
       <div class="row-main">
         <div class="row-title">${esc(track.name)}</div>
-        <div class="row-sub">${track.points?.length || 0} pts · ${fmtDistance(track.distance_m || 0)}</div>
+        <div class="row-sub">${distStr} · ${pts} pts${dateStr ? " · " + dateStr : ""}</div>
       </div>
       <div class="row-actions">
-        <button class="btn small" onclick="event.stopPropagation();flyToTrack(${track.id})">Fly</button>
-        <button class="btn small" onclick="event.stopPropagation();editTrack(${track.id})">Edit</button>
+        <button class="btn small" onclick="event.stopPropagation();flyToTrack(${track.id})">View</button>
+        <button class="btn small" onclick="event.stopPropagation();editTrack(${track.id})">Rename</button>
         <button class="btn small" onclick="event.stopPropagation();downloadTrack(${track.id},'gpx')">GPX</button>
       </div>
     </div>`;
