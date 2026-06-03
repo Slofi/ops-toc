@@ -108,6 +108,9 @@ function resetZoom() {
 
 function appDialog({ title = "Message", message = "", mode = "alert", value = "", placeholder = "" }) {
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (val) => { if (!settled) { settled = true; resolve(val); } };
+
     const dialog = el("app-dialog");
     const form = el("app-dialog-form");
     const inputWrap = el("app-dialog-input-label");
@@ -130,21 +133,23 @@ function appDialog({ title = "Message", message = "", mode = "alert", value = ""
       event.preventDefault();
       cleanup();
       dialog.close();
-      resolve(mode === "prompt" ? input.value : true);
+      finish(mode === "prompt" ? input.value : true);
     };
     cancel.onclick = (event) => {
       event.preventDefault();
       cleanup();
       dialog.close();
-      resolve(mode === "confirm" || mode === "prompt" ? null : false);
+      finish(mode === "confirm" || mode === "prompt" ? null : false);
     };
     dialog.oncancel = (event) => {
       event.preventDefault();
       cleanup();
       dialog.close();
-      resolve(mode === "confirm" || mode === "prompt" ? null : false);
+      finish(mode === "confirm" || mode === "prompt" ? null : false);
     };
-    dialog.onclose = () => cleanup();
+    // onclose fires for ANY close path — ensures promise always resolves
+    // (some mobile browsers close via backdrop tap without firing oncancel)
+    dialog.onclose = () => { cleanup(); finish(mode === "confirm" || mode === "prompt" ? null : false); };
     dialog.showModal();
     if (mode === "prompt") setTimeout(() => {
       input.focus();
@@ -1293,10 +1298,26 @@ function updateRecordingLayer() {
 
 function setRecordingButton() {
   const btn = el("track-record-btn");
+  const discardBtn = el("track-discard-btn");
   if (!btn) return;
   const active = Boolean(state.recording);
   btn.classList.toggle("active", active);
   btn.textContent = active ? `Stop (${state.recording.points.length})` : "Track";
+  if (discardBtn) discardBtn.hidden = !active;
+}
+
+async function discardTrackRecording() {
+  if (!state.recording) return;
+  const pts = state.recording.points.length;
+  const ok = await appConfirm(`Discard recording? ${pts} point${pts !== 1 ? "s" : ""} will be lost.`, "Discard Track");
+  if (!ok) return;
+  state.recording = null;
+  if (state.recordingLayer) {
+    state.map.removeLayer(state.recordingLayer);
+    state.recordingLayer = null;
+  }
+  setRecordingButton();
+  setBanner("");
 }
 
 function captureGpsPoint() {
@@ -1350,7 +1371,8 @@ async function stopTrackRecording() {
   }
   const defaultName = `Track ${new Date().toLocaleString()}`;
   const nameInput = await appPrompt("Track name (Enter or OK to save):", defaultName, "Save Track");
-  const name = (nameInput !== null ? nameInput.trim() : "") || defaultName;
+  const dismissed = nameInput === null;
+  const name = (!dismissed ? nameInput.trim() : "") || defaultName;
   try {
     const result = await api("/api/tracks", {
       method: "POST",
@@ -1367,6 +1389,7 @@ async function stopTrackRecording() {
     if (newId != null) state.trackVisible.set(newId, true);
     await loadTracks();
     if (newId != null) flyToTrack(newId);
+    if (dismissed) { setBanner(`Track auto-saved as "${name}" — rename from track list`); setTimeout(() => setBanner(""), 6000); }
   } catch (err) {
     await appAlert(err.message, "Save Track");
   }
