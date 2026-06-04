@@ -112,6 +112,8 @@ body {
   border-radius: 12px;
   position: relative;
   z-index: 1100;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .brand {
@@ -156,6 +158,8 @@ body {
   text-decoration: none;
   text-transform: uppercase;
   white-space: nowrap;
+  user-select: none;
+  -webkit-user-select: none;
   transition: background 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s;
 }
 .btn:hover, select:hover { color: var(--text); border-color: var(--accent-mid); }
