@@ -147,9 +147,10 @@ function appDialog({ title = "Message", message = "", mode = "alert", value = ""
       dialog.close();
       finish(mode === "confirm" || mode === "prompt" ? null : false);
     };
-    // onclose fires for ANY close path — ensures promise always resolves
-    // (some mobile browsers close via backdrop tap without firing oncancel)
-    dialog.onclose = () => { cleanup(); finish(mode === "confirm" || mode === "prompt" ? null : false); };
+    // onclose fires for uncontrolled close paths (backdrop tap on mobile, layout-shift misses)
+    // For prompt: return whatever is typed so a stray backdrop tap doesn't silently discard the name.
+    // For confirm/alert: null/false as before.
+    dialog.onclose = () => { cleanup(); finish(mode === "prompt" ? input.value : (mode === "confirm" ? null : false)); };
     dialog.showModal();
     if (mode === "prompt") setTimeout(() => {
       input.focus();
