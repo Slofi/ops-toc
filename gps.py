@@ -64,7 +64,9 @@ def list_ports() -> list:
         import serial.tools.list_ports
         return sorted(p.device for p in serial.tools.list_ports.comports())
     except Exception:
-        return []
+        pass
+    import glob
+    return sorted(glob.glob('/dev/ttyACM*') + glob.glob('/dev/ttyUSB*'))
 
 
 def port_present(port: str) -> bool:

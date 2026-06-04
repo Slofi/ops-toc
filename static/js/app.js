@@ -118,7 +118,7 @@ function appDialog({ title = "Message", message = "", mode = "alert", value = ""
     const cancel = el("app-dialog-cancel");
     el("app-dialog-title").textContent = title;
     el("app-dialog-message").textContent = message;
-    inputWrap.hidden = mode !== "prompt";
+    inputWrap.style.display = mode === "prompt" ? "" : "none";
     cancel.hidden = mode === "alert";
     input.value = value;
     input.placeholder = placeholder;
@@ -1028,11 +1028,16 @@ function trackDistance(points) {
 }
 
 function makeTrackEndIcon(label, bg) {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="34" viewBox="0 0 24 34">
+    <path d="M12 0C5.4 0 0 5.4 0 12c0 8.4 12 22 12 22s12-13.6 12-22C24 5.4 18.6 0 12 0z" fill="${bg}" stroke="rgba(0,0,0,0.28)" stroke-width="1"/>
+    <circle cx="12" cy="12" r="6" fill="white" opacity="0.88"/>
+    <text x="12" y="16" font-size="8" font-family="sans-serif" font-weight="bold" fill="${bg}" text-anchor="middle">${label}</text>
+  </svg>`;
   return L.divIcon({
     className: '',
-    html: `<div class="track-pin" style="background:${bg}">${label}</div>`,
-    iconSize: [20, 20],
-    iconAnchor: [10, 10],
+    html: svg,
+    iconSize: [24, 34],
+    iconAnchor: [12, 34],
   });
 }
 
