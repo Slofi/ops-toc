@@ -544,6 +544,7 @@ function disableMagnifier() {
     cancelAnimationFrame(state.magnifierRaf);
     state.magnifierRaf = 0;
   }
+  state.map?.dragging.enable();
 }
 
 function positionMagnifier(originalEvent) {
@@ -2068,6 +2069,7 @@ function initMap() {
     localStorage.setItem("mapAppView", JSON.stringify({ lat: c.lat, lon: c.lng, zoom: state.map.getZoom() }));
   });
   state.map.on("click", (event) => {
+    if (_touchPlacing) return;
     if (!state.tool) return;
     if (state.tool === "marker") {
       openMarkerDialog(null, event.latlng);
@@ -2078,6 +2080,44 @@ function initMap() {
   });
   state.map.on("mousemove", updateMagnifier);
   state.map.on("mouseout", disableMagnifier);
+  const _mapContainer = state.map.getContainer();
+  _mapContainer.addEventListener("touchstart", (e) => {
+    if (!placementToolActive()) return;
+    if (e.touches.length === 1) {
+      state.map.dragging.disable();
+      const t = e.touches[0];
+      const latlng = state.map.mouseEventToLatLng({ clientX: t.clientX, clientY: t.clientY });
+      updateMagnifier({ latlng, originalEvent: e });
+    } else {
+      state.map.dragging.enable();
+    }
+  }, { passive: true });
+  _mapContainer.addEventListener("touchmove", (e) => {
+    if (!placementToolActive() || e.touches.length !== 1) return;
+    e.preventDefault();
+    const t = e.touches[0];
+    const latlng = state.map.mouseEventToLatLng({ clientX: t.clientX, clientY: t.clientY });
+    updateMagnifier({ latlng, originalEvent: e });
+  }, { passive: false });
+  _mapContainer.addEventListener("touchend", (e) => {
+    if (!placementToolActive()) return;
+    if (e.touches.length > 0) return;
+    state.map.dragging.enable();
+    if (!state.magnifierLatLng) return;
+    e.preventDefault();
+    _touchPlacing = true;
+    setTimeout(() => { _touchPlacing = false; }, 400);
+    const latlng = state.magnifierLatLng;
+    if (state.tool === "marker") {
+      openMarkerDialog(null, latlng);
+      clearTool();
+    } else {
+      addToolPoint(latlng);
+    }
+  }, { passive: false });
+  _mapContainer.addEventListener("touchcancel", () => {
+    if (placementToolActive()) state.map.dragging.enable();
+  }, { passive: true });
   state.map.on("zoomend", () => {
     if (state.magnifierMap && state.magnifierLatLng) {
       state.magnifierMap.setView(state.magnifierLatLng, state.map.getZoom(), { animate: false });
@@ -2168,6 +2208,7 @@ function bindUi() {
 }
 
 let _mapDataLoaded = false;
+let _touchPlacing = false;
 
 async function initMapAndData() {
   if (state.map) {
