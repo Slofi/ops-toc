@@ -1964,11 +1964,13 @@ async function loadVersionStatus(checkRemote = false) {
 }
 
 async function restartApp() {
+  setHamburgerOpen(false);
+  const ok = await appConfirm("Restart OPS-TOC? The page will reload automatically.", "Restart");
+  if (!ok) return;
   const restartBtn = el("restart-app-btn");
   const menuRestartBtn = el("menu-restart-btn");
   if (restartBtn) restartBtn.disabled = true;
   if (menuRestartBtn) menuRestartBtn.disabled = true;
-  setHamburgerOpen(false);
   el("update-status").textContent = "Restarting OPS-TOC service...";
   try {
     await api("/api/service/restart", { method: "POST" });
