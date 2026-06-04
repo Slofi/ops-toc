@@ -2675,7 +2675,11 @@ async function gpsScanPorts() {
     const d    = await api("/api/gps/ports");
     const prev = sel.value;
     sel.innerHTML = '<option value="">— select port —</option>' +
-      (d.ports || []).map((p) => `<option value="${esc(p)}">${esc(p)}</option>`).join("");
+      (d.ports || []).map((p) => {
+        const dev = p.device || p;
+        const lbl = p.label || dev;
+        return `<option value="${esc(dev)}">${esc(lbl)}</option>`;
+      }).join("");
     if (prev) sel.value = prev;
   } catch (_) {}
 }
@@ -2683,7 +2687,7 @@ async function gpsScanPorts() {
 function gpsSourceChanged() {
   const v   = (el("gps-source-select") || {}).value;
   const row = el("gps-port-row");
-  if (row) row.hidden = (v !== "direct");
+  if (row) row.style.display = (v === "direct") ? "" : "none";
 }
 
 async function gpsSaveSettings() {

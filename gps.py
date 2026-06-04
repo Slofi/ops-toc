@@ -59,14 +59,30 @@ def save_config(cfg: dict):
         _config_path.write_text(json.dumps(cfg, indent=2))
 
 
+def _port_label(device: str) -> str:
+    """Return 'device — product name' using sysfs, or just device if unavailable."""
+    import re as _re
+    m = _re.search(r'ttyACM(\d+)|ttyUSB(\d+)', device)
+    if not m:
+        return device
+    try:
+        import pathlib
+        tty = pathlib.Path(f"/sys/class/tty/{device.split('/')[-1]}/device")
+        usb = tty.resolve().parent
+        product = (usb / "product").read_text().strip()
+        return f"{device} — {product}"
+    except Exception:
+        return device
+
+
 def list_ports() -> list:
     try:
         import serial.tools.list_ports
-        return sorted(p.device for p in serial.tools.list_ports.comports())
+        ports = sorted(p.device for p in serial.tools.list_ports.comports())
     except Exception:
-        pass
-    import glob
-    return sorted(glob.glob('/dev/ttyACM*') + glob.glob('/dev/ttyUSB*'))
+        import glob
+        ports = sorted(glob.glob('/dev/ttyACM*') + glob.glob('/dev/ttyUSB*'))
+    return [{"device": p, "label": _port_label(p)} for p in ports]
 
 
 def port_present(port: str) -> bool:
