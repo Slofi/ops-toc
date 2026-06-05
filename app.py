@@ -112,6 +112,7 @@ def init_db() -> None:
                 name        TEXT NOT NULL,
                 description TEXT DEFAULT '',
                 color       TEXT DEFAULT '#e8b04f',
+                folder      TEXT DEFAULT '',
                 points_json TEXT NOT NULL,
                 distance_m  REAL DEFAULT 0,
                 source      TEXT DEFAULT 'gps',
@@ -152,6 +153,10 @@ def init_db() -> None:
             )
             """
         )
+        try:
+            conn.execute("ALTER TABLE tracks ADD COLUMN folder TEXT DEFAULT ''")
+        except Exception:
+            pass
 
 
 def _clean_text(value: Any, max_len: int, default: str = "") -> str:
@@ -224,6 +229,7 @@ def _track_row(row: sqlite3.Row) -> dict[str, Any]:
         "name": row["name"],
         "description": row["description"] or "",
         "color": row["color"] or "#e8b04f",
+        "folder": row["folder"] or "",
         "points": points if isinstance(points, list) else [],
         "distance_m": row["distance_m"] or 0,
         "source": row["source"] or "gps",
@@ -1765,13 +1771,14 @@ def api_create_track():
     with get_db() as conn:
         cur = conn.execute(
             """
-            INSERT INTO tracks (name,description,color,points_json,distance_m,source,started_at,ended_at,created_at,updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
+            INSERT INTO tracks (name,description,color,folder,points_json,distance_m,source,started_at,ended_at,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 _clean_text(payload.get("name"), 80, "GPS track") or "GPS track",
                 _clean_text(payload.get("description"), 600),
                 _clean_text(payload.get("color"), 16, "#e8b04f") or "#e8b04f",
+                _clean_text(payload.get("folder"), 80),
                 json.dumps(clean_points, separators=(",", ":")),
                 line_distance_m(clean_points),
                 _clean_text(payload.get("source"), 40, "gps") or "gps",
@@ -1805,13 +1812,14 @@ def api_update_track(track_id: int):
         name = _clean_text(payload.get("name", current["name"]), 80, current["name"]) or current["name"]
         description = _clean_text(payload.get("description", current["description"]), 600)
         color = _clean_text(payload.get("color", current["color"]), 16, current["color"]) or current["color"]
+        folder = _clean_text(payload.get("folder", current["folder"]), 80)
         conn.execute(
             """
             UPDATE tracks
-            SET name=?,description=?,color=?,points_json=?,distance_m=?,updated_at=?
+            SET name=?,description=?,color=?,folder=?,points_json=?,distance_m=?,updated_at=?
             WHERE id=?
             """,
-            (name, description, color, json.dumps(points, separators=(",", ":")), line_distance_m(points), now_ts(), track_id),
+            (name, description, color, folder, json.dumps(points, separators=(",", ":")), line_distance_m(points), now_ts(), track_id),
         )
         row = conn.execute("SELECT * FROM tracks WHERE id=?", (track_id,)).fetchone()
     return jsonify({"ok": True, "track": _track_row(row)})

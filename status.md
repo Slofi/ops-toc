@@ -66,6 +66,7 @@ journalctl --user -u ops-toc -f
 
 ## Pending
 
+- **HD responsive UI** — CSS media query adaptation for small screens (≤600px). Compact toolbar, touch-optimized LOG composer, map-first layout with LOG/SOP as slide-up panels. One codebase, adapts automatically. Implement once HD screen arrives and real hardware can be tested.
 - Decide whether to support PMTiles in addition to MBTiles
 - Add KML import/export
 - Add marker categories, filters, and styling
@@ -78,6 +79,10 @@ journalctl --user -u ops-toc -f
 
 ## Changelog
 
+**2026-06-05** — Track UX overhaul: removed Discard toolbar button (now only accessible via Save dialog); replaced sequential appPrompt stop flow with a single Save Track dialog (name + folder + colour swatches + custom colour input, Discard option when stopping). Track list now groups tracks by folder with collapsible headers. Track Edit dialog includes name, folder, and colour. Markers and Add Marker buttons consolidated into a Markers ▾ dropdown. App-dialog buttons made larger for touch.
+
+**2026-06-04** — Fixed track naming on mobile: `onclose` (backdrop-tap path) was returning null instead of `input.value`, silently discarding the typed name. `b8c4499`.
+**2026-06-04** — Fixed track stop dialog: name input now hidden during confirm step (CSS `hidden` attribute override by `label{display:block}` — switched to `style.display`). Track end markers changed from plain squares to SVG teardrop location-pin shape. GPS port scan now shows device names (`ttyACM1 — u-blox GNSS receiver`) via sysfs. GPS port-row visibility fixed same way as dialog. pyserial added to requirements.txt. GPS configured on ttyACM1 (was wrongly set to ttyACM2 — mapping shifted). Added Restart confirmation dialog. `9e221b7`, `3f30627`, `fd5e8c5`.
 **2026-06-03** — Fixed track save dialog never resolving on mobile (backdrop tap fires only `onclose`, not `oncancel`, leaving the promise hung). Added `settled` guard + `onclose` now always resolves promise. Auto-save with default name when dialog is dismissed; banner notifies user. Added **Discard** button (red, toolbar, visible only during recording) with confirm before discarding live recording. Committed `c45e38e`, pushed to GitHub.
 **2026-06-03** — Git repo consolidated: `~/Projects/ops-toc/` is now the real git checkout (was `~/Projects/map-app/`). In-app update (git pull + service restart) now works. `map-app/` is stale/unused. All future commits go directly from `ops-toc/`.
 **2026-06-02** — Final Codex bug sweep pushed to GitHub (`ce5fa38`): downloaded-map Repair endpoint now returns/enqueues repair jobs; LOG/MISSIONS rendering escapes mission names/categories from shared OM `toc_log`; OPS-TOC and Dashboard health verified.

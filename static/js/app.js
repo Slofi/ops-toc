@@ -25,11 +25,14 @@ const state = {
   queuePoll: 0,
   offlineBounds: null,
   offlineJobId: null,
+  collapsedFolders: new Set(),
 };
 
 const el = (id) => document.getElementById(id);
 const DEFAULT_ACCENT = "#e8b04f";
 const TRACK_COLOR = "#e8b04f";
+const TRACK_COLORS = ["#e8b04f","#ef4444","#22c55e","#3b82f6","#a855f7","#f97316","#06b6d4","#ec4899"];
+let _trackSaveSelectedColor = TRACK_COLOR;
 
 function bindClick(id, handler) {
   const node = el(id);
@@ -1198,25 +1201,59 @@ function renderTrackList() {
     list.innerHTML = '<div class="empty">No GPS tracks yet. Press Track when GPS has a fix.</div>';
     return;
   }
-  list.innerHTML = tracks.map((track) => {
-    const vis = !!state.trackVisible.get(track.id);
-    const dateStr = track.updated_at ? new Date(track.updated_at * 1000).toLocaleDateString([], {day:"2-digit",month:"2-digit",year:"2-digit"}) : "";
-    const pts = track.points?.length || 0;
-    const distStr = fmtDistance(track.distance_m || 0);
-    return `
-    <div class="list-row" onclick="toggleTrackVisibility(${track.id})" title="${vis ? "Click to hide" : "Click to show on map"}">
-      <div class="row-icon track-icon" style="background:${vis ? "var(--accent)" : "var(--surface2)"};color:${vis ? "#111" : "var(--muted)"}">trk</div>
-      <div class="row-main">
-        <div class="row-title">${esc(track.name)}</div>
-        <div class="row-sub">${distStr} · ${pts} pts${dateStr ? " · " + dateStr : ""}</div>
-      </div>
-      <div class="row-actions">
-        <button class="btn small" onclick="event.stopPropagation();flyToTrack(${track.id})">View</button>
-        <button class="btn small" onclick="event.stopPropagation();editTrack(${track.id})">Rename</button>
-        <button class="btn small" onclick="event.stopPropagation();downloadTrack(${track.id},'gpx')">GPX</button>
-      </div>
-    </div>`;
-  }).join("");
+  // Group by folder
+  const folderMap = new Map();
+  for (const track of tracks) {
+    const f = track.folder || "";
+    if (!folderMap.has(f)) folderMap.set(f, []);
+    folderMap.get(f).push(track);
+  }
+  // Named folders alphabetically first, ungrouped at end
+  const folders = [...folderMap.keys()].sort((a, b) => {
+    if (a === "" && b !== "") return 1;
+    if (b === "" && a !== "") return -1;
+    return a.localeCompare(b);
+  });
+  let html = "";
+  for (const folder of folders) {
+    const folderTracks = folderMap.get(folder);
+    const collapsed = state.collapsedFolders.has(folder);
+    if (folder) {
+      html += `<div class="track-folder-header" onclick="toggleTrackFolder('${esc(folder)}')" data-folder="${esc(folder)}">
+        <span class="track-folder-icon">${collapsed ? "▶" : "▼"}</span>
+        <span class="track-folder-name">${esc(folder)}</span>
+        <span class="track-folder-count">${folderTracks.length}</span>
+      </div>`;
+      if (collapsed) continue;
+    }
+    for (const track of folderTracks) {
+      const vis = !!state.trackVisible.get(track.id);
+      const dateStr = track.updated_at ? new Date(track.updated_at * 1000).toLocaleDateString([], {day:"2-digit",month:"2-digit",year:"2-digit"}) : "";
+      const pts = track.points?.length || 0;
+      const distStr = fmtDistance(track.distance_m || 0);
+      const tColor = track.color || TRACK_COLOR;
+      html += `
+      <div class="list-row${folder ? " track-in-folder" : ""}" onclick="toggleTrackVisibility(${track.id})" title="${vis ? "Click to hide" : "Click to show on map"}">
+        <div class="row-icon track-icon" style="background:${vis ? tColor : "var(--surface2)"};color:${vis ? "#111" : "var(--muted)"}">trk</div>
+        <div class="row-main">
+          <div class="row-title">${esc(track.name)}</div>
+          <div class="row-sub">${distStr} · ${pts} pts${dateStr ? " · " + dateStr : ""}</div>
+        </div>
+        <div class="row-actions">
+          <button class="btn small" onclick="event.stopPropagation();flyToTrack(${track.id})">View</button>
+          <button class="btn small" onclick="event.stopPropagation();editTrack(${track.id})">Edit</button>
+          <button class="btn small" onclick="event.stopPropagation();downloadTrack(${track.id},'gpx')">GPX</button>
+        </div>
+      </div>`;
+    }
+  }
+  list.innerHTML = html;
+}
+
+function toggleTrackFolder(folder) {
+  if (state.collapsedFolders.has(folder)) state.collapsedFolders.delete(folder);
+  else state.collapsedFolders.add(folder);
+  renderTrackList();
 }
 
 function toggleTrackVisibility(id) {
@@ -1249,20 +1286,102 @@ function flyToTrack(id) {
 async function editTrack(id) {
   const track = state.tracks.get(id);
   if (!track) return;
-  const name = await appPrompt("Track name:", track.name, "Edit Track");
-  if (name === null) return;
-  const description = await appPrompt("Track description:", track.description || "", "Edit Track");
-  if (description === null) return;
+  _trackSaveSelectedColor = track.color || TRACK_COLOR;
+  const result = await showTrackSaveDialog({
+    title: "Edit Track",
+    name: track.name,
+    folder: track.folder || "",
+    color: track.color || TRACK_COLOR,
+    showDiscard: false,
+  });
+  if (!result) return;
   try {
     await api(`/api/tracks/${id}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: name.trim() || track.name, description }),
+      body: JSON.stringify({ name: result.name, folder: result.folder, color: result.color, description: track.description }),
     });
     await loadTracks();
   } catch (err) {
     await appAlert(err.message, "Edit Track");
   }
+}
+
+function populateFolderDatalist() {
+  const dl = el("track-folder-datalist");
+  if (!dl) return;
+  const folders = [...new Set([...state.tracks.values()].map((t) => t.folder).filter(Boolean))].sort();
+  dl.innerHTML = folders.map((f) => `<option value="${esc(f)}">`).join("");
+}
+
+function trackDialogSelectColor(c) {
+  _trackSaveSelectedColor = c;
+  document.querySelectorAll("#track-save-colors .color-swatch").forEach((s) => {
+    s.classList.toggle("selected", s.dataset.color === c);
+  });
+  const custom = el("track-save-custom-color");
+  if (custom) custom.value = c;
+}
+
+function renderTrackSaveColors(current) {
+  const wrap = el("track-save-colors");
+  if (!wrap) return;
+  wrap.innerHTML = TRACK_COLORS.map((c) =>
+    `<button type="button" class="color-swatch${c === current ? " selected" : ""}" data-color="${c}" style="background:${c}" onclick="trackDialogSelectColor('${c}')"></button>`
+  ).join("") +
+    `<input type="color" id="track-save-custom-color" class="color-swatch-custom" value="${current}" oninput="trackDialogSelectColor(this.value)" title="Custom colour">`;
+}
+
+function showTrackSaveDialog(opts = {}) {
+  const { title = "Save Track", info = "", name = "", folder = "", color = TRACK_COLOR, showDiscard = false } = opts;
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (val) => { if (!settled) { settled = true; resolve(val); } };
+
+    _trackSaveSelectedColor = color;
+    el("track-save-title").textContent = title;
+    const infoEl = el("track-save-info");
+    infoEl.textContent = info;
+    infoEl.style.display = info ? "" : "none";
+    el("track-save-name").value = name;
+    el("track-save-folder").value = folder;
+    populateFolderDatalist();
+    renderTrackSaveColors(color);
+
+    const discardBtn = el("track-save-discard");
+    const cancelBtn = el("track-save-cancel");
+    if (discardBtn) discardBtn.hidden = !showDiscard;
+
+    const dialog = el("track-save-dialog");
+    const form = el("track-save-form");
+
+    const cleanup = () => {
+      form.onsubmit = null;
+      if (discardBtn) discardBtn.onclick = null;
+      if (cancelBtn) cancelBtn.onclick = null;
+      dialog.oncancel = null;
+      dialog.onclose = null;
+    };
+
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      cleanup();
+      dialog.close();
+      finish({
+        name: el("track-save-name").value.trim() || name || "GPS track",
+        folder: el("track-save-folder").value.trim(),
+        color: _trackSaveSelectedColor,
+      });
+    };
+
+    if (discardBtn) discardBtn.onclick = () => { cleanup(); dialog.close(); finish("discard"); };
+    if (cancelBtn) cancelBtn.onclick = () => { cleanup(); dialog.close(); finish(null); };
+    dialog.oncancel = (e) => { e.preventDefault(); cleanup(); dialog.close(); finish(null); };
+    dialog.onclose = () => { cleanup(); finish(null); };
+
+    dialog.showModal();
+    setTimeout(() => { const ni = el("track-save-name"); if (ni) { ni.focus(); ni.select(); } }, 60);
+  });
 }
 
 function downloadTrack(id, format) {
@@ -1365,38 +1484,56 @@ async function startTrackRecording() {
 async function stopTrackRecording() {
   const recording = state.recording;
   if (!recording) return;
-  state.recording = null;
-  if (state.recordingLayer) {
-    state.map.removeLayer(state.recordingLayer);
-    state.recordingLayer = null;
-  }
-  setRecordingButton();
-  setBanner("");
+
   if (recording.points.length < 2) {
-    await appAlert("Track discarded because it has fewer than two points.", "Track Recording");
+    state.recording = null;
+    if (state.recordingLayer) { state.map.removeLayer(state.recordingLayer); state.recordingLayer = null; }
+    setRecordingButton();
+    setBanner("");
+    await appAlert("Track discarded (fewer than 2 points).", "Track Recording");
     return;
   }
+
+  const pts = recording.points.length;
+  const dist = fmtDistance(trackDistance(recording.points));
   const defaultName = `Track ${new Date().toLocaleString()}`;
-  const nameInput = await appPrompt("Track name (Enter or OK to save):", defaultName, "Save Track");
-  const dismissed = nameInput === null;
-  const name = (!dismissed ? nameInput.trim() : "") || defaultName;
+  _trackSaveSelectedColor = TRACK_COLOR;
+
+  const result = await showTrackSaveDialog({
+    title: "Save Track",
+    info: `${pts} point${pts !== 1 ? "s" : ""} · ${dist}`,
+    name: defaultName,
+    folder: "",
+    color: TRACK_COLOR,
+    showDiscard: true,
+  });
+
+  if (result === null) return; // cancelled — keep recording
+
+  state.recording = null;
+  if (state.recordingLayer) { state.map.removeLayer(state.recordingLayer); state.recordingLayer = null; }
+  setRecordingButton();
+  setBanner("");
+
+  if (result === "discard") return;
+
   try {
-    const result = await api("/api/tracks", {
+    const saved = await api("/api/tracks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        name,
-        color: TRACK_COLOR,
+        name: result.name,
+        folder: result.folder,
+        color: result.color,
         points: recording.points,
         started_at: recording.started_at,
         ended_at: recording.ended_at,
       }),
     });
-    const newId = result?.track?.id;
+    const newId = saved?.track?.id;
     if (newId != null) state.trackVisible.set(newId, true);
     await loadTracks();
     if (newId != null) flyToTrack(newId);
-    if (dismissed) { setBanner(`Track auto-saved as "${name}" — rename from track list`); setTimeout(() => setBanner(""), 6000); }
   } catch (err) {
     await appAlert(err.message, "Save Track");
   }
@@ -1404,13 +1541,6 @@ async function stopTrackRecording() {
 
 async function toggleTrackRecording() {
   if (state.recording) {
-    const pts = state.recording.points.length;
-    const dist = fmtDistance(trackDistance(state.recording.points));
-    const ok = await appConfirm(
-      `Stop recording? ${pts} point${pts !== 1 ? "s" : ""} captured (${dist}).`,
-      "Stop Recording"
-    );
-    if (!ok) return;
     stopTrackRecording();
   } else {
     startTrackRecording();
@@ -1642,6 +1772,19 @@ function setLayersPanelOpen(open) {
 function toggleLayersPanel(event) {
   event?.stopPropagation();
   setLayersPanelOpen(el("layers-panel")?.hidden ?? true);
+}
+
+function setMarkersMenuOpen(open) {
+  const menu = el("markers-menu");
+  const btn = el("markers-menu-btn");
+  if (!menu || !btn) return;
+  menu.hidden = !open;
+  btn.classList.toggle("active", open);
+}
+
+function toggleMarkersMenu(event) {
+  event?.stopPropagation();
+  setMarkersMenuOpen(el("markers-menu")?.hidden ?? true);
 }
 
 function setHamburgerOpen(open) {
@@ -2212,6 +2355,7 @@ function bindUi() {
   document.addEventListener("click", (event) => {
     if (!el("menu-wrap")?.contains(event.target)) setHamburgerOpen(false);
     if (!el("layer-wrap")?.contains(event.target)) setLayersPanelOpen(false);
+    if (!el("markers-wrap")?.contains(event.target)) setMarkersMenuOpen(false);
   });
 }
 

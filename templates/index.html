@@ -21,8 +21,13 @@
 
     <!-- Map-only tools — hidden on LOG / MISSIONS tabs -->
     <div id="map-tools">
-      <button class="btn" id="markers-btn">Markers</button>
-      <button class="btn" id="add-marker-btn">Add Marker</button>
+      <div id="markers-wrap">
+        <button class="btn" id="markers-menu-btn" onclick="toggleMarkersMenu(event)">Markers ▾</button>
+        <div id="markers-menu" hidden>
+          <button class="menu-item" id="markers-btn">Marker List</button>
+          <button class="menu-item" id="add-marker-btn">Add Marker</button>
+        </div>
+      </div>
       <span class="sep"></span>
       <button class="btn" id="measure-btn">Ruler</button>
       <button class="btn" id="draw-line-btn">Draw Line</button>
@@ -528,6 +533,29 @@
       <div class="dialog-actions">
         <button class="btn" id="app-dialog-cancel" type="button" value="cancel">Cancel</button>
         <button class="btn primary" id="app-dialog-ok" type="submit" value="default">OK</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="track-save-dialog">
+    <form method="dialog" id="track-save-form">
+      <h2 id="track-save-title">Save Track</h2>
+      <p id="track-save-info" class="dialog-note"></p>
+      <label>
+        Name
+        <input id="track-save-name" type="text" placeholder="Track name" autocomplete="off">
+      </label>
+      <label>
+        Folder
+        <input id="track-save-folder" type="text" list="track-folder-datalist" placeholder="Leave blank for no folder" autocomplete="off">
+        <datalist id="track-folder-datalist"></datalist>
+      </label>
+      <label>Colour</label>
+      <div id="track-save-colors" class="color-swatches"></div>
+      <div class="dialog-actions">
+        <button class="btn danger" id="track-save-discard" type="button" hidden>Discard</button>
+        <button class="btn" id="track-save-cancel" type="button">Cancel</button>
+        <button class="btn primary" type="submit">Save</button>
       </div>
     </form>
   </dialog>
