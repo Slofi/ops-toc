@@ -16,7 +16,7 @@ updated:: 2026-06-03
 | **Data dir**  | ~/maps/ (DB + MBTiles shared with all CD apps) |
 | **Repo**      | github.com/Slofi/ops-toc |
 | **Git location** | `~/Projects/ops-toc/` (direct — no longer via map-app/) |
-| **Latest pushed app commit** | `c45e38e Fix track save dialog + add Discard button` |
+| **Latest pushed app commit** | `GPS recording: outlier rejection + min satellite filter` |
 
 ## Access
 
@@ -78,6 +78,8 @@ journalctl --user -u ops-toc -f
 - Later: optional "Share via OM" mesh broadcast action for selected markers, separate from local sync
 
 ## Changelog
+
+**2026-06-06** — GPS recording: added speed-based outlier rejection (drops points implying >100 m/s = 360 km/h, catching GPS jumps) and minimum 4-satellite requirement. Prevents erratic jumps in recorded tracks caused by brief signal loss/re-acquisition.
 
 **2026-06-05** — Track UX overhaul: removed Discard toolbar button (now only accessible via Save dialog); replaced sequential appPrompt stop flow with a single Save Track dialog (name + folder + colour swatches + custom colour input, Discard option when stopping). Track list now groups tracks by folder with collapsible headers. Track Edit dialog includes name, folder, and colour. Markers and Add Marker buttons consolidated into a Markers ▾ dropdown. App-dialog buttons made larger for touch.
 

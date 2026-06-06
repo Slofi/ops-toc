@@ -1448,6 +1448,7 @@ async function discardTrackRecording() {
 
 function captureGpsPoint() {
   if (!state.recording || !_gpsEnabled || !_gpsState.fix || _gpsState.lat === null || _gpsState.lon === null) return;
+  if ((_gpsState.sats || 0) < 4) return;
   const point = {
     lat: Number(_gpsState.lat),
     lon: Number(_gpsState.lon),
@@ -1457,7 +1458,12 @@ function captureGpsPoint() {
     time: new Date().toISOString(),
   };
   const last = state.recording.points.at(-1);
-  if (last && distanceBetween(last, point) < 3 && point.ts - (last.ts || 0) < 10) return;
+  if (last) {
+    const dist = distanceBetween(last, point);
+    const dt = point.ts - (last.ts || 0);
+    if (dist < 3 && dt < 10) return;
+    if (dt > 0 && dist / dt > 100) return;
+  }
   state.recording.points.push(point);
   state.recording.ended_at = point.ts;
   updateRecordingLayer();
