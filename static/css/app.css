@@ -1449,3 +1449,109 @@ textarea { resize: vertical; }
   #track-save-dialog { width: 100vw; }
   .color-swatch, .color-swatch-custom { width: 38px; height: 38px; }
 }
+
+/* ── Speed HUD ── */
+#speed-hud {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 1200;
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  background: rgba(11,11,16,0.90);
+  border: 2px solid var(--accent);
+  box-shadow: 0 2px 14px rgba(0,0,0,0.55), 0 0 0 1px rgba(232,176,79,0.15);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  gap: 1px;
+}
+.speed-hud-value {
+  color: var(--text);
+  font-size: 21px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.speed-hud-unit {
+  color: var(--accent-muted);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* ── Track chart panel ── */
+#track-chart-panel {
+  position: absolute;
+  bottom: 18px;
+  left: 12px;
+  z-index: 1050;
+  width: 344px;
+  background: rgba(11,11,18,0.93);
+  border: 1px solid var(--accent-mid);
+  border-radius: 10px;
+  padding: 11px 13px 13px;
+  box-shadow: 0 4px 22px rgba(0,0,0,0.55);
+}
+.chart-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+#track-chart-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+#track-chart-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.chart-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.chart-label {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.chart-stat {
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+  min-height: 14px;
+}
+.chart-stat b { color: var(--text); }
+.chart-nodata {
+  color: var(--muted);
+  font-size: 10px;
+  height: 95px;
+  display: flex;
+  align-items: center;
+}
+
+/* ── Hamburger menu — anchor support ── */
+a.menu-item {
+  text-decoration: none;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+}

@@ -1047,7 +1047,7 @@ function makeTrackEndIcon(label, bg) {
 
 function makeChartSvg(values, color, w, h) {
   if (!values || values.length < 2) return '';
-  const pad = 3;
+  const pad = 4;
   const minV = Math.min(...values);
   const maxV = Math.max(...values);
   const range = maxV - minV || 1;
@@ -1057,9 +1057,98 @@ function makeChartSvg(values, color, w, h) {
   const line = xs.map((x, i) => `${x.toFixed(1)},${ys[i].toFixed(1)}`).join(' ');
   const fill = `${xs[0].toFixed(1)},${(h - pad).toFixed(1)} ` + line + ` ${xs.at(-1).toFixed(1)},${(h - pad).toFixed(1)}`;
   return `<svg width="${w}" height="${h}" style="display:block;overflow:visible">` +
-    `<polygon points="${fill}" fill="${color}" fill-opacity="0.2"/>` +
-    `<polyline points="${line}" fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round"/>` +
+    `<polygon points="${fill}" fill="${color}" fill-opacity="0.18"/>` +
+    `<polyline points="${line}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>` +
+    `<circle class="chart-scrub-dot" cx="-99" cy="-99" r="5" fill="#ff4444" stroke="white" stroke-width="1.5" pointer-events="none" opacity="0"/>` +
+    `<line class="chart-scrub-line" x1="-99" y1="0" x2="-99" y2="${h}" stroke="rgba(255,68,68,0.35)" stroke-width="1" pointer-events="none" opacity="0"/>` +
+    `<rect class="chart-event-area" x="${pad}" y="0" width="${w - 2 * pad}" height="${h}" fill="transparent" style="cursor:crosshair"/>` +
     `</svg>`;
+}
+
+function _bindChartScrub(container, data, chartType, cw, ch, cap) {
+  if (!container || !data || data.length < 2) return;
+  const svg = container.querySelector('svg');
+  if (!svg) return;
+  const dot = svg.querySelector('.chart-scrub-dot');
+  const scrubLine = svg.querySelector('.chart-scrub-line');
+  const area = svg.querySelector('.chart-event-area');
+  const statEl = container.querySelector('.chart-stat');
+  if (!dot || !area) return;
+
+  const pad = 4;
+  const n = data.length;
+  const vals = data.map(d => d.v);
+  const minV = Math.min(...vals);
+  const maxV = Math.max(...vals);
+  const range = maxV - minV || 1;
+
+  function scrub(clientX) {
+    const rect = svg.getBoundingClientRect();
+    const scale = rect.width / cw;
+    const x = clientX - rect.left;
+    const frac = Math.max(0, Math.min(1, (x - pad * scale) / (rect.width - 2 * pad * scale)));
+    const idx = Math.min(Math.round(frac * (n - 1)), n - 1);
+    const item = data[idx];
+    if (!item) return;
+
+    const svgX = (pad + (idx / (n - 1)) * (cw - 2 * pad)).toFixed(1);
+    const svgY = (ch - pad - ((item.v - minV) / range) * (ch - 2 * pad)).toFixed(1);
+    dot.setAttribute('cx', svgX);
+    dot.setAttribute('cy', svgY);
+    dot.setAttribute('opacity', '1');
+    if (scrubLine) {
+      scrubLine.setAttribute('x1', svgX);
+      scrubLine.setAttribute('x2', svgX);
+      scrubLine.setAttribute('opacity', '1');
+    }
+    if (statEl) {
+      statEl.textContent = chartType === 'speed'
+        ? `${item.v.toFixed(1)} km/h`
+        : `${Math.round(item.v)} m`;
+    }
+
+    if (state.map && item.lat != null && item.lon != null) {
+      if (!_chartScrubMarker) {
+        _chartScrubMarker = L.circleMarker([item.lat, item.lon], {
+          radius: 8, color: '#ff4444', fillColor: '#ff4444', fillOpacity: 0.85, weight: 2.5,
+        }).addTo(state.map);
+      } else {
+        _chartScrubMarker.setLatLng([item.lat, item.lon]);
+      }
+    }
+  }
+
+  function clearScrub() {
+    dot.setAttribute('opacity', '0');
+    if (scrubLine) scrubLine.setAttribute('opacity', '0');
+    if (_chartScrubMarker && state.map) {
+      state.map.removeLayer(_chartScrubMarker);
+      _chartScrubMarker = null;
+    }
+    if (statEl && _activeChartData) {
+      if (chartType === 'speed') {
+        const s = _activeChartData.speedData;
+        const maxS = (_activeChartData.speedCap || 0).toFixed(0);
+        const avgS = s.length ? (s.reduce((a, b) => a + b.v, 0) / s.length).toFixed(0) : '0';
+        statEl.innerHTML = `top <b>${maxS}</b> &nbsp; avg <b>${avgS}</b> km/h`;
+      } else {
+        const a = _activeChartData.altData;
+        if (a.length > 1) {
+          const minA = Math.round(Math.min(...a.map(d => d.v)));
+          const maxA = Math.round(Math.max(...a.map(d => d.v)));
+          statEl.innerHTML = `range <b>${minA}&ndash;${maxA} m</b>`;
+        }
+      }
+    }
+  }
+
+  area.addEventListener('mousemove', e => { e.stopPropagation(); scrub(e.clientX); });
+  area.addEventListener('mouseleave', clearScrub);
+  area.addEventListener('touchmove', e => {
+    e.preventDefault(); e.stopPropagation();
+    if (e.touches.length) scrub(e.touches[0].clientX);
+  }, { passive: false });
+  area.addEventListener('touchend', clearScrub);
 }
 
 function showTrackChart(track) {
@@ -1070,52 +1159,77 @@ function showTrackChart(track) {
   const titleEl = el('track-chart-title');
   if (titleEl) titleEl.textContent = track.name;
 
-  const rawSpeedVals = [];
+  // Build speed data array with midpoint lat/lon per segment
+  const rawSpeeds = [];
   for (let i = 1; i < pts.length; i++) {
     const d = distanceBetween(pts[i - 1], pts[i]);
     const dt = Math.max((pts[i].ts || 0) - (pts[i - 1].ts || 0), 1);
-    rawSpeedVals.push(d / dt * 3.6);
+    rawSpeeds.push(d / dt * 3.6);
   }
-  const speedCap = speedPercentile(rawSpeedVals, 0.95) || 1;
-  const speedVals = rawSpeedVals.map(v => Math.min(v, speedCap));
-  const altVals = pts.map(p => p.alt != null ? Number(p.alt) : null).filter(a => a !== null);
+  const speedCap = speedPercentile(rawSpeeds, 0.95) || 1;
+  const speedData = rawSpeeds.map((raw, i) => ({
+    v: Math.min(raw, speedCap),
+    lat: (pts[i].lat + pts[i + 1].lat) / 2,
+    lon: (pts[i].lon + pts[i + 1].lon) / 2,
+  }));
 
-  const CW = 165, CH = 58;
-  let html = `<div style="display:flex;gap:14px">`;
+  // Build altitude data with per-point lat/lon
+  const altData = [];
+  for (const p of pts) {
+    if (p.alt != null) altData.push({ v: Number(p.alt), lat: p.lat, lon: p.lon });
+  }
 
-  html += `<div>`;
-  html += `<div style="color:var(--muted);font-size:10px;letter-spacing:.05em;margin-bottom:3px">SPEED  km/h</div>`;
-  if (speedVals.some(v => v > 0.5)) {
-    html += makeChartSvg(speedVals, '#e8b04f', CW, CH);
+  _activeChartData = { speedData, altData, speedCap };
+
+  const CW = 316, CH = 95;
+  const hasSpeed = speedData.some(d => d.v > 0.5);
+  const hasAlt = altData.length > 1;
+
+  let html = '';
+
+  // Speed chart
+  html += '<div class="chart-block" data-chart="speed">';
+  html += '<div class="chart-label">Speed &nbsp; km/h</div>';
+  if (hasSpeed) {
+    html += makeChartSvg(speedData.map(d => d.v), '#e8b04f', CW, CH);
     const maxS = speedCap.toFixed(0);
-    const avgS = (speedVals.reduce((a, b) => a + b, 0) / speedVals.length).toFixed(0);
-    html += `<div style="font-size:10px;color:var(--muted);margin-top:3px">top <b style="color:var(--text)">${maxS}</b> &nbsp; avg <b style="color:var(--text)">${avgS}</b></div>`;
+    const avgS = (speedData.reduce((a, b) => a + b.v, 0) / speedData.length).toFixed(0);
+    html += `<div class="chart-stat">top <b>${maxS}</b> &nbsp; avg <b>${avgS}</b> km/h</div>`;
   } else {
-    html += `<div style="color:var(--muted);font-size:10px;height:${CH}px;display:flex;align-items:center">no data</div>`;
+    html += '<div class="chart-nodata">no data</div>';
   }
-  html += `</div>`;
+  html += '</div>';
 
-  html += `<div>`;
-  html += `<div style="color:var(--muted);font-size:10px;letter-spacing:.05em;margin-bottom:3px">ALTITUDE  m</div>`;
-  if (altVals.length > 1) {
-    html += makeChartSvg(altVals, '#4fc3f7', CW, CH);
-    const minA = Math.round(Math.min(...altVals));
-    const maxA = Math.round(Math.max(...altVals));
-    html += `<div style="font-size:10px;color:var(--muted);margin-top:3px">range <b style="color:var(--text)">${minA}–${maxA} m</b></div>`;
+  // Altitude chart
+  html += '<div class="chart-block" data-chart="alt">';
+  html += '<div class="chart-label">Altitude &nbsp; m</div>';
+  if (hasAlt) {
+    html += makeChartSvg(altData.map(d => d.v), '#4fc3f7', CW, CH);
+    const minA = Math.round(Math.min(...altData.map(d => d.v)));
+    const maxA = Math.round(Math.max(...altData.map(d => d.v)));
+    html += `<div class="chart-stat">range <b>${minA}&ndash;${maxA} m</b></div>`;
   } else {
-    html += `<div style="color:var(--muted);font-size:10px;height:${CH}px;display:flex;align-items:center">no data</div>`;
+    html += '<div class="chart-nodata">no data</div>';
   }
-  html += `</div>`;
+  html += '</div>';
 
-  html += `</div>`;
   const body = el('track-chart-body');
-  if (body) body.innerHTML = html;
+  if (body) {
+    body.innerHTML = html;
+    if (hasSpeed) _bindChartScrub(body.querySelector('[data-chart="speed"]'), speedData, 'speed', CW, CH, speedCap);
+    if (hasAlt)   _bindChartScrub(body.querySelector('[data-chart="alt"]'),   altData,   'alt',   CW, CH, null);
+  }
   panel.hidden = false;
 }
 
 function hideTrackChart() {
   const panel = el('track-chart-panel');
   if (panel) panel.hidden = true;
+  if (_chartScrubMarker && state.map) {
+    state.map.removeLayer(_chartScrubMarker);
+    _chartScrubMarker = null;
+  }
+  _activeChartData = null;
 }
 
 function trackPopup(track) {
@@ -2301,6 +2415,7 @@ function bindUi() {
   bindClick("tracks-refresh-btn", loadTracks);
   bindClick("om-pull-btn", pullFromOverMesh);
   bindClick("om-push-btn", pushToOverMesh);
+  bindClick("menu-geojson-btn", () => setHamburgerOpen(false));
   bindClick("menu-manual-btn", openManual);
   bindClick("manual-clear-btn", () => {
     if (el("manual-search")) el("manual-search").value = "";
@@ -2717,8 +2832,14 @@ let _gpsState   = { fix: false, lat: null, lon: null, alt: null, sats: 0, sats_v
 let _gpsEnabled = false;
 let _gpsMarker  = null;
 let _gpsTimer   = null;
+let _gpsPrevPos = null; // { lat, lon, ts } for speed calculation
+let _gpsCurrentSpeed = 0; // km/h, smoothed
 // GPS follow modes: 0=off, 1=soft (pan when near edge), 2=hard (always centered)
 let _gpsFollowMode = 0;
+
+// ── Track chart scrub ──────────────────────────────────────────────────────
+let _chartScrubMarker = null;
+let _activeChartData = null; // { speedData, altData, speedCap }
 
 const _GPS_MODE_LABEL = ["⊙ GPS", "⊙ GPS soft", "⊙ GPS lock"];
 const _GPS_MODE_TITLE = [
@@ -2734,6 +2855,18 @@ function _updateGpsBtn() {
   btn.title = _GPS_MODE_TITLE[_gpsFollowMode];
   btn.classList.toggle("active", _gpsFollowMode === 2);
   btn.classList.toggle("btn-soft", _gpsFollowMode === 1);
+}
+
+function _updateSpeedHud() {
+  const hud = el("speed-hud");
+  if (!hud) return;
+  if (!_gpsEnabled || !_gpsState.fix) {
+    hud.hidden = true;
+    return;
+  }
+  hud.hidden = false;
+  const valEl = hud.querySelector(".speed-hud-value");
+  if (valEl) valEl.textContent = Math.round(_gpsCurrentSpeed);
 }
 
 function _gpsUpdateDot() {
@@ -2790,7 +2923,25 @@ async function _gpsPoll() {
     const d = await api("/api/gps");
     _gpsEnabled = d.enabled || false;
     _gpsState   = { fix: d.fix, lat: d.lat, lon: d.lon, alt: d.alt, sats: d.sats, sats_view: d.sats_view };
+
+    // Speed from position delta
+    if (_gpsEnabled && d.fix && d.lat != null && d.lon != null) {
+      const now = Date.now() / 1000;
+      if (_gpsPrevPos) {
+        const dt = now - _gpsPrevPos.ts;
+        if (dt >= 1 && dt <= 12) {
+          const dist = distanceBetween(_gpsPrevPos, { lat: d.lat, lon: d.lon });
+          const raw = (dist / dt) * 3.6;
+          _gpsCurrentSpeed = _gpsCurrentSpeed * 0.35 + raw * 0.65;
+        }
+      }
+      _gpsPrevPos = { lat: d.lat, lon: d.lon, ts: now };
+    } else {
+      _gpsCurrentSpeed = 0;
+    }
+
     _gpsUpdateDot();
+    _updateSpeedHud();
     _gpsUpdateMarker();
     captureGpsPoint();
     // update status text in settings panel if visible

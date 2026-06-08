@@ -47,7 +47,6 @@
           <div id="layers-panel-list"></div>
         </div>
       </div>
-      <a class="btn" href="/api/export/geojson" target="_blank" rel="noopener">GeoJSON</a>
       <button class="btn icon-btn" id="gps-btn" title="GPS position" onclick="gpsGoTo()">
         ⊙ GPS
       </button>
@@ -63,13 +62,17 @@
       </span>
       <button class="btn icon-btn" id="settings-btn" title="Menu" aria-haspopup="true" aria-expanded="false">☰</button>
       <div id="hamburger-menu" hidden>
+        <a class="menu-item" id="menu-geojson-btn" href="/api/export/geojson" target="_blank" rel="noopener">Export GeoJSON</a>
+        <div class="menu-sep"></div>
         <button class="menu-item" type="button" data-settings-target="data-section">Map Import / Export</button>
         <button class="menu-item" type="button" data-settings-target="log-section">Log Export / Import</button>
+        <div class="menu-sep"></div>
         <button class="menu-item" type="button" data-settings-target="offline-section">Offline Download</button>
         <button class="menu-item" type="button" data-settings-target="tilesets-section">Downloaded Maps</button>
         <button class="menu-item" type="button" data-settings-target="queue-section">Download Queue</button>
-        <button class="menu-item" type="button" data-settings-target="keys-section">Map Keys</button>
+        <div class="menu-sep"></div>
         <button class="menu-item" type="button" data-settings-target="gps-section">GPS</button>
+        <button class="menu-item" type="button" data-settings-target="keys-section">Map Keys</button>
         <button class="menu-item" type="button" data-settings-target="appearance-section">Appearance</button>
         <button class="menu-item" type="button" data-settings-target="app-control-section">App Control</button>
         <button class="menu-item" type="button" id="menu-manual-btn">Manual</button>
@@ -184,6 +187,17 @@
       </aside>
 
       <section id="map-wrap">
+        <div id="speed-hud" hidden>
+          <span class="speed-hud-value">0</span>
+          <span class="speed-hud-unit">km/h</span>
+        </div>
+        <div id="track-chart-panel" hidden>
+          <div class="chart-panel-head">
+            <span id="track-chart-title"></span>
+            <button class="btn small" onclick="hideTrackChart()">✕</button>
+          </div>
+          <div id="track-chart-body"></div>
+        </div>
         <div id="banner"></div>
         <div id="measure-card">
           <div class="card-title">Ruler</div>
@@ -773,15 +787,6 @@
       </section>
     </form>
   </dialog>
-
-  <!-- Track chart panel — shown when a track popup is open -->
-  <div id="track-chart-panel" hidden>
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:7px">
-      <span id="track-chart-title" style="font-size:11px;font-weight:700;color:var(--accent);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px"></span>
-      <button class="btn small" onclick="hideTrackChart()" style="flex-shrink:0;margin-left:8px">✕</button>
-    </div>
-    <div id="track-chart-body"></div>
-  </div>
 
   <script src="/static/leaflet/leaflet.js"></script>
   <script src="/static/js/app.js"></script>
