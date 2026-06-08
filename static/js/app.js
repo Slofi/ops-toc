@@ -1045,29 +1045,50 @@ function makeTrackEndIcon(label, bg) {
   });
 }
 
-function makeChartSvg(values, color, w, h) {
+// Chart layout constants (viewBox space)
+const _CCW = 316, _CCH = 95; // viewBox width/height
+const _CPL = 34, _CPR = 4, _CPT = 5, _CPB = 8; // padding: left (y-axis labels), right, top, bottom
+
+function makeChartSvg(values, color) {
+  const cw = _CCW, ch = _CCH, pl = _CPL, pr = _CPR, pt = _CPT, pb = _CPB;
   if (!values || values.length < 2) return '';
-  const pad = 4;
   const minV = Math.min(...values);
   const maxV = Math.max(...values);
   const range = maxV - minV || 1;
   const n = values.length;
-  const xs = values.map((_, i) => pad + (i / (n - 1)) * (w - 2 * pad));
-  const ys = values.map(v => h - pad - ((v - minV) / range) * (h - 2 * pad));
-  const line = xs.map((x, i) => `${x.toFixed(1)},${ys[i].toFixed(1)}`).join(' ');
-  const fill = `${xs[0].toFixed(1)},${(h - pad).toFixed(1)} ` + line + ` ${xs.at(-1).toFixed(1)},${(h - pad).toFixed(1)}`;
-  return `<svg width="${w}" height="${h}" style="display:block;overflow:visible">` +
-    `<polygon points="${fill}" fill="${color}" fill-opacity="0.18"/>` +
-    `<polyline points="${line}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>` +
-    `<circle class="chart-scrub-dot" cx="-99" cy="-99" r="5" fill="#ff4444" stroke="white" stroke-width="1.5" pointer-events="none" opacity="0"/>` +
-    `<line class="chart-scrub-line" x1="-99" y1="0" x2="-99" y2="${h}" stroke="rgba(255,68,68,0.35)" stroke-width="1" pointer-events="none" opacity="0"/>` +
-    `<rect class="chart-event-area" x="${pad}" y="0" width="${w - 2 * pad}" height="${h}" fill="transparent" style="cursor:crosshair"/>` +
+
+  const toX = (i) => pl + (i / (n - 1)) * (cw - pl - pr);
+  const toY = (v) => ch - pb - ((v - minV) / range) * (ch - pt - pb);
+
+  // Grid lines + Y-axis labels (4 levels: 0%, 33%, 67%, 100% of range)
+  let grid = '';
+  for (let g = 0; g <= 3; g++) {
+    const frac = g / 3;
+    const v = minV + frac * range;
+    const y = toY(v).toFixed(1);
+    const label = Math.round(v);
+    grid += `<line x1="${pl}" y1="${y}" x2="${cw - pr}" y2="${y}" stroke="rgba(255,255,255,0.07)" stroke-width="1"/>`;
+    grid += `<text x="${(pl - 4).toFixed(1)}" y="${y}" fill="rgba(122,136,154,0.78)" font-size="8.5" font-family="monospace" text-anchor="end" dominant-baseline="middle">${label}</text>`;
+  }
+
+  const xs = values.map((_, i) => toX(i));
+  const ys = values.map(v => toY(v));
+  const linePts = xs.map((x, i) => `${x.toFixed(1)},${ys[i].toFixed(1)}`).join(' ');
+  const fillPts = `${xs[0].toFixed(1)},${toY(minV).toFixed(1)} ` + linePts + ` ${xs.at(-1).toFixed(1)},${toY(minV).toFixed(1)}`;
+
+  return `<svg viewBox="0 0 ${cw} ${ch}" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">` +
+    grid +
+    `<polygon points="${fillPts}" fill="${color}" fill-opacity="0.18"/>` +
+    `<polyline points="${linePts}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>` +
+    `<circle class="chart-scrub-dot" cx="-99" cy="-99" r="4.5" fill="#ff4444" stroke="white" stroke-width="1.5" pointer-events="none" opacity="0"/>` +
+    `<line class="chart-scrub-line" x1="-99" y1="${pt}" x2="-99" y2="${ch - pb}" stroke="rgba(255,68,68,0.38)" stroke-width="1" pointer-events="none" opacity="0"/>` +
+    `<rect class="chart-event-area" x="${pl}" y="0" width="${cw - pl - pr}" height="${ch}" fill="transparent"/>` +
     `</svg>`;
 }
 
-function _bindChartScrub(container, data, chartType, cw, ch, cap) {
+function _bindChartScrub(container, data, chartType, cap) {
   if (!container || !data || data.length < 2) return;
-  const svg = container.querySelector('svg');
+  const svg = container.querySelector('.chart-svg-wrap svg');
   if (!svg) return;
   const dot = svg.querySelector('.chart-scrub-dot');
   const scrubLine = svg.querySelector('.chart-scrub-line');
@@ -1075,7 +1096,7 @@ function _bindChartScrub(container, data, chartType, cw, ch, cap) {
   const statEl = container.querySelector('.chart-stat');
   if (!dot || !area) return;
 
-  const pad = 4;
+  const cw = _CCW, ch = _CCH, pl = _CPL, pr = _CPR, pt = _CPT, pb = _CPB;
   const n = data.length;
   const vals = data.map(d => d.v);
   const minV = Math.min(...vals);
@@ -1084,15 +1105,15 @@ function _bindChartScrub(container, data, chartType, cw, ch, cap) {
 
   function scrub(clientX) {
     const rect = svg.getBoundingClientRect();
-    const scale = rect.width / cw;
-    const x = clientX - rect.left;
-    const frac = Math.max(0, Math.min(1, (x - pad * scale) / (rect.width - 2 * pad * scale)));
+    // Convert screen X → viewBox X (works regardless of rendered size due to viewBox)
+    const vbX = (clientX - rect.left) / rect.width * cw;
+    const frac = Math.max(0, Math.min(1, (vbX - pl) / (cw - pl - pr)));
     const idx = Math.min(Math.round(frac * (n - 1)), n - 1);
     const item = data[idx];
     if (!item) return;
 
-    const svgX = (pad + (idx / (n - 1)) * (cw - 2 * pad)).toFixed(1);
-    const svgY = (ch - pad - ((item.v - minV) / range) * (ch - 2 * pad)).toFixed(1);
+    const svgX = (pl + (idx / (n - 1)) * (cw - pl - pr)).toFixed(1);
+    const svgY = (ch - pb - ((item.v - minV) / range) * (ch - pt - pb)).toFixed(1);
     dot.setAttribute('cx', svgX);
     dot.setAttribute('cy', svgY);
     dot.setAttribute('opacity', '1');
@@ -1181,7 +1202,6 @@ function showTrackChart(track) {
 
   _activeChartData = { speedData, altData, speedCap };
 
-  const CW = 316, CH = 95;
   const hasSpeed = speedData.some(d => d.v > 0.5);
   const hasAlt = altData.length > 1;
 
@@ -1191,7 +1211,7 @@ function showTrackChart(track) {
   html += '<div class="chart-block" data-chart="speed">';
   html += '<div class="chart-label">Speed &nbsp; km/h</div>';
   if (hasSpeed) {
-    html += makeChartSvg(speedData.map(d => d.v), '#e8b04f', CW, CH);
+    html += '<div class="chart-svg-wrap">' + makeChartSvg(speedData.map(d => d.v), '#e8b04f') + '</div>';
     const maxS = speedCap.toFixed(0);
     const avgS = (speedData.reduce((a, b) => a + b.v, 0) / speedData.length).toFixed(0);
     html += `<div class="chart-stat">top <b>${maxS}</b> &nbsp; avg <b>${avgS}</b> km/h</div>`;
@@ -1204,7 +1224,7 @@ function showTrackChart(track) {
   html += '<div class="chart-block" data-chart="alt">';
   html += '<div class="chart-label">Altitude &nbsp; m</div>';
   if (hasAlt) {
-    html += makeChartSvg(altData.map(d => d.v), '#4fc3f7', CW, CH);
+    html += '<div class="chart-svg-wrap">' + makeChartSvg(altData.map(d => d.v), '#4fc3f7') + '</div>';
     const minA = Math.round(Math.min(...altData.map(d => d.v)));
     const maxA = Math.round(Math.max(...altData.map(d => d.v)));
     html += `<div class="chart-stat">range <b>${minA}&ndash;${maxA} m</b></div>`;
@@ -1216,15 +1236,19 @@ function showTrackChart(track) {
   const body = el('track-chart-body');
   if (body) {
     body.innerHTML = html;
-    if (hasSpeed) _bindChartScrub(body.querySelector('[data-chart="speed"]'), speedData, 'speed', CW, CH, speedCap);
-    if (hasAlt)   _bindChartScrub(body.querySelector('[data-chart="alt"]'),   altData,   'alt',   CW, CH, null);
+    if (hasSpeed) _bindChartScrub(body.querySelector('[data-chart="speed"]'), speedData, 'speed', speedCap);
+    if (hasAlt)   _bindChartScrub(body.querySelector('[data-chart="alt"]'),   altData,   'alt',   null);
   }
   panel.hidden = false;
 }
 
 function hideTrackChart() {
   const panel = el('track-chart-panel');
-  if (panel) panel.hidden = true;
+  if (panel) {
+    panel.hidden = true;
+    panel.style.width = '';
+    panel.style.height = '';
+  }
   if (_chartScrubMarker && state.map) {
     state.map.removeLayer(_chartScrubMarker);
     _chartScrubMarker = null;
