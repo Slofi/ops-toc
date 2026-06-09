@@ -70,6 +70,67 @@ def _product_for_tty(device: str) -> str:
         return ""
 
 
+def _manufacturer_for_tty(device: str) -> str:
+    """Read USB manufacturer string from sysfs for a /dev/tty* device. Empty on failure."""
+    try:
+        import pathlib
+        tty = pathlib.Path(f"/sys/class/tty/{device.split('/')[-1]}/device")
+        usb = tty.resolve().parent
+        return (usb / "manufacturer").read_text().strip()
+    except Exception:
+        return ""
+
+
+# Keywords seen in USB product/manufacturer strings of common GPS/GNSS dongles.
+_GPS_KEYWORDS = (
+    "gps", "gnss", "u-blox", "ublox", "navigation",
+    "globalsat", "garmin", "navilock", "holux", "beitian",
+    "bu-353", "skytraq", "mtk", "sirf",
+)
+
+
+def _looks_like_gps(device: str) -> bool:
+    text = (_product_for_tty(device) + " " + _manufacturer_for_tty(device)).lower()
+    return any(k in text for k in _GPS_KEYWORDS)
+
+
+def _by_id_for(device: str) -> str:
+    """Return the /dev/serial/by-id/* symlink for a tty device, or the device itself."""
+    import glob, os
+    for link in sorted(glob.glob('/dev/serial/by-id/*')):
+        try:
+            if os.path.realpath(link) == device:
+                return link
+        except Exception:
+            continue
+    return device
+
+
+def detect_gps_port() -> str:
+    """Auto-detect a connected GPS dongle. Returns a by-id path when possible,
+    or the raw /dev/tty* device, or '' if none found.
+
+    Priority:
+      1. USB-serial device whose product/manufacturer string matches a known
+         GPS/GNSS keyword.
+      2. If exactly one USB-serial device is present and no keyword match, use it.
+    """
+    import glob
+    try:
+        import serial.tools.list_ports
+        ttys = sorted(p.device for p in serial.tools.list_ports.comports()
+                      if p.device.startswith(('/dev/ttyACM', '/dev/ttyUSB')))
+    except Exception:
+        ttys = sorted(glob.glob('/dev/ttyACM*') + glob.glob('/dev/ttyUSB*'))
+
+    for dev in ttys:
+        if _looks_like_gps(dev):
+            return _by_id_for(dev)
+    if len(ttys) == 1:
+        return _by_id_for(ttys[0])
+    return ""
+
+
 def _port_label(device: str) -> str:
     """Return 'device — product name' using sysfs, or just device if unavailable."""
     import os, re as _re
@@ -110,7 +171,17 @@ def list_ports() -> list:
 
     # by-id first so the recommended stable path is the natural first choice.
     devices = by_id_links + tty_devices
-    return [{"device": p, "label": _port_label(p)} for p in devices]
+    entries = [{"device": p, "label": _port_label(p)} for p in devices]
+
+    # Synthetic auto-detect entry: scans USB-serial devices for GPS/GNSS
+    # signatures at runtime, follows the device across socket/dongle swaps.
+    detected = detect_gps_port()
+    if detected:
+        det_label = f"Auto-detect GPS — currently {detected.split('/')[-1]} (recommended)"
+    else:
+        det_label = "Auto-detect GPS — no device found (recommended)"
+    entries.insert(0, {"device": "auto", "label": det_label})
+    return entries
 
 
 def port_present(port: str) -> bool:
@@ -118,6 +189,8 @@ def port_present(port: str) -> bool:
     port = str(port or "").strip()
     if not port:
         return False
+    if port == "auto":
+        return bool(detect_gps_port())
     # Resolve symlinks (e.g. /dev/serial/by-id/...) so we compare actual ttys.
     try:
         target = os.path.realpath(port) if os.path.exists(port) else port
@@ -306,6 +379,14 @@ def gps_start(port):
     port = str(port or "").strip()
     if not port:
         return
+    if port == "auto":
+        resolved = detect_gps_port()
+        if not resolved:
+            with gps_lock:
+                _gps_runtime.update({"port": "auto", "running": False, "port_present": False,
+                                      "error": "No GPS device detected.", "source": "direct"})
+            return
+        port = resolved
     if not port_present(port):
         with gps_lock:
             _gps_runtime.update({"port": port, "running": False, "port_present": False,

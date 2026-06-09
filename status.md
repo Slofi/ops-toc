@@ -63,9 +63,9 @@ journalctl --user -u ops-toc -f
 - `log-app.service` / standalone TOC-app is retired, stopped, and disabled.
 - `ops-toc.service` is the manual/Dashboard-controlled OPS-TOC service and is not enabled at boot.
 - Map data remains intentionally split: markers/drawings/tracks stay in `~/maps/map_app.db`; OM may consume map data read-only later but should not co-own map edit controls.
-- CD GPS receiver is the u-blox GNSS USB device on `/dev/ttyACM0`. OPS-TOC currently owns it directly (`gps_config.json`: enabled true, port `/dev/ttyACM0`, `om_proxy=false`).
+- CD GPS receiver is the u-blox GNSS USB device. OPS-TOC owns it directly (`gps_config.json`: enabled true, port `auto`, `om_proxy=false`).
 - 2026-06-09 field boot issue: `gpsd` auto-claimed `/dev/ttyACM0`, making OPS-TOC show "Device or resource busy". Persistent fix applied: `gpsd.service` and `gpsd.socket` are now masked to `/dev/null` on the CD.
-- GPS port selection now uses the stable `/dev/serial/by-id/usb-u-blox_AG_-_www.u-blox.com_u-blox_GNSS_receiver-if00` symlink, so the GPS works on either USB-A socket without reconfiguration.
+- GPS port selection defaults to `auto`: OPS-TOC scans USB-serial devices, matches USB product/manufacturer strings against a GPS/GNSS keyword list (u-blox, GNSS, GPS, Beitian, Garmin, …), and resolves the match to its `/dev/serial/by-id/*` symlink. Works on either CD USB-A socket and across dongle swaps without reconfiguration. Manual override (a specific by-id or raw device) still available in GPS settings.
 
 ## Pending
 
@@ -82,7 +82,9 @@ journalctl --user -u ops-toc -f
 
 ## Changelog
 
-**2026-06-09** — GPS detection now socket-independent: `list_ports()` returns both raw `/dev/tty*` devices and their stable `/dev/serial/by-id/*` symlinks, with by-id entries listed first and labeled "(stable, recommended)". `port_present()` resolves symlinks before comparing against detected ports. `gps_config.json` switched to the u-blox by-id path so the GPS works on either CD USB-A socket without reconfiguration. Persistent fix for `gpsd` reclaiming the port applied via `sudo systemctl mask --now gpsd.service gpsd.socket`. Verified live: direct source, by-id port, fix true, 12 sats used / 13 in view.
+**2026-06-09** — GPS auto-detect: added `detect_gps_port()` which scans `/dev/ttyACM*` and `/dev/ttyUSB*` devices, matches USB product/manufacturer strings against a GPS/GNSS keyword list (u-blox, gnss, gps, beitian, garmin, navilock, holux, globalsat, skytraq, mtk, sirf, navigation), and resolves the match to a `/dev/serial/by-id/*` symlink for persistence. Falls back to the only device present when no keyword matches. New synthetic `"auto"` entry leads the `/api/gps/ports` dropdown (label shows the currently-detected device). `gps_config.json` defaults to `port: "auto"`, so swapping dongles or sockets needs no reconfiguration. Manual override still works (any by-id or raw device path). Verified: u-blox detected automatically, fix true, 12 sats used.
+
+**2026-06-09** — GPS detection socket-independent: `list_ports()` returns both raw `/dev/tty*` devices and their stable `/dev/serial/by-id/*` symlinks, with by-id entries listed first and labeled "(stable, recommended)". `port_present()` resolves symlinks before comparing against detected ports. Persistent fix for `gpsd` reclaiming the port applied via `sudo systemctl mask --now gpsd.service gpsd.socket`. Verified live: direct source, by-id port, fix true, 12 sats used / 13 in view.
 
 **2026-06-09** — CD field boot fix: OPS-TOC was showing GPS port busy on `/dev/ttyACM0`. Root cause was system `gpsd` auto-start/udev ownership of the u-blox receiver (`SYSTEMD_WANTS=gpsdctl@ttyACM0.service` and `gpsd.service` running). Stopped `gpsd.service` + `gpsd.socket`, disabled `gpsd.socket`, restarted `ops-toc.service`, and verified OPS-TOC direct GPS live on `/dev/ttyACM0` with fix true, 12 sats used / 14 in view. (Persistent mask applied later same day — see entry above.)
 

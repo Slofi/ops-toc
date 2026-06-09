@@ -1,6 +1,6 @@
 {
   "enabled": true,
-  "port": "/dev/serial/by-id/usb-u-blox_AG_-_www.u-blox.com_u-blox_GNSS_receiver-if00",
+  "port": "auto",
   "om_proxy": false,
   "om_url": "http://localhost:8082"
 }
