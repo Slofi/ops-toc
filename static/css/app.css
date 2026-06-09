@@ -1504,6 +1504,7 @@ textarea { resize: vertical; }
   min-width: 220px;
   min-height: 200px;
 }
+#track-chart-panel[hidden] { display: none !important; }
 .chart-panel-head {
   display: flex;
   align-items: center;

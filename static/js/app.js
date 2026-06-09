@@ -1249,6 +1249,10 @@ function hideTrackChart() {
     panel.style.width = '';
     panel.style.height = '';
   }
+  const titleEl = el('track-chart-title');
+  if (titleEl) titleEl.textContent = '';
+  const body = el('track-chart-body');
+  if (body) body.innerHTML = '';
   if (_chartScrubMarker && state.map) {
     state.map.removeLayer(_chartScrubMarker);
     _chartScrubMarker = null;
@@ -1837,6 +1841,8 @@ function resolveTileUrl(url, layerName = "selected layer") {
   return url;
 }
 
+const TRANSPARENT_TILE_URL = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+
 function createTileLayer(value, magnifier = false) {
   const [type, id] = value.split(":");
   if (type === "local") {
@@ -1849,6 +1855,7 @@ function createTileLayer(value, magnifier = false) {
       maxZoom: 21,
       attribution: "Local MBTiles",
       detectRetina: !magnifier,
+      errorTileUrl: TRANSPARENT_TILE_URL,
     });
   }
   const opt = [...el("layer-select").options].find((o) => o.value === value);
@@ -1857,6 +1864,7 @@ function createTileLayer(value, magnifier = false) {
     maxZoom: Number(opt?.dataset.maxzoom || 19),
     attribution: opt?.dataset.attr || "",
     detectRetina: !magnifier,
+    errorTileUrl: TRANSPARENT_TILE_URL,
   });
 }
 

@@ -59,39 +59,73 @@ def save_config(cfg: dict):
         _config_path.write_text(json.dumps(cfg, indent=2))
 
 
-def _port_label(device: str) -> str:
-    """Return 'device — product name' using sysfs, or just device if unavailable."""
-    import re as _re
-    m = _re.search(r'ttyACM(\d+)|ttyUSB(\d+)', device)
-    if not m:
-        return device
+def _product_for_tty(device: str) -> str:
+    """Read USB product string from sysfs for a /dev/tty* device. Empty on failure."""
     try:
         import pathlib
         tty = pathlib.Path(f"/sys/class/tty/{device.split('/')[-1]}/device")
         usb = tty.resolve().parent
-        product = (usb / "product").read_text().strip()
-        return f"{device} — {product}"
+        return (usb / "product").read_text().strip()
     except Exception:
+        return ""
+
+
+def _port_label(device: str) -> str:
+    """Return 'device — product name' using sysfs, or just device if unavailable."""
+    import os, re as _re
+    real = os.path.realpath(device) if device.startswith("/dev/serial/by-id/") else device
+    m = _re.search(r'ttyACM(\d+)|ttyUSB(\d+)', real)
+    if not m:
         return device
+    product = _product_for_tty(real)
+    if device.startswith("/dev/serial/by-id/"):
+        # Show only the symlink name (basename) so the dropdown isn't huge.
+        short = device.split("/")[-1]
+        return f"{short} — {product} (stable, recommended)" if product else f"{short} (stable, recommended)"
+    return f"{device} — {product}" if product else device
 
 
 def list_ports() -> list:
+    """List GPS-capable serial ports.
+
+    Returns both raw /dev/tty* devices and their stable /dev/serial/by-id/*
+    symlinks (when present). The by-id paths survive socket swaps and reboots,
+    so they're the preferred selection for USB GPS dongles.
+    """
+    import glob, os
     try:
         import serial.tools.list_ports
-        ports = sorted(p.device for p in serial.tools.list_ports.comports())
+        tty_devices = sorted(p.device for p in serial.tools.list_ports.comports())
     except Exception:
-        import glob
-        ports = sorted(glob.glob('/dev/ttyACM*') + glob.glob('/dev/ttyUSB*'))
-    return [{"device": p, "label": _port_label(p)} for p in ports]
+        tty_devices = sorted(glob.glob('/dev/ttyACM*') + glob.glob('/dev/ttyUSB*'))
+
+    by_id_links = []
+    for link in sorted(glob.glob('/dev/serial/by-id/*')):
+        try:
+            real = os.path.realpath(link)
+        except Exception:
+            continue
+        if real in tty_devices:
+            by_id_links.append(link)
+
+    # by-id first so the recommended stable path is the natural first choice.
+    devices = by_id_links + tty_devices
+    return [{"device": p, "label": _port_label(p)} for p in devices]
 
 
 def port_present(port: str) -> bool:
+    import os
     port = str(port or "").strip()
     if not port:
         return False
+    # Resolve symlinks (e.g. /dev/serial/by-id/...) so we compare actual ttys.
+    try:
+        target = os.path.realpath(port) if os.path.exists(port) else port
+    except Exception:
+        target = port
     try:
         import serial.tools.list_ports
-        return any(p.device == port for p in serial.tools.list_ports.comports())
+        return any(p.device == target for p in serial.tools.list_ports.comports())
     except Exception:
         return False
 
