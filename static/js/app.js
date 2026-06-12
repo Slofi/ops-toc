@@ -44,6 +44,43 @@ function bindEvent(id, eventName, handler) {
   if (node) node.addEventListener(eventName, handler);
 }
 
+function installControlFeedback() {
+  const selector = [
+    ".btn",
+    ".menu-item",
+    ".main-tab",
+    ".layer-opt",
+    ".search-result",
+    ".list-row",
+    ".sop-section-head",
+    ".track-folder-header",
+    ".color-swatch",
+    ".color-swatch-custom",
+    ".switch-control",
+  ].join(",");
+  document.addEventListener("click", (event) => {
+    const node = event.target.closest(selector);
+    if (!node || node.disabled || node.getAttribute("aria-disabled") === "true") return;
+    node.classList.remove("click-feedback");
+    void node.offsetWidth;
+    node.classList.add("click-feedback");
+    window.setTimeout(() => node.classList.remove("click-feedback"), 260);
+  }, true);
+}
+
+function showServiceSplash(message) {
+  const splash = el("service-splash");
+  const msg = el("service-splash-message");
+  if (!splash || !msg) return;
+  msg.textContent = message;
+  splash.hidden = false;
+}
+
+function hideServiceSplash() {
+  const splash = el("service-splash");
+  if (splash) splash.hidden = true;
+}
+
 function hexToHsl(hex) {
   const r = parseInt(hex.slice(1, 3), 16) / 255;
   const g = parseInt(hex.slice(3, 5), 16) / 255;
@@ -192,6 +229,25 @@ function fmtBytes(bytes) {
     idx += 1;
   }
   return `${value.toFixed(idx === 0 ? 0 : 1)} ${units[idx]}`;
+}
+
+function fmtDuration(seconds) {
+  const s = Math.max(0, Math.round(Number(seconds) || 0));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${s % 60}s`;
+  const h = Math.floor(m / 60);
+  if (h < 48) return `${h}h ${m % 60}m`;
+  const d = Math.floor(h / 24);
+  return `${d}d ${h % 24}h`;
+}
+
+function fmtTileEstimate(tiles, bytes = 0) {
+  const count = Number(tiles || 0);
+  const size = Number(bytes || 0);
+  const parts = [`${count.toLocaleString()} tiles`];
+  if (size > 0) parts.push(`~${fmtBytes(size)}`);
+  return parts.join(" · ");
 }
 
 function esc(text) {
@@ -2049,7 +2105,7 @@ async function updateOfflineEstimate() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ...currentBoundsPayload(), min_zoom: minZoom, max_zoom: maxZoom }),
     });
-    estimate.textContent = `${data.tiles.toLocaleString()} tiles selected. No hard limit; check data plan and disk space for large jobs.`;
+    estimate.textContent = `${fmtTileEstimate(data.tiles, data.estimated_bytes)} selected. Size is estimated; check data plan and disk space for large jobs.`;
     el("offline-download-btn").disabled = !data.ok;
   } catch (err) {
     estimate.textContent = err.message;
@@ -2160,7 +2216,11 @@ async function pollOfflineJob(jobId) {
   const pct = job.total ? Math.round((job.done / job.total) * 100) : 0;
   el("offline-progress").hidden = false;
   el("offline-progress-bar").style.width = `${pct}%`;
-  el("offline-status").textContent = `${job.status}: ${job.done}/${job.total} tiles, ${job.saved} saved, ${job.failed} failed`;
+  const rate = Number(job.tiles_per_s || 0);
+  const eta = Number(job.eta_s || 0);
+  const detail = rate > 0 ? ` · ${rate.toFixed(2)} tiles/s${eta > 0 ? ` · ETA ${fmtDuration(eta)}` : ""}` : "";
+  const sizeDetail = Number(job.estimated_bytes || 0) > 0 ? ` · est. ${fmtBytes(Number(job.estimated_bytes))}` : "";
+  el("offline-status").textContent = `${job.status}: ${job.done}/${job.total} tiles${sizeDetail}, ${job.saved} saved, ${job.failed} failed${detail}`;
   pauseBtn.hidden = !["queued", "running"].includes(job.status);
   resumeBtn.hidden = job.status !== "paused";
   cancelBtn.hidden = !["queued", "running", "paused"].includes(job.status);
@@ -2194,23 +2254,39 @@ async function startOfflineDownload() {
   el("offline-download-btn").disabled = true;
   const minZoom = Number(el("offline-min-zoom").value || (state.map ? state.map.getZoom() : 12));
   const maxZoom = Number(el("offline-max-zoom").value || (state.map ? state.map.getZoom() : 14));
+  const payload = {
+    ...currentBoundsPayload(),
+    min_zoom: minZoom,
+    max_zoom: maxZoom,
+    name: el("offline-name").value.trim() || "Offline map",
+    layer_name: layer.name,
+    url: layer.url,
+    attribution: layer.attribution,
+    format: layer.format,
+  };
   try {
+    const estimate = await api("/api/download-estimate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (Number(estimate.tiles || 0) > 100000) {
+      const ok = await appConfirm(
+        `This download is ${fmtTileEstimate(estimate.tiles, estimate.estimated_bytes)}. Size is estimated. Large jobs can take a very long time and use a lot of storage. Continue?`,
+        "Large Offline Map"
+      );
+      if (!ok) {
+        el("offline-download-btn").disabled = false;
+        return;
+      }
+    }
     const job = await api("/api/downloads", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ...currentBoundsPayload(),
-        min_zoom: minZoom,
-        max_zoom: maxZoom,
-        name: el("offline-name").value.trim() || "Offline map",
-        layer_name: layer.name,
-        url: layer.url,
-        attribution: layer.attribution,
-        format: layer.format,
-      }),
+      body: JSON.stringify(payload),
     });
     el("offline-progress").hidden = false;
-    el("offline-status").textContent = `Started: ${job.total} tiles.`;
+    el("offline-status").textContent = `Started: ${fmtTileEstimate(job.total, job.estimated_bytes)}.`;
     state.offlineJobId = job.id;
     const cancelBtn = el("offline-cancel-btn");
     const pauseBtn = el("offline-pause-btn");
@@ -2280,10 +2356,12 @@ async function restartApp() {
   if (restartBtn) restartBtn.disabled = true;
   if (menuRestartBtn) menuRestartBtn.disabled = true;
   el("update-status").textContent = "Restarting OPS-TOC service...";
+  showServiceSplash("OPS-TOC restarting...");
   try {
     await api("/api/service/restart", { method: "POST" });
     setTimeout(() => window.location.reload(), 3500);
   } catch (err) {
+    hideServiceSplash();
     if (restartBtn) restartBtn.disabled = false;
     if (menuRestartBtn) menuRestartBtn.disabled = false;
     el("update-status").textContent = `Restart failed: ${err.message}`;
@@ -2299,10 +2377,12 @@ async function stopApp() {
   if (stopBtn) stopBtn.disabled = true;
   if (menuShutdownBtn) menuShutdownBtn.disabled = true;
   el("update-status").textContent = "Stopping OPS-TOC service...";
+  showServiceSplash("OPS-TOC offline. Start it back up from the Dashboard!");
   try {
     await api("/api/service/stop", { method: "POST" });
     el("update-status").textContent = "OPS-TOC is stopping. Start it again from the dashboard when needed.";
   } catch (err) {
+    hideServiceSplash();
     if (stopBtn) stopBtn.disabled = false;
     if (menuShutdownBtn) menuShutdownBtn.disabled = false;
     el("update-status").textContent = `Power off failed: ${err.message}`;
@@ -2444,6 +2524,7 @@ function initMap() {
 function bindUi() {
   applyAccentColor(localStorage.getItem("mapAppAccentColor") || DEFAULT_ACCENT);
   applyUIZoom(localStorage.getItem("mapAppUIZoom") || 100);
+  installControlFeedback();
   bindClick("markers-btn", () => setSidePanelClosed(!el("side-panel").classList.contains("closed")));
   bindClick("close-panel-btn", () => setSidePanelClosed(true));
   bindClick("add-marker-btn", () => startTool("marker"));
@@ -2617,6 +2698,7 @@ async function loadTilesets() {
         </div>
         <div class="tileset-actions">
           <button class="btn small" data-action="use" data-id="${esc(l.id)}">Use</button>
+          <button class="btn small" data-action="rename" data-id="${esc(l.id)}" data-name="${esc(l.name)}">Rename</button>
           <button class="btn small" data-action="extend" data-id="${esc(l.id)}" data-name="${esc(l.name)}" data-minzoom="${l.minzoom}" data-maxzoom="${l.maxzoom}">Edit Zoom</button>
           <button class="btn small" data-action="repair" data-id="${esc(l.id)}" data-name="${esc(l.name)}">Repair</button>
           <button class="btn small" data-action="refresh" data-id="${esc(l.id)}" data-name="${esc(l.name)}">Refresh</button>
@@ -2629,6 +2711,7 @@ async function loadTilesets() {
         const id = btn.dataset.id;
         const name = btn.dataset.name || id;
         if (btn.dataset.action === "use") useTileset(id);
+        if (btn.dataset.action === "rename") renameTileset(id, name);
         if (btn.dataset.action === "extend") extendTileset(id, name, Number(btn.dataset.minzoom), Number(btn.dataset.maxzoom));
         if (btn.dataset.action === "repair") repairTileset(id, name);
         if (btn.dataset.action === "refresh") refreshTileset(id, name);
@@ -2658,6 +2741,24 @@ function useTileset(layerId) {
   select.value = value;
   setLayer(value);
   el("settings-dialog").close();
+}
+
+async function renameTileset(layerId, name) {
+  const nextName = await appPrompt("Downloaded map name", name || "Offline map", "Rename Map");
+  if (nextName === null) return;
+  const cleanName = nextName.trim();
+  if (!cleanName || cleanName === name) return;
+  try {
+    await api(`/api/tile-layers/${layerId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: cleanName }),
+    });
+    await loadTilesets();
+    await loadLayers();
+  } catch (e) {
+    await appAlert(`Rename failed: ${e.message}`, "Error");
+  }
 }
 
 async function deleteTileset(layerId, name) {
@@ -2721,12 +2822,29 @@ async function extendTileset(layerId, name, currentMin, currentMax) {
     return;
   }
   try {
+    const estimate = await api(`/api/tile-layers/${layerId}/extend-estimate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ min_zoom: minZ, max_zoom: maxZ }),
+    });
+    const tileCount = Number(estimate.tiles || 0);
+    if (tileCount <= 0) {
+      await appAlert("No new or missing tiles in that zoom range.", "Edit Zoom Range");
+      return;
+    }
+    if (tileCount > 100000) {
+      const ok = await appConfirm(
+        `Adding this zoom range requires ${fmtTileEstimate(tileCount, estimate.estimated_bytes)}. Size is estimated from this map's average tile size. For a large area, high zoom levels can take days or weeks and use a lot of storage. Continue?`,
+        "Large Zoom Extension"
+      );
+      if (!ok) return;
+    }
     const job = await api(`/api/tile-layers/${layerId}/extend`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ min_zoom: minZ, max_zoom: maxZ }),
     });
-    trackOfflineJob(job, `Extending "${name}" to z${minZ}–z${maxZ}: ${job.total} tiles.`);
+    trackOfflineJob(job, `Extending "${name}" to z${minZ}–z${maxZ}: ${fmtTileEstimate(job.total, job.estimated_bytes)}.`);
   } catch (e) {
     await appAlert(`Extend failed: ${e.message}`, "Error");
   }

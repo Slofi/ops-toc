@@ -30,6 +30,7 @@ DEFAULT_MBTILES = os.environ.get("MAP_APP_DEFAULT_MBTILES", "")
 PORT = int(os.environ.get("MAP_APP_PORT", "8090"))
 DOWNLOAD_JOB_RETENTION_DAYS = int(os.environ.get("MAP_APP_DOWNLOAD_JOB_RETENTION_DAYS", "7"))
 TILE_DOWNLOAD_RETRIES = int(os.environ.get("MAP_APP_TILE_DOWNLOAD_RETRIES", "2"))
+DEFAULT_TILE_ESTIMATE_BYTES = int(os.environ.get("MAP_APP_TILE_ESTIMATE_BYTES", "12000"))
 
 # TOC log — shared with OM via overmesh_prefs.db
 OM_PREFS_DB = os.environ.get("TOC_LOG_DB", os.path.expanduser("~/overmesh/overmesh_prefs.db"))
@@ -333,11 +334,36 @@ def tile_range_for_bounds(bounds: dict[str, float], zoom: int) -> list[tuple[int
     return tiles
 
 
+def tile_count_for_bounds(bounds: dict[str, float], zoom: int) -> int:
+    min_lat = max(min(bounds["south"], bounds["north"]), -85.05112878)
+    max_lat = min(max(bounds["south"], bounds["north"]), 85.05112878)
+    min_lon = max(min(bounds["west"], bounds["east"]), -180)
+    max_lon = min(max(bounds["west"], bounds["east"]), 180)
+    n = 2**zoom
+
+    def lon_to_x(lon: float) -> int:
+        return int((lon + 180.0) / 360.0 * n)
+
+    def lat_to_y(lat: float) -> int:
+        lat_rad = math.radians(lat)
+        return int((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n)
+
+    x1 = max(0, min(n - 1, lon_to_x(min_lon)))
+    x2 = max(0, min(n - 1, lon_to_x(max_lon)))
+    y1 = max(0, min(n - 1, lat_to_y(max_lat)))
+    y2 = max(0, min(n - 1, lat_to_y(min_lat)))
+    return (abs(x2 - x1) + 1) * (abs(y2 - y1) + 1)
+
+
 def tiles_for_bounds(bounds: dict[str, float], min_zoom: int, max_zoom: int) -> list[tuple[int, int, int]]:
     tiles = []
     for z in range(min_zoom, max_zoom + 1):
         tiles.extend(tile_range_for_bounds(bounds, z))
     return tiles
+
+
+def tile_count_for_zoom_range(bounds: dict[str, float], min_zoom: int, max_zoom: int) -> int:
+    return sum(tile_count_for_bounds(bounds, z) for z in range(min_zoom, max_zoom + 1))
 
 
 def substitute_tile_url(template: str, z: int, x: int, y: int) -> str:
@@ -365,6 +391,17 @@ def update_mbtiles_metadata(conn: sqlite3.Connection, metadata: dict[str, str]) 
     conn.execute("CREATE TABLE IF NOT EXISTS metadata (name TEXT, value TEXT)")
     conn.execute("DELETE FROM metadata")
     conn.executemany("INSERT INTO metadata (name,value) VALUES (?,?)", sorted(metadata.items()))
+
+
+def patch_mbtiles_metadata(path: Path, updates: dict[str, str]) -> dict[str, str]:
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS metadata (name TEXT, value TEXT)")
+        rows = conn.execute("SELECT name,value FROM metadata").fetchall()
+        metadata = {str(row[0]): str(row[1]) for row in rows}
+        metadata.update({k: str(v) for k, v in updates.items()})
+        update_mbtiles_metadata(conn, metadata)
+        conn.commit()
+    return metadata
 
 
 def service_action_soon(action: str) -> None:
@@ -421,6 +458,8 @@ def update_job(job_id: str, **updates: Any) -> None:
 
 
 def _job_payload_json(job: dict[str, Any]) -> str:
+    if job.get("status") in {"done", "error", "cancelled"}:
+        return "{}"
     return json.dumps(job.get("payload") or {}, separators=(",", ":"))
 
 
@@ -479,14 +518,18 @@ def start_download_worker_locked() -> None:
 
 
 def _download_job_from_row(row: sqlite3.Row) -> dict[str, Any]:
-    try:
-        payload = json.loads(row["payload_json"] or "{}")
-    except (TypeError, ValueError):
+    status = row["status"]
+    if status in {"done", "error", "cancelled"}:
         payload = {}
+    else:
+        try:
+            payload = json.loads(row["payload_json"] or "{}")
+        except (TypeError, ValueError):
+            payload = {}
     return {
         "id": row["id"],
         "kind": row["kind"],
-        "status": row["status"],
+        "status": status,
         "name": row["name"],
         "layer_name": row["layer_name"] or "",
         "path": row["path"],
@@ -602,7 +645,22 @@ def public_job(job: dict[str, Any]) -> dict[str, Any]:
     out["elapsed_s"] = elapsed
     out["tiles_per_s"] = round(rate, 2) if rate else 0
     out["eta_s"] = int(remaining / rate) if rate > 0 and remaining else 0
+    if out.get("estimated_bytes") is None:
+        out["estimated_bytes"] = int(total * DEFAULT_TILE_ESTIMATE_BYTES)
     return out
+
+
+def estimate_tile_bytes(tile_count: int, layer: dict[str, Any] | None = None) -> int:
+    avg = DEFAULT_TILE_ESTIMATE_BYTES
+    if layer:
+        try:
+            layer_tiles = int(layer.get("tile_count") or 0)
+            layer_size = int(layer.get("size") or 0)
+            if layer_tiles > 0 and layer_size > 0:
+                avg = max(1, int(layer_size / layer_tiles))
+        except (TypeError, ValueError):
+            avg = DEFAULT_TILE_ESTIMATE_BYTES
+    return int(max(0, tile_count) * avg)
 
 
 def clear_finished_download_jobs() -> int:
@@ -625,16 +683,22 @@ def clear_finished_download_jobs() -> int:
 def missing_tiles_for_mbtiles(path: Path, tiles: list[tuple[int, int, int]]) -> list[tuple[int, int, int]]:
     if not path.exists():
         return tiles
-    missing = []
+    if not tiles:
+        return []
     try:
         with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as conn:
+            zooms = sorted({z for z, _x, _y in tiles})
+            existing: set[tuple[int, int, int]] = set()
+            for z in zooms:
+                rows = conn.execute(
+                    "SELECT tile_column,tile_row FROM tiles WHERE zoom_level=?",
+                    (z,),
+                ).fetchall()
+                existing.update((z, int(x), int(y)) for x, y in rows)
+            missing = []
             for z, x, y in tiles:
                 y_tms = (2**z - 1) - y
-                row = conn.execute(
-                    "SELECT 1 FROM tiles WHERE zoom_level=? AND tile_column=? AND tile_row=? LIMIT 1",
-                    (z, x, y_tms),
-                ).fetchone()
-                if not row:
+                if (z, x, y_tms) not in existing:
                     missing.append((z, x, y))
     except sqlite3.Error:
         return tiles
@@ -783,6 +847,7 @@ def job_from_download_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], 
         "layer_name": layer_name,
         "path": str(path),
         "total": len(tiles),
+        "estimated_bytes": estimate_tile_bytes(len(tiles)),
         "done": 0,
         "saved": 0,
         "failed": 0,
@@ -825,7 +890,8 @@ def job_from_layer(layer: dict[str, Any], mode: str) -> tuple[dict[str, Any], di
     job_id = uuid.uuid4().hex[:12]
     job = {
         "id": job_id, "kind": mode, "status": "queued", "name": name, "layer_name": layer_name,
-        "path": str(path), "total": len(tiles), "done": 0, "saved": 0, "failed": 0, "created_at": now_ts(),
+        "path": str(path), "total": len(tiles), "estimated_bytes": estimate_tile_bytes(len(tiles), layer),
+        "done": 0, "saved": 0, "failed": 0, "created_at": now_ts(),
     }
     payload = {
         "tiles": tiles, "path": str(path), "url": url, "metadata": metadata,
@@ -1556,8 +1622,8 @@ def api_download_estimate():
         return jsonify({"error": str(exc)}), 400
     if min_zoom > max_zoom:
         min_zoom, max_zoom = max_zoom, min_zoom
-    count = len(tiles_for_bounds(bounds, min_zoom, max_zoom))
-    return jsonify({"tiles": count, "ok": True})
+    count = tile_count_for_zoom_range(bounds, min_zoom, max_zoom)
+    return jsonify({"tiles": count, "estimated_bytes": estimate_tile_bytes(count), "ok": True})
 
 
 @app.route("/api/downloads", methods=["POST"])
@@ -2347,6 +2413,27 @@ def api_delete_tile_layer(layer_id):
     path.unlink(missing_ok=True)
     return jsonify({"ok": True})
 
+
+@app.route("/api/tile-layers/<layer_id>", methods=["PUT"])
+def api_update_tile_layer(layer_id):
+    layer = find_mbtiles(layer_id)
+    if not layer:
+        return jsonify({"error": "Tileset not found"}), 404
+    path = Path(layer["path"])
+    if MBTILES_DIR not in path.parents:
+        return jsonify({"error": "Cannot rename this tileset"}), 403
+    body = request.get_json(silent=True) or {}
+    name = _clean_text(body.get("name"), 90)
+    if not name:
+        return jsonify({"error": "Name is required"}), 400
+    try:
+        patch_mbtiles_metadata(path, {"name": name})
+    except sqlite3.Error as exc:
+        return jsonify({"error": f"Rename failed: {exc}"}), 500
+    updated = find_mbtiles(layer_id) or layer
+    return jsonify({"ok": True, "layer": updated})
+
+
 @app.route("/api/tile-layers/<layer_id>/refresh", methods=["POST"])
 def api_refresh_tile_layer(layer_id):
     layer = find_mbtiles(layer_id)
@@ -2371,6 +2458,73 @@ def api_repair_tile_layer(layer_id):
     return jsonify(enqueue_download_job(job, payload))
 
 
+def extension_tiles_for_layer(layer: dict[str, Any], new_min: int, new_max: int) -> tuple[list[tuple[int, int, int]], int, int, tuple[str, int] | None]:
+    path = Path(layer["path"])
+    if MBTILES_DIR not in path.parents:
+        return [], new_min, new_max, ("Cannot extend this tileset", 403)
+    bounds_str = layer.get("bounds", "")
+    try:
+        west, south, east, north = [float(v) for v in bounds_str.split(",")]
+    except Exception:
+        return [], new_min, new_max, ("No bounds stored for this tileset", 400)
+    existing_min = int(layer.get("minzoom", new_min))
+    existing_max = int(layer.get("maxzoom", new_max))
+    zooms_to_fetch = [
+        z for z in range(new_min, new_max + 1)
+        if z < existing_min or z > existing_max
+    ]
+    tiles: list[tuple[int, int, int]] = []
+    selected_bounds = {"south": south, "west": west, "north": north, "east": east}
+    for z in zooms_to_fetch:
+        tiles.extend(tile_range_for_bounds(selected_bounds, z))
+    return missing_tiles_for_mbtiles(path, tiles), min(existing_min, new_min), max(existing_max, new_max), None
+
+
+def extension_tile_count_for_layer(layer: dict[str, Any], new_min: int, new_max: int) -> tuple[int, int, int, tuple[str, int] | None]:
+    path = Path(layer["path"])
+    if MBTILES_DIR not in path.parents:
+        return 0, new_min, new_max, ("Cannot extend this tileset", 403)
+    bounds_str = layer.get("bounds", "")
+    try:
+        west, south, east, north = [float(v) for v in bounds_str.split(",")]
+    except Exception:
+        return 0, new_min, new_max, ("No bounds stored for this tileset", 400)
+    existing_min = int(layer.get("minzoom", new_min))
+    existing_max = int(layer.get("maxzoom", new_max))
+    selected_bounds = {"south": south, "west": west, "north": north, "east": east}
+    count = 0
+    for z in range(new_min, new_max + 1):
+        if z < existing_min or z > existing_max:
+            count += tile_count_for_bounds(selected_bounds, z)
+    return count, min(existing_min, new_min), max(existing_max, new_max), None
+
+
+@app.route("/api/tile-layers/<layer_id>/extend-estimate", methods=["POST"])
+def api_extend_tile_layer_estimate(layer_id):
+    layer = find_mbtiles(layer_id)
+    if not layer:
+        return jsonify({"error": "Tileset not found"}), 404
+    body = request.get_json(silent=True) or {}
+    try:
+        new_min = max(0, min(22, _int(body.get("min_zoom"), "min_zoom")))
+        new_max = max(0, min(22, _int(body.get("max_zoom"), "max_zoom")))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    if new_min > new_max:
+        new_min, new_max = new_max, new_min
+    tile_count, merged_min, merged_max, error = extension_tile_count_for_layer(layer, new_min, new_max)
+    if error:
+        message, status = error
+        return jsonify({"error": message}), status
+    return jsonify({
+        "ok": True,
+        "tiles": tile_count,
+        "estimated_bytes": estimate_tile_bytes(tile_count, layer),
+        "minzoom": merged_min,
+        "maxzoom": merged_max,
+    })
+
+
 @app.route("/api/tile-layers/<layer_id>/extend", methods=["POST"])
 def api_extend_tile_layer(layer_id):
     """Download additional zoom levels into an existing tileset."""
@@ -2388,21 +2542,14 @@ def api_extend_tile_layer(layer_id):
     url = layer.get("source_url", "")
     if not url or "{z}" not in url:
         return jsonify({"error": "No source URL stored for this tileset"}), 400
-    bounds_str = layer.get("bounds", "")
-    try:
-        west, south, east, north = [float(v) for v in bounds_str.split(",")]
-    except Exception:
-        return jsonify({"error": "No bounds stored for this tileset"}), 400
-    tiles = tiles_for_bounds({"south": south, "west": west, "north": north, "east": east}, new_min, new_max)
-    if not tiles:
-        return jsonify({"error": "No tiles in selected area/zoom range"}), 400
     path = Path(layer["path"])
-    if MBTILES_DIR not in path.parents:
-        return jsonify({"error": "Cannot extend this tileset"}), 403
-    existing_min = int(layer.get("minzoom", new_min))
-    existing_max = int(layer.get("maxzoom", new_max))
-    merged_min = min(existing_min, new_min)
-    merged_max = max(existing_max, new_max)
+    bounds_str = layer.get("bounds", "")
+    tiles, merged_min, merged_max, error = extension_tiles_for_layer(layer, new_min, new_max)
+    if error:
+        message, status = error
+        return jsonify({"error": message}), status
+    if not tiles:
+        return jsonify({"error": "No new or missing tiles in selected zoom range"}), 400
     name = layer.get("name", "Offline map")
     layer_name = layer.get("source_layer_name", "Map layer")
     fmt = layer.get("format", "png")
@@ -2417,9 +2564,10 @@ def api_extend_tile_layer(layer_id):
     job_id = uuid.uuid4().hex[:12]
     job = {
         "id": job_id, "kind": "extend", "status": "queued", "name": name, "layer_name": layer_name,
-        "path": str(path), "total": len(tiles), "done": 0, "saved": 0, "failed": 0, "created_at": now_ts(),
+        "path": str(path), "total": len(tiles), "estimated_bytes": estimate_tile_bytes(len(tiles), layer),
+        "done": 0, "saved": 0, "failed": 0, "created_at": now_ts(),
     }
-    payload = {"tiles": tiles, "path": str(path), "url": url, "metadata": metadata}
+    payload = {"tiles": tiles, "path": str(path), "url": url, "metadata": metadata, "repair_existing": True}
     return jsonify(enqueue_download_job(job, payload))
 
 

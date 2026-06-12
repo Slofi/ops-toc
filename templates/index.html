@@ -8,6 +8,12 @@
   <link rel="stylesheet" href="/static/css/app.css">
 </head>
 <body>
+  <div id="service-splash" class="service-splash" hidden>
+    <div class="service-splash-panel">
+      <div class="service-splash-brand">OPS-TOC</div>
+      <div id="service-splash-message" class="service-splash-message">OPS-TOC restarting...</div>
+    </div>
+  </div>
   <header id="toolbar">
     <div class="brand"><span class="brand-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><defs><clipPath id="bci-cb"><polygon points="0,0 19,0 0,19"/></clipPath><clipPath id="bci-mp"><polygon points="20,1 20,20 1,20"/></clipPath></defs><g clip-path="url(#bci-cb)"><rect x="1.5" y="4.5" width="10.5" height="13" rx="1.5" stroke-width="1.3"/><rect x="4.5" y="2.5" width="4.5" height="3.5" rx="1.2" stroke-width="1.1"/><line x1="3.5" y1="9.5" x2="10.5" y2="9.5" stroke-width="1"/><line x1="3.5" y1="12.5" x2="10.5" y2="12.5" stroke-width="1"/></g><g clip-path="url(#bci-mp)"><circle cx="14" cy="10" r="3" stroke-width="1.3"/><circle cx="14" cy="10" r="1.2" fill="currentColor" stroke="none"/><line x1="14" y1="13" x2="14" y2="17.5" stroke-width="1.3"/></g></svg></span><span>OPS-TOC</span></div>
 
@@ -725,20 +731,32 @@
       <section class="settings-section" id="gps-section">
         <h3>GPS</h3>
         <p class="dialog-note">Two modes: <b>OM proxy</b> (recommended when OM is running — polls OM's GPS so only one app owns the serial port) or <b>Direct serial</b> (for standalone use without OM).</p>
-        <div class="settings-grid">
-          <label class="setting-row">
-            <span>Enable GPS</span>
-            <input type="checkbox" id="gps-enabled">
+        <div class="gps-settings-card">
+          <label class="setting-row switch-row" for="gps-enabled">
+            <span class="setting-label-main">
+              <span>GPS receiver</span>
+              <span class="setting-label-note">Enable live position and track recording input.</span>
+            </span>
+            <span class="switch-control">
+              <input type="checkbox" id="gps-enabled">
+              <span class="switch-slider" aria-hidden="true"></span>
+            </span>
           </label>
           <label class="setting-row">
-            <span>Source</span>
+            <span class="setting-label-main">
+              <span>Source</span>
+              <span class="setting-label-note">Use OM proxy when OM is running; direct serial for standalone OPS-TOC.</span>
+            </span>
             <select id="gps-source-select" onchange="gpsSourceChanged()">
               <option value="proxy">OM proxy (localhost:8082)</option>
               <option value="direct">Direct serial port</option>
             </select>
           </label>
           <div id="gps-port-row" class="setting-row" hidden>
-            <span>Port</span>
+            <span class="setting-label-main">
+              <span>Port</span>
+              <span class="setting-label-note">Auto is recommended for the Cyberdeck GNSS receiver.</span>
+            </span>
             <div style="display:flex;gap:6px;align-items:center">
               <select id="gps-port-select" style="flex:1"></select>
               <button class="btn small" type="button" id="gps-scan-btn">Scan</button>
