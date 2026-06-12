@@ -1280,14 +1280,20 @@ def api_version():
 
 @app.route("/api/update", methods=["POST"])
 def api_update_app():
+    logs: list[str] = []
     try:
-        result = run_git(["pull", "--ff-only"], timeout=60)
+        status = run_git(["status", "--short", "--branch"], timeout=20)
+        if status.stdout.strip():
+            logs.append("$ git status --short --branch\n" + status.stdout.strip())
+        result = run_git(["pull", "--rebase", "--autostash"], timeout=90)
+        logs.append("$ git pull --rebase --autostash\n" + result.stdout.strip())
     except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        logs.append(str(exc))
+        return jsonify({"ok": False, "error": str(exc), "log": "\n\n".join(logs)[-6000:]}), 500
     ok = result.returncode == 0
     if ok:
         threading.Thread(target=service_action_soon, args=("restart",), daemon=True).start()
-    return jsonify({"ok": ok, "log": result.stdout[-6000:], "restart": ok}), (200 if ok else 500)
+    return jsonify({"ok": ok, "log": "\n\n".join(logs)[-6000:], "restart": ok}), (200 if ok else 500)
 
 
 @app.route("/api/service/restart", methods=["POST"])

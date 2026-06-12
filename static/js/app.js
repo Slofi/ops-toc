@@ -477,7 +477,11 @@ function popupForMarker(marker) {
 async function api(path, options = {}) {
   const res = await fetch(path, options);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || data.message || `HTTP ${res.status}`);
+  if (!res.ok) {
+    const err = new Error(data.error || data.message || `HTTP ${res.status}`);
+    err.data = data;
+    throw err;
+  }
   return data;
 }
 
@@ -2238,6 +2242,10 @@ async function updateApp() {
   } catch (err) {
     btn.disabled = false;
     el("update-status").textContent = `Update failed: ${err.message}`;
+    if (err.data?.log) {
+      el("update-log").textContent = err.data.log;
+      el("update-log").hidden = false;
+    }
   }
 }
 
