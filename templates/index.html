@@ -111,15 +111,20 @@
               <option value="POSITION">POSITION</option>
               <option value="INTEL">INTEL</option>
               <option value="WEATHER">WEATHER</option>
+              <option value="TRACK">TRACK</option>
             </select>
             <input type="text" id="mission-input" placeholder="Mission / Folder (optional)"
                    list="missions-datalist" autocomplete="off">
             <datalist id="missions-datalist"></datalist>
             <button class="btn small" onclick="insertNow()">Now</button>
             <button class="btn small" id="btn-gps-attach" onclick="attachGPS()">+GPS</button>
+            <select id="track-attach-select" onchange="attachTrackFromSelect(this)">
+              <option value="">+Track</option>
+            </select>
           </div>
           <div id="composer-fields"></div>
           <div id="gps-line" class="gps-attach-line" style="display:none"></div>
+          <div id="track-line" class="track-attach-line" style="display:none"></div>
         </div>
       </div>
 

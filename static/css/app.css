@@ -1004,13 +1004,15 @@ textarea { resize: vertical; }
 }
 .toc-body-input:focus { outline: none; border-color: var(--accent); }
 
-/* GPS attach line */
-.gps-attach-line {
+/* GPS / track attach lines */
+.gps-attach-line,
+.track-attach-line {
   margin-top: 6px;
   font-size: 11px;
   color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
+.track-attach-line { color: #f8d48d; }
 
 /* Filter bar */
 .filter-bar {
@@ -1165,6 +1167,7 @@ textarea { resize: vertical; }
 .toc-cat-POSITION { background: rgba(34,211,238,0.13);  color: #22d3ee; }
 .toc-cat-INTEL    { background: rgba(251,191,36,0.15);  color: #fbbf24; }
 .toc-cat-WEATHER  { background: rgba(125,211,252,0.13); color: #7dd3fc; }
+.toc-cat-TRACK    { background: rgba(232,176,79,0.15);  color: #e8b04f; }
 
 /* GPS / mission badges */
 .has-gps-badge {
@@ -1188,6 +1191,24 @@ textarea { resize: vertical; }
   transition: background 0.12s;
 }
 .mission-badge:hover { background: var(--accent-bg); }
+.track-log-badge {
+  background: rgba(232,176,79,0.12);
+  border: 1px solid rgba(232,176,79,0.25);
+  border-radius: 4px;
+  color: #f8d48d;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+}
+.track-log-badge:hover { background: rgba(232,176,79,0.20); }
+.log-track-ref {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
 
 /* Empty state */
 .toc-empty { color: var(--muted); font-size: 12px; padding: 20px; text-align: center; }

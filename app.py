@@ -35,7 +35,8 @@ TILE_DOWNLOAD_RETRIES = int(os.environ.get("MAP_APP_TILE_DOWNLOAD_RETRIES", "2")
 OM_PREFS_DB = os.environ.get("TOC_LOG_DB", os.path.expanduser("~/overmesh/overmesh_prefs.db"))
 _MISSION_RE = re.compile(r'\*\*(?:Mission|Mission\s*/\s*Folder):\*\*\s*(.+)', re.I)
 _POS_RE     = re.compile(r'\*\*GPS:\*\*\s*(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)', re.I)
-_LOG_CATS   = {'NOTE', 'PLAN', 'SITREP', 'ALERT', 'ACTION', 'COMMS', 'CONTACT', 'POSITION', 'INTEL', 'WEATHER'}
+_TRACK_RE   = re.compile(r'\*\*Track:\*\*.*?#(\d+)', re.I)
+_LOG_CATS   = {'NOTE', 'PLAN', 'SITREP', 'ALERT', 'ACTION', 'COMMS', 'CONTACT', 'POSITION', 'INTEL', 'WEATHER', 'TRACK'}
 
 app = Flask(__name__)
 download_jobs: dict[str, dict[str, Any]] = {}
@@ -2047,6 +2048,9 @@ def _toc_annotate(e: dict) -> dict:
     if p:
         e["lat"] = float(p.group(1))
         e["lon"] = float(p.group(2))
+    t = _TRACK_RE.search(e["body"] or "")
+    if t:
+        e["track_id"] = int(t.group(1))
     return e
 
 

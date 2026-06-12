@@ -1,12 +1,12 @@
 'use strict';
 
 // ── Constants ─────────────────────────────────────────────────────────
-const CATS = ['NOTE','SITREP','PLAN','ALERT','ACTION','COMMS','CONTACT','POSITION','INTEL','WEATHER'];
+const CATS = ['NOTE','SITREP','PLAN','ALERT','ACTION','COMMS','CONTACT','POSITION','INTEL','WEATHER','TRACK'];
 
 const CAT_COLORS = {
   NOTE:'#9ca3af', SITREP:'#f59e0b', PLAN:'#60a5fa', ALERT:'#ef4444',
   ACTION:'#fb923c', COMMS:'#4ade80', CONTACT:'#c084fc', POSITION:'#22d3ee',
-  INTEL:'#fbbf24', WEATHER:'#7dd3fc',
+  INTEL:'#fbbf24', WEATHER:'#7dd3fc', TRACK:'#e8b04f',
 };
 
 const FIELDS = {
@@ -113,6 +113,15 @@ const FIELDS = {
     {name:'Forecast', hint:'Expected changes', multiline:true},
     {name:'Notes', hint:'Extra weather context', multiline:true},
   ],
+  TRACK: [
+    {name:'Track', hint:'Saved GPS track name and id'},
+    {name:'Distance', hint:'Track distance'},
+    {name:'Points', hint:'Number of recorded points'},
+    {name:'Start', hint:'Track start time'},
+    {name:'End', hint:'Track end time'},
+    {name:'Use / Result', hint:'Patrol, route taken, search pattern, perimeter check, survey result...', multiline:true},
+    {name:'Notes', hint:'Extra track context', multiline:true},
+  ],
 };
 
 // ── State ─────────────────────────────────────────────────────────────
@@ -123,6 +132,8 @@ let _missionFilter = '';
 let _searchQuery   = '';
 let _missions      = [];
 let _attachedGPS   = null;
+let _attachedTrack = null;
+let _logTracks     = [];
 let _searchTimer   = null;
 let _toastTimer    = null;
 let _activeTab     = 'log';
@@ -193,6 +204,7 @@ function updateGpsHeaderText() {
 document.addEventListener('DOMContentLoaded', () => {
   buildFilterBar();
   renderFields('NOTE');
+  loadLogTracks();
   loadEntries();
   loadMissions();
 
@@ -236,8 +248,11 @@ function renderFields(cat, values = {}) {
 
 function onCatChange() {
   _attachedGPS = null;
+  _attachedTrack = null;
   const line = document.getElementById('gps-line');
   if (line) line.style.display = 'none';
+  const trackLine = document.getElementById('track-line');
+  if (trackLine) trackLine.style.display = 'none';
   const sel = document.getElementById('cat-select');
   if (sel) renderFields(sel.value);
 }
@@ -260,6 +275,104 @@ function attachGPS() {
   const line = document.getElementById('gps-line');
   if (line) { line.style.display = ''; line.textContent = `GPS: ${_attachedGPS}`; }
   toast('GPS attached', 'ok');
+}
+
+async function loadLogTracks() {
+  try {
+    const r = await fetch('/api/tracks');
+    if (!r.ok) return;
+    _logTracks = await r.json();
+    updateTrackAttachSelect();
+  } catch (_) {}
+}
+
+function updateTrackAttachSelect() {
+  const sel = document.getElementById('track-attach-select');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">+Track</option>' +
+    _logTracks.map(t => `<option value="${t.id}">${esc(t.name || ('Track #' + t.id))}</option>`).join('');
+  sel.value = '';
+}
+
+function syncLogTracks(tracks) {
+  if (!Array.isArray(tracks)) return;
+  _logTracks = tracks;
+  updateTrackAttachSelect();
+}
+
+function fmtLogTrackDistance(meters) {
+  const n = Number(meters || 0);
+  if (!Number.isFinite(n)) return '0 m';
+  if (typeof fmtDistance === 'function') return fmtDistance(n);
+  return n < 1000 ? `${Math.round(n)} m` : `${(n / 1000).toFixed(2)} km`;
+}
+
+function fmtLogTrackTime(ts) {
+  return ts ? tocFormatTs(ts) : '';
+}
+
+function trackLogFields(track) {
+  const points = Array.isArray(track.points) ? track.points.length : 0;
+  return {
+    Track: `${track.name || 'GPS track'} (#${track.id})`,
+    Distance: fmtLogTrackDistance(track.distance_m || 0),
+    Points: String(points),
+    Start: fmtLogTrackTime(track.started_at),
+    End: fmtLogTrackTime(track.ended_at),
+  };
+}
+
+function setAttachedTrack(track, opts = {}) {
+  if (!track) return;
+  _attachedTrack = {
+    id: track.id,
+    name: track.name || 'GPS track',
+    distance_m: track.distance_m || 0,
+    points: Array.isArray(track.points) ? track.points.length : 0,
+    started_at: track.started_at || null,
+    ended_at: track.ended_at || null,
+  };
+  const catSel = document.getElementById('cat-select');
+  if (catSel) catSel.value = 'TRACK';
+  renderFields('TRACK', { ...trackLogFields(track), ...(opts.values || {}) });
+  const line = document.getElementById('track-line');
+  if (line) {
+    line.style.display = '';
+    line.innerHTML = `Track: <button class="btn small" type="button" onclick="openLogTrack(${track.id})">${esc(track.name || 'GPS track')}</button>`;
+  }
+  const sel = document.getElementById('track-attach-select');
+  if (sel) sel.value = '';
+}
+
+async function attachTrackFromSelect(sel) {
+  const id = Number(sel?.value || 0);
+  if (!id) return;
+  if (!_logTracks.length) await loadLogTracks();
+  const track = _logTracks.find(t => Number(t.id) === id);
+  if (!track) { toast('Track not found', 'err'); return; }
+  setAttachedTrack(track);
+  toast('Track attached', 'ok');
+}
+
+async function createLogFromTrack(id) {
+  if (!_logTracks.length) await loadLogTracks();
+  let track = _logTracks.find(t => Number(t.id) === Number(id));
+  if (!track && typeof state !== 'undefined' && state.tracks) track = state.tracks.get(Number(id));
+  if (!track) { toast('Track not found', 'err'); return; }
+  _editId = null;
+  _attachedGPS = null;
+  const gpsLine = document.getElementById('gps-line');
+  if (gpsLine) gpsLine.style.display = 'none';
+  setAttachedTrack(track);
+  const missInput = document.getElementById('mission-input');
+  if (missInput && !missInput.value && track.folder) missInput.value = track.folder;
+  const title = document.getElementById('composer-title');
+  const cancel = document.getElementById('btn-cancel-edit');
+  const panel = document.getElementById('composer-panel');
+  if (title) title.textContent = 'New Track Entry';
+  if (cancel) cancel.style.display = 'none';
+  showTab('log');
+  if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function parseBodyToFields(body, cat) {
@@ -294,6 +407,9 @@ function assembleBody() {
     if (val) parts.push(`**${el.dataset.field}:** ${val}`);
   });
   if (_attachedGPS) parts.push(`**GPS:** ${_attachedGPS}`);
+  if (_attachedTrack && !parts.some(p => /^\*\*Track:\*\*/i.test(p))) {
+    parts.unshift(`**Track:** ${_attachedTrack.name} (#${_attachedTrack.id})`);
+  }
   return parts.join('\n');
 }
 
@@ -337,8 +453,11 @@ function editEntry(id) {
   if (!e) return;
   _editId = id;
   _attachedGPS = null;
+  _attachedTrack = null;
   const line = document.getElementById('gps-line');
   if (line) line.style.display = 'none';
+  const trackLine = document.getElementById('track-line');
+  if (trackLine) trackLine.style.display = 'none';
   const catSel = document.getElementById('cat-select');
   const missInput = document.getElementById('mission-input');
   if (catSel) catSel.value = e.category;
@@ -356,8 +475,11 @@ function editEntry(id) {
 function cancelEdit() {
   _editId = null;
   _attachedGPS = null;
+  _attachedTrack = null;
   const line = document.getElementById('gps-line');
   if (line) line.style.display = 'none';
+  const trackLine = document.getElementById('track-line');
+  if (trackLine) trackLine.style.display = 'none';
   const catSel = document.getElementById('cat-select');
   const missInput = document.getElementById('mission-input');
   if (catSel) catSel.value = 'NOTE';
@@ -389,8 +511,11 @@ function duplicateEntry(id) {
   if (!e) return;
   _editId = null;
   _attachedGPS = null;
+  _attachedTrack = null;
   const line = document.getElementById('gps-line');
   if (line) line.style.display = 'none';
+  const trackLine = document.getElementById('track-line');
+  if (trackLine) trackLine.style.display = 'none';
   const catSel = document.getElementById('cat-select');
   const missInput = document.getElementById('mission-input');
   if (catSel) catSel.value = e.category || 'NOTE';
@@ -439,6 +564,9 @@ function renderEntry(e) {
   const gpsBadge = hasGps
     ? `<span class="has-gps-badge" title="Has GPS">⊙ GPS</span>`
     : '';
+  const trackBadge = e.track_id
+    ? `<span class="track-log-badge" onclick="openLogTrack(${Number(e.track_id)})" title="Open saved track">trk #${Number(e.track_id)}</span>`
+    : '';
   const missBadge = e.mission
     ? `<span class="mission-badge" onclick="setMissionFilter('${jsAttr(e.mission)}')" title="Filter by mission">${esc(e.mission)}</span>`
     : '';
@@ -447,7 +575,7 @@ function renderEntry(e) {
   <div class="toc-entry-header">
     <span class="toc-entry-ts">${dt}</span>
     <span class="toc-cat-badge toc-cat-${catClass}">${esc(cat)}</span>
-    ${missBadge}${gpsBadge}
+    ${missBadge}${gpsBadge}${trackBadge}
     <div class="toc-entry-actions">
       <button class="btn small" onclick="editEntry(${e.id})">Edit</button>
       <button class="btn small" onclick="duplicateEntry(${e.id})">Dup</button>
@@ -464,11 +592,27 @@ function renderBody(body) {
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
     .replace(/\*\*(Mission|Mission \/ Folder):\*\*[^\n]*\n?/gi, '')
     .replace(/\*\*GPS:\*\*[^\n]*\n?/g, '')
+    .replace(/\*\*Track:\*\*\s*([^\n#]*?)\s*\(#(\d+)\)\n?/gi,
+      (_, name, id) => `<div class="log-track-ref"><span class="toc-field-key">Track:</span> ${name.trim() || 'GPS track'} <button class="btn small" onclick="openLogTrack(${Number(id)})">Open track</button></div>`)
     .replace(/\*\*([^*\n]+):\*\*/g,'<span class="toc-field-key">$1:</span>')
     .replace(/\*\*([^*\n]+)\*\*/g,'<strong>$1</strong>')
     .replace(/\n{2,}/g,'<br><br>')
     .replace(/\n/g,'<br>')
     .trim();
+}
+
+async function openLogTrack(id) {
+  const trackId = Number(id);
+  if (!trackId) return;
+  showTab('map');
+  try {
+    if (typeof initMapAndData === 'function') initMapAndData();
+    if (typeof loadTracks === 'function') await loadTracks();
+    if (typeof state !== 'undefined' && state.trackVisible) state.trackVisible.set(trackId, true);
+    if (typeof flyToTrack === 'function') setTimeout(() => flyToTrack(trackId), 120);
+  } catch (_) {
+    toast('Could not open track', 'err');
+  }
 }
 
 // ── Filters ───────────────────────────────────────────────────────────

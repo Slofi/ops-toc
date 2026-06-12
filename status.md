@@ -79,6 +79,7 @@ journalctl --user -u ops-toc -f
 - Add cleanup/repair tool for orphan `.part` files and corrupt MBTiles
 - Later: OM consumes Map App markers read-only
 - Later: optional "Share via OM" mesh broadcast action for selected markers, separate from local sync
+- Later: **Search pattern generator** — define a polygon area → auto-generate systematic coverage route (grid/spiral/sector) → export as GPX track. Ref: Fields2Cover algorithm (github.com/Fields2Cover/Fields2Cover). Use case: search & rescue, area clearing, field survey. Found 2026-06-09.
 
 ## Changelog
 

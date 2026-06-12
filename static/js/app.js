@@ -253,11 +253,12 @@ const MAP_APP_MANUAL_SECTIONS = [
     tags: "gps track trace record dongle gpx geojson edit share",
     body: [
       "GPS can run through OM proxy or direct serial. Record stores fixed GPS positions as a saved track with distance, timestamps, and altitude when available.",
-      "Saved tracks can be viewed on the map, renamed, exported as GPX or GeoJSON, converted into a drawing, or deleted."
+      "Saved tracks can be viewed on the map, logged into the shared field log, renamed, exported as GPX or GeoJSON, converted into a drawing, or deleted."
     ],
     buttons: [
       ["GPS", "Jump to the current GPS fix."],
       ["Record", "Start or stop a GPS trace."],
+      ["Log", "Create a TRACK log entry from a saved GPS track."],
       ["Edit", "Rename a saved track."],
       ["GPX", "Download one track as a GPX file."],
       ["GeoJSON", "Open one track as GeoJSON for sharing."]
@@ -1289,6 +1290,7 @@ function trackPopup(track) {
       ${statsHtml}
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button class="btn small" onclick="editTrack(${track.id})">Rename</button>
+        <button class="btn small" onclick="createLogFromTrack(${track.id})">Log</button>
         <button class="btn small" onclick="downloadTrack(${track.id}, 'gpx')">GPX</button>
         <button class="btn small" onclick="downloadTrack(${track.id}, 'geojson')">GeoJSON</button>
         <button class="btn small" onclick="trackToDrawing(${track.id})">Drawing</button>
@@ -1332,6 +1334,7 @@ async function loadTracks() {
     state.tracks.set(track.id, track);
     renderTrack(track);
   });
+  if (typeof syncLogTracks === "function") syncLogTracks(tracks);
   renderTrackList();
 }
 
@@ -1383,6 +1386,7 @@ function renderTrackList() {
         </div>
         <div class="row-actions">
           <button class="btn small" onclick="event.stopPropagation();flyToTrack(${track.id})">View</button>
+          <button class="btn small" onclick="event.stopPropagation();createLogFromTrack(${track.id})">Log</button>
           <button class="btn small" onclick="event.stopPropagation();editTrack(${track.id})">Edit</button>
           <button class="btn small" onclick="event.stopPropagation();downloadTrack(${track.id},'gpx')">GPX</button>
         </div>
