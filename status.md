@@ -1,7 +1,7 @@
 type:: project
 status:: active
 tags:: #ops-toc #map-app #leaflet #offline-maps #field-log #cyberdeck
-updated:: 2026-06-09
+updated:: 2026-06-12
 
 # OPS-TOC
 
@@ -16,7 +16,7 @@ updated:: 2026-06-09
 | **Data dir**  | ~/maps/ (DB + MBTiles shared with all CD apps) |
 | **Repo**      | github.com/Slofi/ops-toc |
 | **Git location** | `~/Projects/ops-toc/` (direct — no longer via map-app/) |
-| **Latest pushed app commit** | `GPS recording: outlier rejection + min satellite filter` |
+| **Latest pushed app commit** | `4d33754 Improve offline maps and controls` |
 
 ## Access
 
@@ -82,6 +82,8 @@ journalctl --user -u ops-toc -f
 - Later: **Search pattern generator** — define a polygon area → auto-generate systematic coverage route (grid/spiral/sector) → export as GPX track. Ref: Fields2Cover algorithm (github.com/Fields2Cover/Fields2Cover). Use case: search & rescue, area clearing, field survey. Found 2026-06-09.
 
 ## Changelog
+
+**2026-06-12** — Offline map hub and controls polish pushed to GitHub (`4d33754 Improve offline maps and controls`). OPS-TOC now shows estimated download size for offline map jobs, estimates zoom extensions before queueing, avoids queueing zero-tile extensions, and can rename downloaded MBTiles maps through the UI/API. Zoom extension jobs now repair/copy the existing MBTiles into the `.part` file before adding missing zooms, so editing a downloaded map cannot replace it with only the new zoom range. Missing-tile estimation was optimized to avoid per-tile DB lookups. Completed/cancelled/error download jobs no longer carry large payloads in API responses. App controls now have click/press feedback animations. GPS settings were tidied with an iPhone-style receiver switch. Restart and shutdown buttons now show black service splash screens: `OPS-TOC restarting...` and `OPS-TOC offline. Start it back up from the Dashboard!`. Verified with JS syntax check, Python compile check, `git diff --check`, service restart, empty download queue check, and live extend estimate.
 
 **2026-06-09** — GPS auto-detect: added `detect_gps_port()` which scans `/dev/ttyACM*` and `/dev/ttyUSB*` devices, matches USB product/manufacturer strings against a GPS/GNSS keyword list (u-blox, gnss, gps, beitian, garmin, navilock, holux, globalsat, skytraq, mtk, sirf, navigation), and resolves the match to a `/dev/serial/by-id/*` symlink for persistence. Falls back to the only device present when no keyword matches. New synthetic `"auto"` entry leads the `/api/gps/ports` dropdown (label shows the currently-detected device). `gps_config.json` defaults to `port: "auto"`, so swapping dongles or sockets needs no reconfiguration. Manual override still works (any by-id or raw device path). Verified: u-blox detected automatically, fix true, 12 sats used.
 

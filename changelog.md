@@ -1,5 +1,13 @@
 # OPS-TOC / Map App - Changelog
 
+## 2026-06-14
+
+**[Claude]** - Parallelized tile downloader: replaced single-threaded fetch loop with ThreadPoolExecutor (16 workers, 64-tile batches). Sustained download rate ~52 tiles/s vs 1.57 tiles/s before — ~33x speedup. Worker count configurable via OPS_TOC_TILE_WORKERS env var. Pause/cancel still works between batches. SQLite writes remain on the main thread.
+
+## 2026-06-12
+
+**[Codex]** - Improved OPS-TOC as the central offline map hub and pushed GitHub commit `4d33754 Improve offline maps and controls`. Offline downloads and zoom-extension estimates now include estimated size, extension jobs estimate missing/new tiles before queueing, and zero-tile extensions are skipped. Downloaded MBTiles maps can now be renamed from the UI/API. Extension jobs copy/repair the existing MBTiles into the `.part` file before adding new zooms, preventing edit-zoom jobs from replacing an existing map with only the new zoom range. Missing-tile estimation was optimized, and terminal jobs no longer expose bulky payloads. Added click/press feedback animations across controls, tidied GPS settings with an iPhone-style receiver switch, and added black splash screens for Restart/Shutdown.
+
 ## 2026-06-03
 
 **[Claude]** — Fixed track save dialog losing the track on mobile. Root cause: mobile Chromium backdrop tap fires only the `close` event on `<dialog>`, not `cancel`. The old `onclose` handler only called `cleanup()` without resolving the promise, so the async chain hung and the API save call never ran. Fix: added a `settled` guard and made `onclose` always resolve the promise (to null), regardless of close path. In `stopTrackRecording`, when the dialog resolves to null (dismissed/cancelled), the track now auto-saves with a default name and shows a 6-second banner: "Track auto-saved as '…' — rename from track list". Track is never silently lost. (`c45e38e`)
