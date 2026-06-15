@@ -224,6 +224,10 @@ body {
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 8px 28px rgba(0,0,0,0.55);
+  max-height: 70vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 .layer-group-label {
   font-size: 10px;
