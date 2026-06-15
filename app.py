@@ -12,7 +12,6 @@ import subprocess
 import sqlite3
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
 import urllib.parse
 import urllib.request
 import uuid
@@ -31,8 +30,6 @@ DEFAULT_MBTILES = os.environ.get("MAP_APP_DEFAULT_MBTILES", "")
 PORT = int(os.environ.get("MAP_APP_PORT", "8090"))
 DOWNLOAD_JOB_RETENTION_DAYS = int(os.environ.get("MAP_APP_DOWNLOAD_JOB_RETENTION_DAYS", "7"))
 TILE_DOWNLOAD_RETRIES = int(os.environ.get("MAP_APP_TILE_DOWNLOAD_RETRIES", "2"))
-TILE_FETCH_WORKERS = int(os.environ.get("OPS_TOC_TILE_WORKERS", "16"))
-TILE_FETCH_BATCH = 64
 DEFAULT_TILE_ESTIMATE_BYTES = int(os.environ.get("MAP_APP_TILE_ESTIMATE_BYTES", "12000"))
 
 # TOC log — shared with OM via overmesh_prefs.db
@@ -735,16 +732,6 @@ def fetch_tile_data(url: str) -> bytes:
     return b""
 
 
-def _fetch_tile_task(args: tuple) -> tuple:
-    url_tpl, z, x, y = args
-    url = substitute_tile_url(url_tpl, z, x, y)
-    try:
-        data = fetch_tile_data(url)
-        return (z, x, y, data if data else None)
-    except Exception:
-        return (z, x, y, None)
-
-
 def run_download_job(job_id: str, payload: dict[str, Any]) -> None:
     tiles = payload["tiles"]
     path = Path(payload["path"])
@@ -764,39 +751,39 @@ def run_download_job(job_id: str, payload: dict[str, Any]) -> None:
             tiles_to_fetch = missing_tiles_for_mbtiles(tmp_path, tiles)
             saved = len(tiles) - len(tiles_to_fetch)
             update_job(job_id, done=saved, saved=saved, failed=failed)
-            idx = saved
-            with ThreadPoolExecutor(max_workers=TILE_FETCH_WORKERS) as executor:
-                for batch_start in range(0, len(tiles_to_fetch), TILE_FETCH_BATCH):
-                    with download_condition:
-                        while job_id in _paused_jobs and job_id not in _cancelled_jobs:
-                            if job_id in download_jobs:
-                                download_jobs[job_id]["status"] = "paused"
-                                persist_download_job(download_jobs[job_id])
-                            download_condition.wait(timeout=1)
-                        if job_id in download_jobs and download_jobs[job_id].get("status") == "paused":
-                            download_jobs[job_id]["status"] = "running"
+            for idx, (z, x, y) in enumerate(tiles_to_fetch, start=saved + 1):
+                with download_condition:
+                    while job_id in _paused_jobs and job_id not in _cancelled_jobs:
+                        if job_id in download_jobs:
+                            download_jobs[job_id]["status"] = "paused"
                             persist_download_job(download_jobs[job_id])
-                    if job_id in _cancelled_jobs:
-                        conn.commit()
-                        tmp_path.unlink(missing_ok=True)
-                        _cancelled_jobs.discard(job_id)
-                        update_job(job_id, status="cancelled", finished_at=now_ts())
-                        return
-                    batch = tiles_to_fetch[batch_start:batch_start + TILE_FETCH_BATCH]
-                    fetch_args = [(payload["url"], z, x, y) for z, x, y in batch]
-                    for z, x, y, data in executor.map(_fetch_tile_task, fetch_args):
-                        idx += 1
-                        if data:
-                            y_tms = (2**z - 1) - y
-                            conn.execute(
-                                "INSERT OR REPLACE INTO tiles (zoom_level,tile_column,tile_row,tile_data) VALUES (?,?,?,?)",
-                                (z, x, y_tms, sqlite3.Binary(data)),
-                            )
-                            saved += 1
-                        else:
-                            failed += 1
+                        download_condition.wait(timeout=1)
+                    if job_id in download_jobs and download_jobs[job_id].get("status") == "paused":
+                        download_jobs[job_id]["status"] = "running"
+                        persist_download_job(download_jobs[job_id])
+                url = substitute_tile_url(payload["url"], z, x, y)
+                try:
+                    data = fetch_tile_data(url)
+                    if not data:
+                        failed += 1
+                    else:
+                        y_tms = (2**z - 1) - y
+                        conn.execute(
+                            "INSERT OR REPLACE INTO tiles (zoom_level,tile_column,tile_row,tile_data) VALUES (?,?,?,?)",
+                            (z, x, y_tms, sqlite3.Binary(data)),
+                        )
+                        saved += 1
+                except Exception:
+                    failed += 1
+                if idx % 25 == 0:
                     conn.commit()
-                    update_job(job_id, done=idx, saved=saved, failed=failed)
+                update_job(job_id, done=idx, saved=saved, failed=failed)
+                if job_id in _cancelled_jobs:
+                    conn.commit()
+                    tmp_path.unlink(missing_ok=True)
+                    _cancelled_jobs.discard(job_id)
+                    update_job(job_id, status="cancelled", finished_at=now_ts())
+                    return
             conn.commit()
         tmp_path.replace(path)
         update_job(job_id, status="done", done=len(tiles), saved=saved, failed=failed, path=str(path), finished_at=now_ts())

@@ -1836,12 +1836,14 @@ a.menu-item {
 }
 @media (max-width: 1024px) {
   #tools-compact-wrap { display: flex; }
+  .brand-text,
   #markers-wrap,
   #sep-tools,
   #measure-btn,
   #draw-line-btn,
   #draw-poly-btn,
+  #gps-btn,
   #track-record-btn { display: none !important; }
-  #search-input { width: min(160px, 20vw); }
+  #search-input { width: min(160px, 18vw); }
   #search-form { min-width: 0; }
 }

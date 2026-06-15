@@ -16,7 +16,7 @@ updated:: 2026-06-12
 | **Data dir**  | ~/maps/ (DB + MBTiles shared with all CD apps) |
 | **Repo**      | github.com/Slofi/ops-toc |
 | **Git location** | `~/Projects/ops-toc/` (direct — no longer via map-app/) |
-| **Latest pushed app commit** | `4d33754 Improve offline maps and controls` |
+| **Latest pushed app commit** | `af00804 Speed up tile downloads with parallel workers` |
 
 ## Access
 
@@ -69,6 +69,8 @@ journalctl --user -u ops-toc -f
 
 ## Pending
 
+- **MapTiler Topo offline — Slovenia z9–16:** Subscribe to MT Flex ($25/month), open OPS-TOC on CD, confirm MapTiler API key is set (Settings → Keys), start MT Topo z9–16 download for Slovenia. ~899k tiles, ~$65 total ($25 base + ~$40 extra at $0.10/1000). Should finish in a few hours with 16-worker downloader. Copy `.mbtiles` to HD via rsync when done. Cancel Flex subscription after. File lands at `~/maps/mbtiles/` — works immediately with mbtileserver on both CD and HD.
+
 - **HD responsive UI** — CSS media query adaptation for small screens (≤600px). Compact toolbar, touch-optimized LOG composer, map-first layout with LOG/SOP as slide-up panels. One codebase, adapts automatically. Implement once HD screen arrives and real hardware can be tested.
 - Decide whether to support PMTiles in addition to MBTiles
 - Add KML import/export
@@ -82,6 +84,8 @@ journalctl --user -u ops-toc -f
 - Later: **Search pattern generator** — define a polygon area → auto-generate systematic coverage route (grid/spiral/sector) → export as GPX track. Ref: Fields2Cover algorithm (github.com/Fields2Cover/Fields2Cover). Use case: search & rescue, area clearing, field survey. Found 2026-06-09.
 
 ## Changelog
+
+**2026-06-14** — Parallelized tile downloader (16 workers, 64-tile batches, ~33× speedup: 1.57 → ~52 tiles/s). `af00804`.
 
 **2026-06-12** — Offline map hub and controls polish pushed to GitHub (`4d33754 Improve offline maps and controls`). OPS-TOC now shows estimated download size for offline map jobs, estimates zoom extensions before queueing, avoids queueing zero-tile extensions, and can rename downloaded MBTiles maps through the UI/API. Zoom extension jobs now repair/copy the existing MBTiles into the `.part` file before adding missing zooms, so editing a downloaded map cannot replace it with only the new zoom range. Missing-tile estimation was optimized to avoid per-tile DB lookups. Completed/cancelled/error download jobs no longer carry large payloads in API responses. App controls now have click/press feedback animations. GPS settings were tidied with an iPhone-style receiver switch. Restart and shutdown buttons now show black service splash screens: `OPS-TOC restarting...` and `OPS-TOC offline. Start it back up from the Dashboard!`. Verified with JS syntax check, Python compile check, `git diff --check`, service restart, empty download queue check, and live extend estimate.
 

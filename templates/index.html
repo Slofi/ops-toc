@@ -15,7 +15,7 @@
     </div>
   </div>
   <header id="toolbar">
-    <div class="brand"><span class="brand-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><defs><clipPath id="bci-cb"><polygon points="0,0 19,0 0,19"/></clipPath><clipPath id="bci-mp"><polygon points="20,1 20,20 1,20"/></clipPath></defs><g clip-path="url(#bci-cb)"><rect x="1.5" y="4.5" width="10.5" height="13" rx="1.5" stroke-width="1.3"/><rect x="4.5" y="2.5" width="4.5" height="3.5" rx="1.2" stroke-width="1.1"/><line x1="3.5" y1="9.5" x2="10.5" y2="9.5" stroke-width="1"/><line x1="3.5" y1="12.5" x2="10.5" y2="12.5" stroke-width="1"/></g><g clip-path="url(#bci-mp)"><circle cx="14" cy="10" r="3" stroke-width="1.3"/><circle cx="14" cy="10" r="1.2" fill="currentColor" stroke="none"/><line x1="14" y1="13" x2="14" y2="17.5" stroke-width="1.3"/></g></svg></span><span>OPS-TOC</span></div>
+    <div class="brand"><span class="brand-icon"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" width="17" height="17" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><defs><clipPath id="bci-cb"><polygon points="0,0 19,0 0,19"/></clipPath><clipPath id="bci-mp"><polygon points="20,1 20,20 1,20"/></clipPath></defs><g clip-path="url(#bci-cb)"><rect x="1.5" y="4.5" width="10.5" height="13" rx="1.5" stroke-width="1.3"/><rect x="4.5" y="2.5" width="4.5" height="3.5" rx="1.2" stroke-width="1.1"/><line x1="3.5" y1="9.5" x2="10.5" y2="9.5" stroke-width="1"/><line x1="3.5" y1="12.5" x2="10.5" y2="12.5" stroke-width="1"/></g><g clip-path="url(#bci-mp)"><circle cx="14" cy="10" r="3" stroke-width="1.3"/><circle cx="14" cy="10" r="1.2" fill="currentColor" stroke="none"/><line x1="14" y1="13" x2="14" y2="17.5" stroke-width="1.3"/></g></svg></span><span class="brand-text">OPS-TOC</span></div>
 
     <!-- Main tabs — always visible -->
     <div class="main-tabs">
@@ -38,6 +38,7 @@
           <button class="menu-item" onclick="el('draw-line-btn').click();closeToolsCompact()">Draw Line</button>
           <button class="menu-item" onclick="el('draw-poly-btn').click();closeToolsCompact()">Draw Area</button>
           <div class="menu-sep"></div>
+          <button class="menu-item" onclick="gpsGoTo();closeToolsCompact()">⊙ GPS</button>
           <button class="menu-item" onclick="el('track-record-btn').click();closeToolsCompact()">Track</button>
         </div>
       </div>
