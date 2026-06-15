@@ -2110,6 +2110,14 @@ def _init_toc_db() -> None:
             category TEXT NOT NULL DEFAULT 'NOTE',
             body     TEXT NOT NULL
         )""")
+        # Add uuid column if missing (migration for existing installs)
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(toc_log)")}
+        if "uuid" not in cols:
+            conn.execute("ALTER TABLE toc_log ADD COLUMN uuid TEXT")
+        # Backfill any rows that lack a uuid
+        rows = conn.execute("SELECT id FROM toc_log WHERE uuid IS NULL").fetchall()
+        for r in rows:
+            conn.execute("UPDATE toc_log SET uuid=? WHERE id=?", (str(uuid.uuid4()), r[0]))
 
 
 def _norm_log_cat(v: Any) -> str:
@@ -2130,7 +2138,7 @@ def _norm_log_ts(v: Any) -> int:
 
 
 def _toc_row(r: sqlite3.Row) -> dict:
-    return {"id": r["id"], "ts": r["ts"], "category": r["category"], "body": r["body"]}
+    return {"id": r["id"], "uuid": r["uuid"], "ts": r["ts"], "category": r["category"], "body": r["body"]}
 
 
 def _toc_annotate(e: dict) -> dict:
@@ -2157,7 +2165,7 @@ def api_log_entries():
     miss   = request.args.get("mission", "")
     search = request.args.get("search", "")
     try:
-        limit = min(int(request.args.get("limit", 500)), 2000)
+        limit = min(int(request.args.get("limit", 500)), 10000)
     except (ValueError, TypeError):
         limit = 500
     where = []
@@ -2172,7 +2180,7 @@ def api_log_entries():
     if search:
         where.append("LOWER(body) LIKE ?")
         params.append(f"%{search.lower()}%")
-    sql = "SELECT id,ts,category,body FROM toc_log"
+    sql = "SELECT id,uuid,ts,category,body FROM toc_log"
     if where:
         sql += " WHERE " + " AND ".join(where)
     sql += " ORDER BY ts DESC LIMIT ?"
@@ -2196,10 +2204,11 @@ def api_log_entries_add():
         return jsonify({"error": "Body required"}), 400
     cat = _norm_log_cat(d.get("category"))
     ts  = _norm_log_ts(d.get("ts"))
+    uid = str(uuid.uuid4())
     with get_toc_db() as conn:
-        cur = conn.execute("INSERT INTO toc_log (ts,category,body) VALUES (?,?,?)", (ts, cat, body))
+        cur = conn.execute("INSERT INTO toc_log (ts,category,body,uuid) VALUES (?,?,?,?)", (ts, cat, body, uid))
         eid = cur.lastrowid
-    return jsonify({"ok": True, **_toc_annotate({"id": eid, "ts": ts, "category": cat, "body": body})})
+    return jsonify({"ok": True, **_toc_annotate({"id": eid, "uuid": uid, "ts": ts, "category": cat, "body": body})})
 
 
 @app.route("/api/log/entries/<int:eid>", methods=["PUT", "PATCH"])
@@ -2355,10 +2364,48 @@ def api_log_import():
         return jsonify({"error": "No importable entries found"}), 400
     with get_toc_db() as conn:
         for e in entries:
-            conn.execute("INSERT INTO toc_log (ts,category,body) VALUES (?,?,?)",
-                         (e["ts"], e["category"], e["body"]))
+            uid = str(uuid.uuid4())
+            conn.execute("INSERT INTO toc_log (ts,category,body,uuid) VALUES (?,?,?,?)",
+                         (e["ts"], e["category"], e["body"], uid))
     return jsonify({"ok": True, "imported": len(entries)})
 
+
+@app.route("/api/log/sync", methods=["POST"])
+def api_log_sync():
+    """Bidirectional append-only sync. One round-trip:
+    Caller sends: known_uuids (list) + entries (list of dicts with uuid/ts/category/body).
+    We import any entries we don't have, return any entries the caller is missing."""
+    d = request.get_json(silent=True) or {}
+    their_uuids = set(d.get("known_uuids") or [])
+    their_entries = d.get("entries") or []
+
+    imported = 0
+    with get_toc_db() as conn:
+        our_uuids = {r[0] for r in conn.execute("SELECT uuid FROM toc_log WHERE uuid IS NOT NULL")}
+        for e in their_entries:
+            uid = (e.get("uuid") or "").strip()
+            if not uid or uid in our_uuids:
+                continue
+            ts  = _norm_log_ts(e.get("ts"))
+            cat = _norm_log_cat(e.get("category"))
+            body = (e.get("body") or "").strip()
+            if not body:
+                continue
+            conn.execute("INSERT INTO toc_log (ts,category,body,uuid) VALUES (?,?,?,?)", (ts, cat, body, uid))
+            our_uuids.add(uid)
+            imported += 1
+
+        missing_uuids = our_uuids - their_uuids
+        send_rows = conn.execute(
+            f"SELECT id,uuid,ts,category,body FROM toc_log WHERE uuid IN ({','.join('?'*len(missing_uuids))})",
+            list(missing_uuids)
+        ).fetchall() if missing_uuids else []
+
+    return jsonify({
+        "ok": True,
+        "imported": imported,
+        "entries": [_toc_row(r) for r in send_rows],
+    })
 
 
 @app.route("/api/downloads/<job_id>/cancel", methods=["POST"])

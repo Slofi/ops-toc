@@ -2399,6 +2399,47 @@ async function stopApp() {
   }
 }
 
+async function runFieldSync() {
+  const btn = el("sync-now-btn");
+  const statusEl = el("sync-status");
+  const baseUrl = (el("sync-base-url")?.value || "").replace(/\/$/, "").trim();
+  if (!baseUrl) { if (statusEl) statusEl.textContent = "Enter a base URL first."; return; }
+  if (btn) btn.disabled = true;
+  if (statusEl) statusEl.textContent = "Fetching local entries...";
+  try {
+    // entries endpoint returns a plain array
+    const local = await api("/api/log/entries?limit=9999");
+    const allLocal = Array.isArray(local) ? local : [];
+    const entries = allLocal.map(e => ({
+      uuid: e.uuid, ts: e.ts, category: e.category, body: e.body,
+    })).filter(e => e.uuid);
+    const knownUuids = entries.map(e => e.uuid);
+    if (statusEl) statusEl.textContent = `Syncing ${entries.length} local entries with ${baseUrl}...`;
+    const resp = await fetch(`${baseUrl}/api/log/sync`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ known_uuids: knownUuids, entries }),
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    if (!data.ok) throw new Error(data.error || "Sync failed");
+    const received = (data.entries || []).length;
+    // Import entries received from base into local DB
+    if (received > 0) {
+      await api("/api/log/sync", {
+        method: "POST",
+        body: JSON.stringify({ known_uuids: knownUuids, entries: data.entries }),
+      });
+    }
+    if (statusEl) statusEl.textContent = `Done — sent ${data.imported ?? 0} to base, received ${received} from base.`;
+    if (received > 0 && typeof loadEntries === "function") loadEntries();
+  } catch (err) {
+    if (statusEl) statusEl.textContent = `Sync failed: ${err.message}`;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 function hideSearchResults() {
   const box = el("search-results");
   box.hidden = true;
@@ -2588,6 +2629,7 @@ function bindUi() {
       searchOfflineRegions();
     }
   });
+  bindClick("sync-now-btn", runFieldSync);
   bindClick("check-update-btn", () => loadVersionStatus(true));
   bindClick("update-app-btn", updateApp);
   bindClick("restart-app-btn", restartApp);
