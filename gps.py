@@ -12,6 +12,7 @@ falls back to direct serial when OM becomes unreachable.
 
 Settings stored in gps_config.json next to the app.
 """
+from __future__ import annotations
 import json
 import logging
 import threading
