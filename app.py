@@ -413,9 +413,16 @@ def service_action_soon(action: str) -> None:
 
 
 def run_git(args: list[str], timeout: int = 20) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    key = Path.home() / ".ssh" / "id_ed25519"
+    if key.exists():
+        env["GIT_SSH_COMMAND"] = f"ssh -i {key} -o BatchMode=yes -o StrictHostKeyChecking=no"
     return subprocess.run(
         ["git", *args],
         cwd=APP_ROOT,
+        env=env,
+        stdin=subprocess.DEVNULL,
         check=False,
         text=True,
         stdout=subprocess.PIPE,
