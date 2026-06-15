@@ -27,6 +27,20 @@
 
     <!-- Map-only tools — hidden on LOG / MISSIONS tabs -->
     <div id="map-tools">
+      <!-- Compact tools dropdown — small screens only (≤1024px) -->
+      <div id="tools-compact-wrap">
+        <button class="btn" id="tools-compact-btn" onclick="toggleToolsCompact(event)">Tools ▾</button>
+        <div id="tools-compact-menu" hidden>
+          <button class="menu-item" onclick="el('markers-btn').click();closeToolsCompact()">Marker List</button>
+          <button class="menu-item" onclick="el('add-marker-btn').click();closeToolsCompact()">Add Marker</button>
+          <div class="menu-sep"></div>
+          <button class="menu-item" onclick="el('measure-btn').click();closeToolsCompact()">Ruler</button>
+          <button class="menu-item" onclick="el('draw-line-btn').click();closeToolsCompact()">Draw Line</button>
+          <button class="menu-item" onclick="el('draw-poly-btn').click();closeToolsCompact()">Draw Area</button>
+          <div class="menu-sep"></div>
+          <button class="menu-item" onclick="el('track-record-btn').click();closeToolsCompact()">Track</button>
+        </div>
+      </div>
       <div id="markers-wrap">
         <button class="btn" id="markers-menu-btn" onclick="toggleMarkersMenu(event)">Markers ▾</button>
         <div id="markers-menu" hidden>
@@ -34,7 +48,7 @@
           <button class="menu-item" id="add-marker-btn">Add Marker</button>
         </div>
       </div>
-      <span class="sep"></span>
+      <span class="sep" id="sep-tools"></span>
       <button class="btn" id="measure-btn">Ruler</button>
       <button class="btn" id="draw-line-btn">Draw Line</button>
       <button class="btn" id="draw-poly-btn">Draw Area</button>

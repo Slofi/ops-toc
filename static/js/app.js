@@ -2003,6 +2003,16 @@ function toggleMarkersMenu(event) {
   setMarkersMenuOpen(el("markers-menu")?.hidden ?? true);
 }
 
+function closeToolsCompact() {
+  const m = el("tools-compact-menu");
+  if (m) m.hidden = true;
+}
+function toggleToolsCompact(event) {
+  event?.stopPropagation();
+  const m = el("tools-compact-menu");
+  if (m) m.hidden = !m.hidden;
+}
+
 function setHamburgerOpen(open) {
   const menu = el("hamburger-menu");
   const button = el("settings-btn");
@@ -2602,6 +2612,7 @@ function bindUi() {
     if (!el("menu-wrap")?.contains(event.target)) setHamburgerOpen(false);
     if (!el("layer-wrap")?.contains(event.target)) setLayersPanelOpen(false);
     if (!el("markers-wrap")?.contains(event.target)) setMarkersMenuOpen(false);
+    if (!el("tools-compact-wrap")?.contains(event.target)) closeToolsCompact();
   });
 }
 

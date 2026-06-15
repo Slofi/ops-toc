@@ -1816,3 +1816,32 @@ a.menu-item {
   display: flex;
   align-items: center;
 }
+
+/* ── Compact toolbar — HD 5" screen (≤1024px wide) ── */
+#tools-compact-wrap {
+  display: none;
+  position: relative;
+}
+#tools-compact-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 800;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  min-width: 150px;
+  overflow: hidden;
+}
+@media (max-width: 1024px) {
+  #tools-compact-wrap { display: flex; }
+  #markers-wrap,
+  #sep-tools,
+  #measure-btn,
+  #draw-line-btn,
+  #draw-poly-btn,
+  #track-record-btn { display: none !important; }
+  #search-input { width: min(160px, 20vw); }
+  #search-form { min-width: 0; }
+}
