@@ -812,10 +812,21 @@
 
       <section class="settings-section" id="sync-section">
         <h3>Field Sync</h3>
-        <p class="dialog-note">Sync TOC log entries with another device running OPS-TOC (e.g. CD base station). Append-only — no entries are deleted or overwritten.</p>
-        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
-          <label style="font-size:12px;color:var(--muted);white-space:nowrap">Base URL</label>
-          <input id="sync-base-url" type="text" value="http://10.42.0.1:8090"
+        <p class="dialog-note">Sync TOC log entries with another device running OPS-TOC. Append-only — no entries are deleted or overwritten.</p>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
+          <label style="font-size:12px;color:var(--muted);white-space:nowrap">Target</label>
+          <select id="sync-target-select" onchange="syncTargetChanged()"
+            style="flex:1;min-width:180px;background:var(--bg-input,#1e293b);color:var(--text,#e2e8f0);border:1px solid var(--border,#334155);border-radius:5px;padding:5px 8px;font-size:12px">
+            <option value="http://10.42.0.1:8090">CD — via hotspot (10.42.0.1)</option>
+            <option value="http://100.97.104.107:8090">CD — via Tailscale (100.97.104.107)</option>
+            <option value="http://100.123.67.117:8090">HD — via Tailscale (100.123.67.117)</option>
+            <option value="http://100.66.43.17:8090">TestBox — via Tailscale (100.66.43.17)</option>
+            <option value="custom">Custom URL…</option>
+          </select>
+        </div>
+        <div id="sync-custom-url-wrap" style="display:none;gap:8px;align-items:center;margin-bottom:6px">
+          <label style="font-size:12px;color:var(--muted);white-space:nowrap">URL</label>
+          <input id="sync-base-url" type="text" placeholder="http://host:8090"
             style="flex:1;min-width:180px;background:var(--bg-input,#1e293b);color:var(--text,#e2e8f0);border:1px solid var(--border,#334155);border-radius:5px;padding:5px 8px;font-size:12px;font-family:monospace">
         </div>
         <div id="sync-status" style="font-size:12px;color:var(--muted);min-height:18px;margin-bottom:8px"></div>

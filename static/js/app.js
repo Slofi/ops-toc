@@ -2399,11 +2399,25 @@ async function stopApp() {
   }
 }
 
+function syncTargetChanged() {
+  const sel = el("sync-target-select");
+  const wrap = el("sync-custom-url-wrap");
+  if (!sel || !wrap) return;
+  wrap.style.display = sel.value === "custom" ? "flex" : "none";
+}
+
+function _syncBaseUrl() {
+  const sel = el("sync-target-select");
+  if (!sel) return "";
+  if (sel.value === "custom") return (el("sync-base-url")?.value || "").trim().replace(/\/$/, "");
+  return sel.value;
+}
+
 async function runFieldSync() {
   const btn = el("sync-now-btn");
   const statusEl = el("sync-status");
-  const baseUrl = (el("sync-base-url")?.value || "").replace(/\/$/, "").trim();
-  if (!baseUrl) { if (statusEl) statusEl.textContent = "Enter a base URL first."; return; }
+  const baseUrl = _syncBaseUrl();
+  if (!baseUrl) { if (statusEl) statusEl.textContent = "Select a target first."; return; }
   if (btn) btn.disabled = true;
   if (statusEl) statusEl.textContent = "Fetching local entries...";
   try {
