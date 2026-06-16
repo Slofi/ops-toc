@@ -1823,9 +1823,9 @@ a.menu-item {
   align-items: center;
 }
 
-/* ── Compact toolbar — HD 5" screen (≤1024px wide) ── */
+/* ── Compact toolbar — draw tools always in dropdown; full collapse on ≤1024px ── */
 #tools-compact-wrap {
-  display: none;
+  display: flex;
   position: relative;
 }
 #tools-compact-menu {
@@ -1840,14 +1840,14 @@ a.menu-item {
   min-width: 150px;
   overflow: hidden;
 }
+/* Draw tools always hidden as individual buttons — use Tools ▾ */
+#sep-tools,
+#measure-btn,
+#draw-line-btn,
+#draw-poly-btn { display: none !important; }
 @media (max-width: 1024px) {
-  #tools-compact-wrap { display: flex; }
   .brand-text,
   #markers-wrap,
-  #sep-tools,
-  #measure-btn,
-  #draw-line-btn,
-  #draw-poly-btn,
   #gps-btn,
   #track-record-btn { display: none !important; }
   #search-input { width: min(160px, 18vw); }
