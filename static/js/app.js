@@ -3220,7 +3220,7 @@ async function gpsScanPorts() {
 function gpsSourceChanged() {
   const v   = (el("gps-source-select") || {}).value;
   const row = el("gps-port-row");
-  if (row) row.style.display = (v === "direct") ? "" : "none";
+  if (row) row.style.display = (v === "direct") ? "block" : "none";
 }
 
 async function gpsSaveSettings() {
