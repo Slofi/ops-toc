@@ -128,8 +128,9 @@ const FIELDS = {
 let _entries       = [];
 let _editId        = null;
 let _catFilter     = 'ALL';
-let _missionFilter = '';
-let _searchQuery   = '';
+let _missionFilter     = '';
+let _missionFilterMode = ''; // '' | 'include' | 'exclude'
+let _searchQuery       = '';
 let _missions      = [];
 let _attachedGPS   = null;
 let _attachedTrack = null;
@@ -542,7 +543,13 @@ async function loadEntries() {
 function renderEntries() {
   let list = _entries;
   if (_catFilter && _catFilter !== 'ALL') list = list.filter(e => e.category === _catFilter);
-  if (_missionFilter) list = list.filter(e => (e.mission || '').toLowerCase() === _missionFilter.toLowerCase());
+  if (_missionFilter) {
+    if (_missionFilterMode === 'exclude') {
+      list = list.filter(e => (e.mission || '').toLowerCase() !== _missionFilter.toLowerCase());
+    } else {
+      list = list.filter(e => (e.mission || '').toLowerCase() === _missionFilter.toLowerCase());
+    }
+  }
   if (_searchQuery) {
     const q = _searchQuery.toLowerCase();
     list = list.filter(e => e.body.toLowerCase().includes(q));
@@ -632,13 +639,28 @@ function setCatFilter(cat, el) {
   renderEntries();
 }
 
+function cycleMissionFilter(name) {
+  if (_missionFilter !== name) {
+    _missionFilter = name;
+    _missionFilterMode = 'include';
+  } else if (_missionFilterMode === 'include') {
+    _missionFilterMode = 'exclude';
+  } else {
+    _missionFilter = '';
+    _missionFilterMode = '';
+  }
+  const sel = document.getElementById('mission-filter');
+  if (sel) sel.value = _missionFilter;
+  renderMissionsStrip();
+  renderEntries();
+}
+
 function setMissionFilter(val) {
   _missionFilter = val;
+  _missionFilterMode = val ? 'include' : '';
   const sel = document.getElementById('mission-filter');
   if (sel) sel.value = val;
-  document.querySelectorAll('.mission-chip').forEach(c => {
-    c.classList.toggle('active', c.dataset.mission === val);
-  });
+  renderMissionsStrip();
   renderEntries();
 }
 
@@ -663,15 +685,20 @@ function renderMissionsStrip() {
   const strip = document.getElementById('missions-strip');
   if (!strip) return;
   if (!_missions.length) { strip.innerHTML = ''; return; }
-  strip.innerHTML = _missions.map(m =>
-    `<span class="mission-chip${_missionFilter===m.name?' active':''}"
+  strip.innerHTML = _missions.map(m => {
+    const isInclude = _missionFilter === m.name && _missionFilterMode === 'include';
+    const isExclude = _missionFilter === m.name && _missionFilterMode === 'exclude';
+    const cls = isInclude ? ' active' : isExclude ? ' exclude' : '';
+    const tip = isInclude ? 'Click to exclude this mission' : isExclude ? 'Click to clear filter' : 'Filter by mission';
+    return `<span class="mission-chip${cls}"
            data-mission="${escAttr(m.name)}"
-           onclick="setMissionFilter('${jsAttr(m.name)}'===_missionFilter?'':'${jsAttr(m.name)}')"
-           >${esc(m.name)}<span class="mc-count">${m.count}</span
+           onclick="cycleMissionFilter('${jsAttr(m.name)}')"
+           title="${tip}"
+           ><span class="mc-label">${esc(m.name)}</span><span class="mc-count">${m.count}</span
            ><button class="mc-btn" title="Rename" onclick="event.stopPropagation();renameMission('${jsAttr(m.name)}')">✎</button
            ><button class="mc-btn" title="Remove mission tag" onclick="event.stopPropagation();deleteMission('${jsAttr(m.name)}')">×</button
-    ></span>`
-  ).join('');
+    ></span>`;
+  }).join('');
 }
 
 function renderMissionManager() {

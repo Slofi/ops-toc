@@ -1305,6 +1305,8 @@ textarea { resize: vertical; }
 }
 .mission-chip:hover { color: var(--text); border-color: var(--accent-mid); }
 .mission-chip.active { background: var(--accent-bg); border-color: var(--accent-mid); color: var(--accent); }
+.mission-chip.exclude { background: rgba(192,57,43,0.08); border-color: #c0392b; color: #c0392b; opacity: 0.85; }
+.mission-chip.exclude .mc-label { text-decoration: line-through; }
 .mc-count {
   background: var(--bg);
   border-radius: 999px;
