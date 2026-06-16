@@ -1738,10 +1738,11 @@ textarea { resize: vertical; }
   box-shadow: 0 4px 22px rgba(0,0,0,0.55);
   display: flex;
   flex-direction: column;
-  resize: both;
   overflow: hidden;
   min-width: 220px;
   min-height: 200px;
+  touch-action: none;
+  user-select: none;
 }
 #track-chart-panel[hidden] { display: none !important; }
 .chart-panel-head {
@@ -1751,6 +1752,28 @@ textarea { resize: vertical; }
   gap: 8px;
   margin-bottom: 8px;
   flex-shrink: 0;
+  cursor: grab;
+}
+.chart-panel-head:active { cursor: grabbing; }
+.chart-resize-grip {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 20px;
+  height: 20px;
+  cursor: se-resize;
+  touch-action: none;
+}
+.chart-resize-grip::after {
+  content: '';
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid rgba(255,255,255,0.28);
+  border-bottom: 2px solid rgba(255,255,255,0.28);
+  border-radius: 0 0 3px 0;
 }
 #track-chart-title {
   font-size: 11px;

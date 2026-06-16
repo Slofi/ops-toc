@@ -1110,6 +1110,59 @@ function makeTrackEndIcon(label, bg) {
 const _CCW = 316, _CCH = 95; // viewBox width/height
 const _CPL = 34, _CPR = 4, _CPT = 5, _CPB = 8; // padding: left (y-axis labels), right, top, bottom
 
+let _chartInteractInit = false;
+function _initTrackChartInteractions() {
+  if (_chartInteractInit) return;
+  _chartInteractInit = true;
+  const panel = el('track-chart-panel');
+  const head  = panel && panel.querySelector('.chart-panel-head');
+  const grip  = panel && panel.querySelector('.chart-resize-grip');
+  if (!panel || !head) return;
+
+  // Drag to move via header
+  head.addEventListener('pointerdown', e => {
+    if (e.target.closest('button')) return;
+    e.preventDefault();
+    head.setPointerCapture(e.pointerId);
+    const wrap  = el('map-wrap');
+    const wRect = wrap.getBoundingClientRect();
+    const pRect = panel.getBoundingClientRect();
+    panel.style.bottom = 'auto';
+    panel.style.top    = (pRect.top  - wRect.top)  + 'px';
+    panel.style.left   = (pRect.left - wRect.left) + 'px';
+    const startX = e.clientX, startY = e.clientY;
+    const startL = pRect.left - wRect.left;
+    const startT = pRect.top  - wRect.top;
+    head.onpointermove = e => {
+      const maxL = wRect.width  - panel.offsetWidth;
+      const maxT = wRect.height - panel.offsetHeight;
+      panel.style.left = Math.max(0, Math.min(maxL, startL + e.clientX - startX)) + 'px';
+      panel.style.top  = Math.max(0, Math.min(maxT, startT + e.clientY - startY)) + 'px';
+    };
+    head.onpointerup = head.onpointercancel = () => {
+      head.onpointermove = head.onpointerup = head.onpointercancel = null;
+    };
+  });
+
+  // Drag to resize via grip
+  if (grip) {
+    grip.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      e.stopPropagation();
+      grip.setPointerCapture(e.pointerId);
+      const startX = e.clientX, startY = e.clientY;
+      const startW = panel.offsetWidth, startH = panel.offsetHeight;
+      grip.onpointermove = e => {
+        panel.style.width  = Math.max(220, startW + e.clientX - startX) + 'px';
+        panel.style.height = Math.max(200, startH + e.clientY - startY) + 'px';
+      };
+      grip.onpointerup = grip.onpointercancel = () => {
+        grip.onpointermove = grip.onpointerup = grip.onpointercancel = null;
+      };
+    });
+  }
+}
+
 function makeChartSvg(values, color) {
   const cw = _CCW, ch = _CCH, pl = _CPL, pr = _CPR, pt = _CPT, pb = _CPB;
   if (!values || values.length < 2) return '';
@@ -1301,14 +1354,18 @@ function showTrackChart(track) {
     if (hasAlt)   _bindChartScrub(body.querySelector('[data-chart="alt"]'),   altData,   'alt',   null);
   }
   panel.hidden = false;
+  _initTrackChartInteractions();
 }
 
 function hideTrackChart() {
   const panel = el('track-chart-panel');
   if (panel) {
     panel.hidden = true;
-    panel.style.width = '';
+    panel.style.width  = '';
     panel.style.height = '';
+    panel.style.top    = '';
+    panel.style.left   = '';
+    panel.style.bottom = '';
   }
   const titleEl = el('track-chart-title');
   if (titleEl) titleEl.textContent = '';
