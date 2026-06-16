@@ -601,6 +601,25 @@
     </form>
   </dialog>
 
+  <dialog id="track-record-dialog">
+    <form method="dialog" id="track-record-form">
+      <h2>Start Track Recording</h2>
+      <div style="margin:18px 0 6px;display:flex;justify-content:space-between;align-items:baseline">
+        <span style="font-size:12px;color:var(--muted)">Precision</span>
+        <span id="rec-interval-label" style="font-size:13px;font-weight:700;color:var(--accent)">10 s</span>
+      </div>
+      <input type="range" id="rec-interval-slider" min="0" max="5" step="1" value="1" style="width:100%;accent-color:var(--accent)">
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-top:4px">
+        <span>High (5 s)</span>
+        <span>Low (5 min)</span>
+      </div>
+      <div class="dialog-actions" style="flex-direction:column;gap:10px;margin-top:24px">
+        <button class="btn primary" type="submit" style="width:100%;padding:14px 0;font-size:16px;font-weight:700;letter-spacing:.03em">▶ Start Recording</button>
+        <button class="btn" id="track-record-cancel-btn" type="button" style="width:100%">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="manual-dialog">
     <form method="dialog" id="manual-form">
       <div class="settings-head">

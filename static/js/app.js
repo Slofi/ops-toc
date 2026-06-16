@@ -219,6 +219,26 @@ function fmtDistance(meters) {
   return `${(meters / 1000).toFixed(meters < 10000 ? 2 : 1)} km`;
 }
 
+function fmtDate(ts) {
+  if (!ts) return "";
+  const d = new Date(ts * 1000);
+  return `${String(d.getDate()).padStart(2,"0")}.${String(d.getMonth()+1).padStart(2,"0")}.${String(d.getFullYear()).slice(-2)}`;
+}
+
+function fmtDateTime(ts) {
+  if (!ts) return "";
+  const d = new Date(ts * 1000);
+  const hh  = String(d.getHours()).padStart(2, "0");
+  const min = String(d.getMinutes()).padStart(2, "0");
+  return `${fmtDate(ts)} ${hh}:${min}`;
+}
+
+function fmtTime(ts) {
+  if (!ts) return "";
+  const d = new Date(ts * 1000);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
 function fmtBytes(bytes) {
   if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
   const units = ["B", "KB", "MB", "GB"];
@@ -999,7 +1019,7 @@ function trackStats(track) {
   }
   const minAlt = alts.length ? Math.min(...alts) : null;
   const maxAlt = alts.length ? Math.max(...alts) : null;
-  return { dist, duration, avgKmh, maxKmh, elevGain, elevLoss, hasAlt: alts.length > 0, minAlt, maxAlt, startTs: pts[0].ts || null };
+  return { dist, duration, avgKmh, maxKmh, elevGain, elevLoss, hasAlt: alts.length > 0, minAlt, maxAlt, startTs: pts[0].ts || null, endTs: pts.at(-1).ts || null };
 }
 
 function trackSegmentColor(ratio) {
@@ -1382,7 +1402,8 @@ function trackPopup(track) {
   _trackCache[track.id] = track;
   const stats = trackStats(track);
   const pts = track.points || [];
-  const startTime = stats?.startTs ? new Date(stats.startTs * 1000).toLocaleString([], {day:"2-digit",month:"2-digit",year:"2-digit",hour:"2-digit",minute:"2-digit"}) : null;
+  const startTime = stats?.startTs ? fmtDateTime(stats.startTs) : null;
+  const endTime   = stats?.endTs   ? (fmtDate(stats.endTs) === fmtDate(stats.startTs) ? fmtTime(stats.endTs) : fmtDateTime(stats.endTs)) : null;
   const statsHtml = stats ? `
     <table style="width:100%;font-size:11px;margin:6px 0 4px;border-collapse:collapse">
       <tr><td style="color:var(--muted);padding:1px 6px 1px 0">Distance</td><td>${fmtDistance(stats.dist)}</td></tr>
@@ -1392,7 +1413,8 @@ function trackPopup(track) {
       ${stats.hasAlt ? `<tr><td style="color:var(--muted);padding:1px 6px 1px 0">Alt range</td><td>${Math.round(stats.minAlt)}–${Math.round(stats.maxAlt)} m</td></tr>
       <tr><td style="color:var(--muted);padding:1px 6px 1px 0">Elev ↑↓</td><td>+${Math.round(stats.elevGain)} / −${Math.round(stats.elevLoss)} m</td></tr>` : ""}
       <tr><td style="color:var(--muted);padding:1px 6px 1px 0">Points</td><td>${pts.length}</td></tr>
-      ${startTime ? `<tr><td style="color:var(--muted);padding:1px 6px 1px 0">Recorded</td><td>${startTime}</td></tr>` : ""}
+      ${startTime ? `<tr><td style="color:var(--muted);padding:1px 6px 1px 0">Start</td><td>${startTime}</td></tr>` : ""}
+      ${endTime   ? `<tr><td style="color:var(--muted);padding:1px 6px 1px 0">Stop</td><td>${endTime}</td></tr>`   : ""}
     </table>
     <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px;align-items:center">
       <span style="font-size:10px;color:var(--muted)">Color:</span>
@@ -1490,7 +1512,7 @@ function renderTrackList() {
     }
     for (const track of folderTracks) {
       const vis = !!state.trackVisible.get(track.id);
-      const dateStr = track.updated_at ? new Date(track.updated_at * 1000).toLocaleDateString([], {day:"2-digit",month:"2-digit",year:"2-digit"}) : "";
+      const dateStr = track.updated_at ? fmtDate(track.updated_at) : "";
       const pts = track.points?.length || 0;
       const distStr = fmtDistance(track.distance_m || 0);
       const tColor = track.color || TRACK_COLOR;
@@ -1709,6 +1731,56 @@ async function discardTrackRecording() {
   setBanner("");
 }
 
+const RECORD_INTERVALS = [5, 10, 30, 60, 120, 300];
+let _recMinInterval = (() => {
+  const saved = parseInt(localStorage.getItem("rec_interval") || "10", 10);
+  return RECORD_INTERVALS.includes(saved) ? saved : 10;
+})();
+
+function setRecInterval(secs) {
+  _recMinInterval = secs;
+  localStorage.setItem("rec_interval", String(secs));
+}
+
+function _intervalLabel(idx) {
+  const s = RECORD_INTERVALS[idx] ?? 10;
+  return s < 60 ? `${s} s` : `${s / 60} min`;
+}
+
+function showTrackRecordDialog() {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (val) => { if (!settled) { settled = true; resolve(val); } };
+    const dialog    = el("track-record-dialog");
+    const form      = el("track-record-form");
+    const slider    = el("rec-interval-slider");
+    const labelEl   = el("rec-interval-label");
+    const cancelBtn = el("track-record-cancel-btn");
+    const curIdx = RECORD_INTERVALS.indexOf(_recMinInterval);
+    slider.value = curIdx >= 0 ? curIdx : 1;
+    labelEl.textContent = _intervalLabel(parseInt(slider.value));
+    slider.oninput = () => { labelEl.textContent = _intervalLabel(parseInt(slider.value)); };
+    const cleanup = () => {
+      form.onsubmit = null;
+      cancelBtn.onclick = null;
+      dialog.oncancel = null;
+      dialog.onclose = null;
+      slider.oninput = null;
+    };
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      setRecInterval(RECORD_INTERVALS[parseInt(slider.value)] ?? 10);
+      cleanup();
+      dialog.close();
+      finish(true);
+    };
+    cancelBtn.onclick = () => { cleanup(); dialog.close(); finish(false); };
+    dialog.oncancel = (e) => { e.preventDefault(); cleanup(); dialog.close(); finish(false); };
+    dialog.onclose  = () => { cleanup(); finish(false); };
+    dialog.showModal();
+  });
+}
+
 function captureGpsPoint() {
   if (!state.recording || !_gpsEnabled || !_gpsState.fix || _gpsState.lat === null || _gpsState.lon === null) return;
   if ((_gpsState.sats || 0) < 4) return;
@@ -1724,7 +1796,7 @@ function captureGpsPoint() {
   if (last) {
     const dist = distanceBetween(last, point);
     const dt = point.ts - (last.ts || 0);
-    if (dist < 3 && dt < 10) return;
+    if (dist < 3 && dt < _recMinInterval) return;
     if (dt > 0 && dist / dt > 100) return;
   }
   state.recording.points.push(point);
@@ -1744,6 +1816,8 @@ async function startTrackRecording() {
     await appAlert("Waiting for a GPS fix before recording.", "Track Recording");
     return;
   }
+  const go = await showTrackRecordDialog();
+  if (!go) return;
   const ts = Math.floor(Date.now() / 1000);
   state.recording = { points: [], started_at: ts, ended_at: ts };
   captureGpsPoint();
@@ -1765,7 +1839,7 @@ async function stopTrackRecording() {
 
   const pts = recording.points.length;
   const dist = fmtDistance(trackDistance(recording.points));
-  const defaultName = `Track ${new Date().toLocaleString()}`;
+  const defaultName = `Track ${fmtDateTime(Math.floor(Date.now() / 1000))}`;
   _trackSaveSelectedColor = TRACK_COLOR;
 
   const result = await showTrackSaveDialog({
@@ -2809,7 +2883,7 @@ async function loadTilesets() {
       return;
     }
     list.innerHTML = local.map((l) => {
-      const date = l.mtime ? new Date(l.mtime * 1000).toLocaleString() : "-";
+      const date = l.mtime ? fmtDateTime(l.mtime) : "-";
       const zoom = `z${l.minzoom}–${l.maxzoom}`;
       const bounds = formatBounds(l.bounds);
       const sub = [l.source_layer_name, zoom, `${Number(l.tile_count || 0).toLocaleString()} tiles`, fmtBytes(l.size), date].filter(Boolean).join(" · ");
