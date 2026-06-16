@@ -1870,7 +1870,6 @@ a.menu-item {
 #draw-poly-btn { display: none !important; }
 @media (max-width: 1024px) {
   .brand-text,
-  #markers-wrap,
   #gps-btn,
   #track-record-btn { display: none !important; }
   #search-input { width: min(160px, 18vw); }

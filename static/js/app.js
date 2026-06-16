@@ -574,7 +574,7 @@ function setBanner(text) {
 
 function setToolButtons(active) {
   for (const id of ["add-marker-btn", "measure-btn", "draw-line-btn", "draw-poly-btn"]) {
-    el(id).classList.toggle("active", active === id);
+    el(id)?.classList.toggle("active", active === id);
   }
   el("undo-point-btn").hidden = !state.tool || !state.toolPoints.length;
   el("finish-tool-btn").hidden = !state.tool || state.toolPoints.length < 2;
