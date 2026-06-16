@@ -153,11 +153,17 @@ def list_ports() -> list:
     Returns both raw /dev/tty* devices and their stable /dev/serial/by-id/*
     symlinks (when present). The by-id paths survive socket swaps and reboots,
     so they're the preferred selection for USB GPS dongles.
+
+    Only USB serial ports (ttyACM*, ttyUSB*) are included — internal ttyS*
+    ports are never GPS dongles and just clutter the list.
     """
     import glob, os
     try:
         import serial.tools.list_ports
-        tty_devices = sorted(p.device for p in serial.tools.list_ports.comports())
+        tty_devices = sorted(
+            p.device for p in serial.tools.list_ports.comports()
+            if p.device.startswith(('/dev/ttyACM', '/dev/ttyUSB'))
+        )
     except Exception:
         tty_devices = sorted(glob.glob('/dev/ttyACM*') + glob.glob('/dev/ttyUSB*'))
 
