@@ -1,11 +1,11 @@
 type:: project
 status:: active
 tags:: #ops-toc #map-app #leaflet #offline-maps #field-log #cyberdeck
-updated:: 2026-06-12
+updated:: 2026-06-18
 
 # OPS-TOC
 
-> OPS-TOC is the Cyberdeck's main map-management and field-operations app. It owns markers, drawings, GPS tracks, offline tile downloads, LOG, MISSIONS, and SOP. Shared tile DB feeds Sonde App, OM, and future apps.
+> OPS-TOC is the Cyberdeck's main map-management and field-operations app. It owns markers, drawings, GPS tracks, offline tile downloads, LOG, MISSIONS, SOP, and CHECKLIST. Shared tile DB feeds Sonde App, OM, and future apps.
 
 ## State
 
@@ -57,7 +57,8 @@ journalctl --user -u ops-toc -f
 ## Current Integration
 
 - OPS-TOC owns all map-specific controls: markers, drawings, GPS tracks, offline downloads, and downloaded-map management.
-- OPS-TOC owns the standalone field workflow: LOG, MISSIONS, and SOP tabs.
+- OPS-TOC owns the standalone field workflow: LOG, MISSIONS, SOP, and CHECKLIST tabs.
+- CHECKLIST is pure frontend state in localStorage key `ops_toc_checklists`. It supports folders/types, multiple editable checklists, progress bars, reset, item reorder, text export, JSON export, and import from JSON/TXT/MD. Markdown task items such as `- [ ] item`, `- [] item`, and `- [x] item` import as checklist rows.
 - LOG/MISSIONS read and write OM's shared `toc_log` table directly in `~/overmesh/overmesh_prefs.db`.
 - OM and OPS-TOC now share the same TOC category set, including `WEATHER`.
 - `log-app.service` / standalone TOC-app is retired, stopped, and disabled.
@@ -84,6 +85,8 @@ journalctl --user -u ops-toc -f
 - Later: **Search pattern generator** — define a polygon area → auto-generate systematic coverage route (grid/spiral/sector) → export as GPX track. Ref: Fields2Cover algorithm (github.com/Fields2Cover/Fields2Cover). Use case: search & rescue, area clearing, field survey. Found 2026-06-09.
 
 ## Changelog
+
+**2026-06-18** — CHECKLIST session update: added the editable CHECKLIST tab after SOP, with localStorage persistence (`ops_toc_checklists`), folders/types, collapsible checklist cards, rename/delete/reset, progress counts/bars, item add/edit/delete/toggle/reorder, text/JSON export, and import from JSON/TXT/MD. Removed the temporary "Load field templates" button and cleaned out the backend `/api/checklists/seed` route, since Import now covers saved/template files. Copied Desktop test checklist files into repo `TEST/` without removing the Desktop originals. Header clock now shows 24h time with seconds and date in `DD.MM.YY`. Settings/App Control UI was enlarged for touch. In-app UI Zoom now has a built-in 1.15x base scale so visible `100%` matches the user's previous `115%`; old saved `115%` is migrated to `100%` once.
 
 **2026-06-16** — Fixed GPS port conflict: OPS-TOC's `gps_config.json` had the NRF52840 (MT node) saved as GPS port instead of the u-blox dongle. Root cause of no-fix was port contention: OM and OPS-TOC both trying to read `/dev/ttyACM2` simultaneously. Fix: disabled OM GPS to release port, changed OPS-TOC config to `port: "auto"` (auto-detects u-blox correctly). Also filtered `list_ports()` in `gps.py` to exclude `ttyS*` internal serial ports (not USB, not GPS). Port dropdown in Settings → GPS is already present (visible when "Direct serial" is selected). Running `fix: true`, 12 sats. Not committed yet.
 

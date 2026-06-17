@@ -23,6 +23,7 @@
       <button class="main-tab" id="tab-btn-missions"  onclick="showTab('missions')">Missions</button>
       <button class="main-tab" id="tab-btn-map"       onclick="showTab('map')">Map</button>
       <button class="main-tab" id="tab-btn-sop"       onclick="showTab('sop')">SOP</button>
+      <button class="main-tab" id="tab-btn-checklist" onclick="showTab('checklist')">Checklist</button>
     </div>
 
     <!-- Map-only tools — hidden on LOG / MISSIONS tabs -->
@@ -70,6 +71,10 @@
 
     <!-- Hamburger + GPS badge — always visible, pinned to right -->
     <div id="menu-wrap">
+      <span class="header-clock" id="header-clock" aria-label="Current date and time">
+        <span class="header-clock-time"></span>
+        <span class="header-clock-date"></span>
+      </span>
       <span class="gps-header-badge">
         <span id="gps-dot" class="gps-dot off"></span>
         <span id="gps-header-text" class="gps-header-text"></span>
@@ -90,6 +95,7 @@
         <button class="menu-item" type="button" data-settings-target="appearance-section">Appearance</button>
         <button class="menu-item" type="button" data-settings-target="app-control-section">App Control</button>
         <button class="menu-item" type="button" id="menu-manual-btn">Manual</button>
+        <button class="menu-item" type="button" id="menu-checklist-export-btn">Export Checklists</button>
         <div class="menu-sep"></div>
         <button class="menu-item" type="button" id="menu-restart-btn">Restart OPS-TOC</button>
         <button class="menu-item danger" type="button" id="menu-shutdown-btn">Shutdown OPS-TOC</button>
@@ -524,6 +530,32 @@
         </div><!-- end sop-sections -->
       </div><!-- end sop-wrap -->
     </div><!-- end tab-sop -->
+
+    <!-- ════════════════════════ CHECKLIST TAB ════ -->
+    <div id="tab-checklist" class="tab-pane">
+      <div id="checklist-wrap">
+        <div class="checklist-page-header">
+          <div>
+            <div class="checklist-page-kicker">OPS-TOC</div>
+            <div class="checklist-page-name">Checklists</div>
+            <div class="checklist-page-sub">Create reusable field lists · tap labels to edit · saved on this device</div>
+          </div>
+          <div class="checklist-page-actions">
+            <button class="btn" id="checklist-export-btn" type="button">Export Text</button>
+            <button class="btn" id="checklist-export-json-btn" type="button">Export JSON</button>
+            <button class="btn" id="checklist-import-btn" type="button">Import</button>
+            <input id="checklist-import-file" type="file" accept=".json,.txt,.md,text/plain,text/markdown,application/json" hidden>
+            <button class="btn primary" id="checklist-new-btn" type="button">+ New Checklist</button>
+          </div>
+        </div>
+
+        <div id="checklist-list" class="checklist-list"></div>
+
+        <div class="checklist-bottom-actions">
+          <button class="btn primary" id="checklist-new-bottom-btn" type="button">+ New Checklist</button>
+        </div>
+      </div>
+    </div><!-- end tab-checklist -->
 
   </main>
 

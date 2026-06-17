@@ -30,6 +30,9 @@ const state = {
 
 const el = (id) => document.getElementById(id);
 const DEFAULT_ACCENT = "#e8b04f";
+const BASE_UI_SCALE = 1.15;
+const DEFAULT_UI_ZOOM = 100;
+const UI_ZOOM_BASE_MIGRATION_KEY = "opsTocUIZoomBaseScale115";
 const TRACK_COLOR = "#e8b04f";
 const TRACK_COLORS = ["#e8b04f","#ef4444","#22c55e","#3b82f6","#a855f7","#f97316","#06b6d4","#ec4899"];
 let _trackSaveSelectedColor = TRACK_COLOR;
@@ -132,20 +135,35 @@ function currentAccentColor() {
 }
 
 function applyUIZoom(pct) {
-  const scale = Math.min(130, Math.max(80, Number(pct) || 100));
-  document.documentElement.style.zoom = (scale / 100).toString();
+  const scale = Math.min(130, Math.max(80, Number(pct) || DEFAULT_UI_ZOOM));
+  document.documentElement.style.zoom = ((scale / 100) * BASE_UI_SCALE).toString();
+}
+
+function savedUIZoom() {
+  const raw = localStorage.getItem("mapAppUIZoom");
+  if (localStorage.getItem(UI_ZOOM_BASE_MIGRATION_KEY) !== "1") {
+    localStorage.setItem(UI_ZOOM_BASE_MIGRATION_KEY, "1");
+    if (raw !== null && Number(raw) === 115) {
+      localStorage.setItem("mapAppUIZoom", String(DEFAULT_UI_ZOOM));
+      return DEFAULT_UI_ZOOM;
+    }
+  }
+  return Number(localStorage.getItem("mapAppUIZoom") || DEFAULT_UI_ZOOM);
 }
 
 function saveZoom() {
-  const pct = Number(el("ui-zoom-input")?.value || 100);
+  const pct = Number(el("ui-zoom-input")?.value || DEFAULT_UI_ZOOM);
   localStorage.setItem("mapAppUIZoom", pct);
   applyUIZoom(pct);
 }
 
 function resetZoom() {
   localStorage.removeItem("mapAppUIZoom");
-  if (el("ui-zoom-input")) { el("ui-zoom-input").value = 100; el("ui-zoom-value").textContent = "100%"; }
-  applyUIZoom(100);
+  if (el("ui-zoom-input")) {
+    el("ui-zoom-input").value = DEFAULT_UI_ZOOM;
+    el("ui-zoom-value").textContent = DEFAULT_UI_ZOOM + "%";
+  }
+  applyUIZoom(DEFAULT_UI_ZOOM);
 }
 
 function appDialog({ title = "Message", message = "", mode = "alert", value = "", placeholder = "" }) {
@@ -216,27 +234,10 @@ function appPrompt(message, value = "", title = "Name") {
 }
 
 const CHECKLIST_STORAGE_KEY = "ops_toc_checklists";
+const CHECKLIST_FOLDER_STORAGE_KEY = "ops_toc_checklist_folders_collapsed";
+const CHECKLIST_BACKUP_PREFIX = "ops_toc_checklists_backup_";
 let _checklists = [];
-
-async function checklistLoadSeed() {
-  const btn = document.getElementById("checklist-seed-btn");
-  if (btn) btn.textContent = "Loading…";
-  try {
-    const res = await fetch("/api/checklists/seed");
-    const lists = await res.json();
-    _checklists = lists.map((l) => ({
-      id: checklistUuid(),
-      name: l.name,
-      collapsed: false,
-      items: l.items.map((text) => ({ id: checklistUuid(), text, done: false })),
-    }));
-    checklistSave();
-    checklistRender();
-  } catch (e) {
-    if (btn) btn.textContent = "Load field test template";
-    console.error("Checklist seed failed:", e);
-  }
-}
+let _checklistCollapsedFolders = new Set();
 
 function checklistUuid() {
   if (window.crypto?.randomUUID) return crypto.randomUUID();
@@ -249,6 +250,7 @@ function checklistLoad() {
     _checklists = Array.isArray(parsed) ? parsed.map((list) => ({
       id: String(list.id || checklistUuid()),
       name: String(list.name || "Untitled Checklist").slice(0, 90),
+      folder: checklistFolderName(list.folder || list.type || "General"),
       collapsed: Boolean(list.collapsed),
       items: Array.isArray(list.items) ? list.items.map((item) => ({
         id: String(item.id || checklistUuid()),
@@ -259,10 +261,32 @@ function checklistLoad() {
   } catch (_) {
     _checklists = [];
   }
+  try {
+    const folders = JSON.parse(localStorage.getItem(CHECKLIST_FOLDER_STORAGE_KEY) || "[]");
+    _checklistCollapsedFolders = new Set(Array.isArray(folders) ? folders.map(checklistFolderName) : []);
+  } catch (_) {
+    _checklistCollapsedFolders = new Set();
+  }
 }
 
 function checklistSave() {
   localStorage.setItem(CHECKLIST_STORAGE_KEY, JSON.stringify(_checklists));
+}
+
+function checklistSaveFolderState() {
+  localStorage.setItem(CHECKLIST_FOLDER_STORAGE_KEY, JSON.stringify([..._checklistCollapsedFolders]));
+}
+
+function checklistBackupCurrent(reason = "backup") {
+  if (!_checklists.length) return;
+  const stamp = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
+  const payload = {
+    version: 1,
+    reason,
+    exported_at: new Date().toISOString(),
+    checklists: _checklists,
+  };
+  localStorage.setItem(`${CHECKLIST_BACKUP_PREFIX}${stamp}`, JSON.stringify(payload));
 }
 
 function checklistFind(listId) {
@@ -273,10 +297,20 @@ function checklistFindItem(list, itemId) {
   return list?.items.find((item) => item.id === itemId);
 }
 
+function checklistFolderName(folder) {
+  return String(folder || "General").trim().slice(0, 60) || "General";
+}
+
+function checklistFolderStats(entries) {
+  const total = entries.reduce((sum, entry) => sum + entry.list.items.length, 0);
+  const done = entries.reduce((sum, entry) => sum + entry.list.items.filter((item) => item.done).length, 0);
+  return { total, done };
+}
+
 function checklistExportText() {
   if (!_checklists.length) return "OPS-TOC Checklists\n\nNo checklists.";
   return _checklists.map((list) => {
-    const lines = [`${list.name}`];
+    const lines = [`[${checklistFolderName(list.folder)}] ${list.name}`];
     if (!list.items.length) lines.push("  [ ] No items");
     for (const item of list.items) {
       lines.push(`  ${item.done ? "✓" : "☐"} ${item.text}`);
@@ -292,18 +326,42 @@ function checklistRender() {
     box.innerHTML = `
       <div class="checklist-empty">
         <div class="checklist-empty-title">No checklists yet</div>
-        <div class="checklist-empty-text">Create one for field tests, camping gear, node deployment, or any repeatable workflow.</div>
-        <button class="btn" id="checklist-seed-btn" type="button" style="margin-top:16px">Load field test template</button>
+        <div class="checklist-empty-text">Create one for field tests, camping gear, node deployment, or import a saved checklist file.</div>
       </div>`;
-    const seedBtn = document.getElementById("checklist-seed-btn");
-    if (seedBtn) seedBtn.addEventListener("click", checklistLoadSeed);
     return;
   }
-  box.innerHTML = _checklists.map((list, listIndex) => {
-    const total = list.items.length;
-    const done = list.items.filter((item) => item.done).length;
-    const pct = total ? Math.round((done / total) * 100) : 0;
-    const items = list.items.length ? list.items.map((item, itemIndex) => `
+  const groups = new Map();
+  _checklists.forEach((list, listIndex) => {
+    const folder = checklistFolderName(list.folder);
+    if (!groups.has(folder)) groups.set(folder, []);
+    groups.get(folder).push({ list, listIndex });
+  });
+  box.innerHTML = [...groups.entries()].map(([folder, entries]) => checklistFolderHtml(folder, entries)).join("");
+}
+
+function checklistFolderHtml(folder, entries) {
+  const collapsed = _checklistCollapsedFolders.has(folder);
+  const stats = checklistFolderStats(entries);
+  const cards = entries.map(({ list, listIndex }) => checklistCardHtml(list, listIndex)).join("");
+  return `
+    <section class="checklist-folder" data-folder="${esc(folder)}">
+      <button class="checklist-folder-head ${collapsed ? "collapsed" : ""}" type="button" data-action="toggle-folder">
+        <span class="checklist-folder-labels">
+          <span class="checklist-folder-kicker">Folder</span>
+          <span class="checklist-folder-name">${esc(folder)}</span>
+        </span>
+        <span class="checklist-folder-count">${entries.length} list${entries.length === 1 ? "" : "s"} · ${stats.done}/${stats.total}</span>
+        <span class="checklist-folder-arrow">▼</span>
+      </button>
+      <div class="checklist-folder-body" ${collapsed ? "hidden" : ""}>${cards}</div>
+    </section>`;
+}
+
+function checklistCardHtml(list, listIndex) {
+  const total = list.items.length;
+  const done = list.items.filter((item) => item.done).length;
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  const items = list.items.length ? list.items.map((item, itemIndex) => `
       <div class="checklist-item-row ${item.done ? "done" : ""}" data-list-id="${esc(list.id)}" data-item-id="${esc(item.id)}">
         <button class="checklist-box" type="button" data-action="toggle-item" aria-label="${item.done ? "Mark undone" : "Mark done"}"></button>
         <button class="checklist-item-text" type="button" data-action="edit-item">${esc(item.text)}</button>
@@ -311,10 +369,11 @@ function checklistRender() {
         <button class="checklist-icon-btn" type="button" data-action="move-item-down" aria-label="Move item down" ${itemIndex === list.items.length - 1 ? "disabled" : ""}>↓</button>
         <button class="checklist-icon-btn danger" type="button" data-action="delete-item" aria-label="Delete item">✕</button>
       </div>`).join("") : '<div class="checklist-no-items">No items. Add the first one below.</div>';
-    return `
+  return `
       <section class="checklist-card" data-list-id="${esc(list.id)}">
         <div class="checklist-card-head ${list.collapsed ? "collapsed" : ""}" data-action="toggle-list">
           <div class="checklist-card-title-block">
+            <div class="checklist-card-folder">${esc(checklistFolderName(list.folder))}</div>
             <div class="checklist-card-title">${esc(list.name)}</div>
             <div class="checklist-progress-line">
               <span class="checklist-progress-text">${done}/${total}</span>
@@ -325,9 +384,12 @@ function checklistRender() {
             <button class="checklist-icon-btn" type="button" data-action="move-list-up" aria-label="Move checklist up" ${listIndex === 0 ? "disabled" : ""}>↑</button>
             <button class="checklist-icon-btn" type="button" data-action="move-list-down" aria-label="Move checklist down" ${listIndex === _checklists.length - 1 ? "disabled" : ""}>↓</button>
             <button class="checklist-icon-btn" type="button" data-action="rename-list" aria-label="Rename checklist">✎</button>
+            <button class="checklist-icon-btn" type="button" data-action="set-list-folder" aria-label="Set checklist folder">Folder</button>
             <button class="checklist-icon-btn" type="button" data-action="reset-list" aria-label="Reset checklist">Reset</button>
             <button class="checklist-icon-btn danger" type="button" data-action="delete-list" aria-label="Delete checklist">🗑</button>
-            <span class="checklist-collapse-arrow">▼</span>
+            <button class="checklist-collapse-btn" type="button" data-action="toggle-list" aria-label="${list.collapsed ? "Expand checklist" : "Collapse checklist"}">
+              <span class="checklist-collapse-arrow">▼</span>
+            </button>
           </div>
         </div>
         <div class="checklist-card-body" ${list.collapsed ? "hidden" : ""}>
@@ -338,13 +400,13 @@ function checklistRender() {
           </div>
         </div>
       </section>`;
-  }).join("");
 }
 
 async function checklistNew() {
   const name = (await appPrompt("Checklist name", "New Checklist", "New Checklist") || "").trim();
   if (!name) return;
-  _checklists.push({ id: checklistUuid(), name: name.slice(0, 90), collapsed: false, items: [] });
+  const folder = (await appPrompt("Folder / type", "General", "Checklist Folder") || "General").trim();
+  _checklists.push({ id: checklistUuid(), name: name.slice(0, 90), folder: checklistFolderName(folder), collapsed: false, items: [] });
   checklistSave();
   checklistRender();
 }
@@ -353,6 +415,14 @@ async function checklistRename(list) {
   const name = (await appPrompt("Checklist name", list.name, "Rename Checklist") || "").trim();
   if (!name) return;
   list.name = name.slice(0, 90);
+  checklistSave();
+  checklistRender();
+}
+
+async function checklistSetFolder(list) {
+  const folder = (await appPrompt("Folder / type", checklistFolderName(list.folder), "Checklist Folder") || "").trim();
+  if (!folder) return;
+  list.folder = checklistFolderName(folder);
   checklistSave();
   checklistRender();
 }
@@ -389,10 +459,133 @@ async function checklistExport() {
   }
 }
 
+function checklistDownload(filename, content, type) {
+  const blob = new Blob([content], { type });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+function checklistExportJson() {
+  const payload = {
+    version: 1,
+    exported_at: new Date().toISOString(),
+    checklists: _checklists.map((list) => ({
+      name: list.name,
+      folder: checklistFolderName(list.folder),
+      collapsed: Boolean(list.collapsed),
+      items: list.items.map((item) => ({ text: item.text, done: Boolean(item.done) })),
+    })),
+  };
+  checklistDownload(
+    `ops-toc-checklists-${new Date().toISOString().slice(0, 10)}.json`,
+    JSON.stringify(payload, null, 2),
+    "application/json;charset=utf-8"
+  );
+}
+
+function checklistNormalizeImportedList(raw, fallbackFolder = "Imported") {
+  if (!raw || typeof raw !== "object") return null;
+  const items = Array.isArray(raw.items) ? raw.items.map((item) => {
+    if (typeof item === "string") return { id: checklistUuid(), text: item.trim().slice(0, 240), done: false };
+    if (!item || typeof item !== "object") return null;
+    const text = String(item.text || item.label || item.name || "").trim();
+    if (!text) return null;
+    return { id: checklistUuid(), text: text.slice(0, 240), done: Boolean(item.done || item.checked) };
+  }).filter(Boolean) : [];
+  const name = String(raw.name || raw.title || "Imported Checklist").trim();
+  return {
+    id: checklistUuid(),
+    name: name.slice(0, 90) || "Imported Checklist",
+    folder: checklistFolderName(raw.folder || raw.type || fallbackFolder),
+    collapsed: Boolean(raw.collapsed),
+    items,
+  };
+}
+
+function checklistParseJsonImport(text) {
+  const parsed = JSON.parse(text);
+  const rawLists = Array.isArray(parsed) ? parsed : (parsed.checklists || parsed.lists || []);
+  if (!Array.isArray(rawLists)) return [];
+  return rawLists.map((entry) => checklistNormalizeImportedList(entry)).filter(Boolean);
+}
+
+function checklistParseTextImport(text) {
+  const lists = [];
+  let current = null;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || /^OPS-TOC Checklists$/i.test(line)) continue;
+    const itemMatch = line.match(/^(?:[-*]\s*)?(✓|☑|☐|\[[xX✓]\]|\[\s?\]|\[\])\s*(.+)$/);
+    if (itemMatch && current) {
+      current.items.push({
+        id: checklistUuid(),
+        text: itemMatch[2].trim().slice(0, 240),
+        done: /^(?:✓|☑|\[[xX✓]\])$/.test(itemMatch[1]),
+      });
+      continue;
+    }
+    const header = line.replace(/^#+\s*/, "").match(/^\[([^\]]+)\]\s*(.+)$/);
+    current = {
+      id: checklistUuid(),
+      folder: checklistFolderName(header ? header[1] : "Imported"),
+      name: (header ? header[2] : line.replace(/^#+\s*/, "")).slice(0, 90) || "Imported Checklist",
+      collapsed: false,
+      items: [],
+    };
+    lists.push(current);
+  }
+  return lists.filter((list) => list.items.length || list.name);
+}
+
+function checklistParseImport(text, filename = "") {
+  const looksJson = filename.toLowerCase().endsWith(".json") || /^[\s\n\r]*[\[{]/.test(text);
+  if (looksJson) {
+    try {
+      const lists = checklistParseJsonImport(text);
+      if (lists.length) return lists;
+    } catch (_) {}
+  }
+  return checklistParseTextImport(text);
+}
+
+async function checklistImportFile(event) {
+  const file = event.target.files?.[0];
+  event.target.value = "";
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const imported = checklistParseImport(text, file.name);
+    if (!imported.length) {
+      await appAlert("No checklists found in that file.", "Import Checklists");
+      return;
+    }
+    checklistBackupCurrent("before_import");
+    _checklists = _checklists.concat(imported);
+    checklistSave();
+    checklistRender();
+    await appAlert(`Imported ${imported.length} checklist${imported.length === 1 ? "" : "s"}.`, "Import Checklists");
+  } catch (err) {
+    await appAlert(`Import failed: ${err.message || err}`, "Import Checklists");
+  }
+}
+
 async function checklistHandleClick(event) {
   const actionNode = event.target.closest("[data-action]");
   if (!actionNode) return;
   const action = actionNode.dataset.action;
+  if (action === "toggle-folder") {
+    const folder = checklistFolderName(event.target.closest("[data-folder]")?.dataset.folder);
+    if (_checklistCollapsedFolders.has(folder)) _checklistCollapsedFolders.delete(folder);
+    else _checklistCollapsedFolders.add(folder);
+    checklistSaveFolderState();
+    checklistRender();
+    return;
+  }
   const card = event.target.closest("[data-list-id]");
   const listId = card?.dataset.listId;
   const list = checklistFind(listId);
@@ -408,6 +601,7 @@ async function checklistHandleClick(event) {
   if (action === "move-list-up") checklistMove(_checklists, listIndex, listIndex - 1);
   if (action === "move-list-down") checklistMove(_checklists, listIndex, listIndex + 1);
   if (action === "rename-list") return checklistRename(list);
+  if (action === "set-list-folder") return checklistSetFolder(list);
   if (action === "reset-list") list.items.forEach((entry) => { entry.done = false; });
   if (action === "delete-list") {
     if (!(await appConfirm(`Delete "${list.name}" and all of its items?`, "Delete Checklist"))) return;
@@ -449,6 +643,9 @@ function initChecklists() {
   bindClick("checklist-new-btn", checklistNew);
   bindClick("checklist-new-bottom-btn", checklistNew);
   bindClick("checklist-export-btn", checklistExport);
+  bindClick("checklist-export-json-btn", checklistExportJson);
+  bindClick("checklist-import-btn", () => el("checklist-import-file")?.click());
+  bindEvent("checklist-import-file", "change", checklistImportFile);
   bindClick("menu-checklist-export-btn", () => {
     setHamburgerOpen(false);
     checklistExport();
@@ -468,11 +665,12 @@ function updateHeaderClock() {
   const yy = String(now.getFullYear()).slice(-2);
   const hh = String(now.getHours()).padStart(2, "0");
   const min = String(now.getMinutes()).padStart(2, "0");
+  const sec = String(now.getSeconds()).padStart(2, "0");
   if (timeNode && dateNode) {
-    timeNode.textContent = `${hh}:${min}`;
+    timeNode.textContent = `${hh}:${min}:${sec}`;
     dateNode.textContent = `${dd}.${mm}.${yy}`;
   } else {
-    node.textContent = `${hh}:${min} ${dd}.${mm}.${yy}`;
+    node.textContent = `${hh}:${min}:${sec} ${dd}.${mm}.${yy}`;
   }
 }
 
@@ -2360,7 +2558,7 @@ function openSettings(targetId = "") {
   el("tf-api-key-input").value = localStorage.getItem("thunderforestApiKey") || "";
   el("mt-api-key-input").value = localStorage.getItem("mapTilerApiKey") || "";
   el("accent-color-input").value = localStorage.getItem("mapAppAccentColor") || currentAccentColor();
-  const savedZoom = Number(localStorage.getItem("mapAppUIZoom") || 100);
+  const savedZoom = savedUIZoom();
   if (el("ui-zoom-input")) { el("ui-zoom-input").value = savedZoom; el("ui-zoom-value").textContent = savedZoom + "%"; }
   el("layer-key-status").textContent = "";
   el("update-status").textContent = "";
@@ -2987,7 +3185,7 @@ function initMap() {
 
 function bindUi() {
   applyAccentColor(localStorage.getItem("mapAppAccentColor") || DEFAULT_ACCENT);
-  applyUIZoom(localStorage.getItem("mapAppUIZoom") || 100);
+  applyUIZoom(savedUIZoom());
   installControlFeedback();
   bindClick("markers-btn", () => setSidePanelClosed(!el("side-panel").classList.contains("closed")));
   bindClick("close-panel-btn", () => setSidePanelClosed(true));

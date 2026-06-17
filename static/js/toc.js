@@ -210,8 +210,10 @@ document.addEventListener('DOMContentLoaded', () => {
   loadMissions();
 
   // Start on last active tab, default to log
+  const tabs = new Set(['log', 'missions', 'map', 'sop', 'checklist']);
   const savedTab = localStorage.getItem('tocActiveTab') || 'log';
-  showTab(savedTab);
+  if (!tabs.has(savedTab)) localStorage.setItem('tocActiveTab', 'log');
+  showTab(tabs.has(savedTab) ? savedTab : 'log');
 
   // GPS header text refreshed alongside existing GPS poll
   setInterval(updateGpsHeaderText, 3500);

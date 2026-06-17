@@ -1,5 +1,9 @@
 # OPS-TOC / Map App - Changelog
 
+## 2026-06-18
+
+**[Codex]** - Added the editable OPS-TOC CHECKLIST tab after SOP. Checklists are pure frontend localStorage state under `ops_toc_checklists`, with folders/types, multiple collapsible cards, rename/delete/reset, progress counts/bars, item add/edit/delete/toggle/reorder, text export, JSON export, and import from JSON/TXT/MD including Markdown task boxes like `- [ ]`, `- []`, and `- [x]`. Removed the temporary field-template loader and cleaned out the backend `/api/checklists/seed` route because Import now covers saved/template files. Copied the Desktop checklist test files into repo `TEST/` without removing the Desktop originals. Added the header clock (`HH:MM:SS`, `DD.MM.YY`), enlarged Settings/App Control touch targets, and changed in-app UI Zoom so visible `100%` now includes a 1.15x base scale matching the user's previous `115%` setting, with a one-time migration from saved `115%` to `100%`.
+
 ## 2026-06-12
 
 **[Codex]** - Improved OPS-TOC as the central offline map hub and pushed GitHub commit `4d33754 Improve offline maps and controls`. Offline downloads and zoom-extension estimates now include estimated size, extension jobs estimate missing/new tiles before queueing, and zero-tile extensions are skipped. Downloaded MBTiles maps can now be renamed from the UI/API. Extension jobs copy/repair the existing MBTiles into the `.part` file before adding new zooms, preventing edit-zoom jobs from replacing an existing map with only the new zoom range. Missing-tile estimation was optimized, and terminal jobs no longer expose bulky payloads. Added click/press feedback animations across controls, tidied GPS settings with an iPhone-style receiver switch, and added black splash screens for Restart/Shutdown.
