@@ -1731,7 +1731,7 @@ async function discardTrackRecording() {
   setBanner("");
 }
 
-const RECORD_INTERVALS = [5, 10, 30, 60, 120, 300];
+const RECORD_INTERVALS = [1, 2, 5, 10, 30, 60, 120, 300];
 let _recMinInterval = (() => {
   const saved = parseInt(localStorage.getItem("rec_interval") || "10", 10);
   return RECORD_INTERVALS.includes(saved) ? saved : 10;
