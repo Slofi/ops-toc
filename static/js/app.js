@@ -53,6 +53,8 @@ function installControlFeedback() {
     ".search-result",
     ".list-row",
     ".sop-section-head",
+    ".checklist-card-head",
+    ".checklist-item-row",
     ".track-folder-header",
     ".color-swatch",
     ".color-swatch-custom",
@@ -211,6 +213,272 @@ function appConfirm(message, title = "Confirm") {
 
 function appPrompt(message, value = "", title = "Name") {
   return appDialog({ title, message, value, mode: "prompt" });
+}
+
+const CHECKLIST_STORAGE_KEY = "ops_toc_checklists";
+let _checklists = [];
+
+async function checklistLoadSeed() {
+  const btn = document.getElementById("checklist-seed-btn");
+  if (btn) btn.textContent = "Loading…";
+  try {
+    const res = await fetch("/api/checklists/seed");
+    const lists = await res.json();
+    _checklists = lists.map((l) => ({
+      id: checklistUuid(),
+      name: l.name,
+      collapsed: false,
+      items: l.items.map((text) => ({ id: checklistUuid(), text, done: false })),
+    }));
+    checklistSave();
+    checklistRender();
+  } catch (e) {
+    if (btn) btn.textContent = "Load field test template";
+    console.error("Checklist seed failed:", e);
+  }
+}
+
+function checklistUuid() {
+  if (window.crypto?.randomUUID) return crypto.randomUUID();
+  return `id-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function checklistLoad() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CHECKLIST_STORAGE_KEY) || "[]");
+    _checklists = Array.isArray(parsed) ? parsed.map((list) => ({
+      id: String(list.id || checklistUuid()),
+      name: String(list.name || "Untitled Checklist").slice(0, 90),
+      collapsed: Boolean(list.collapsed),
+      items: Array.isArray(list.items) ? list.items.map((item) => ({
+        id: String(item.id || checklistUuid()),
+        text: String(item.text || "").slice(0, 240),
+        done: Boolean(item.done),
+      })).filter((item) => item.text.trim()) : [],
+    })) : [];
+  } catch (_) {
+    _checklists = [];
+  }
+}
+
+function checklistSave() {
+  localStorage.setItem(CHECKLIST_STORAGE_KEY, JSON.stringify(_checklists));
+}
+
+function checklistFind(listId) {
+  return _checklists.find((list) => list.id === listId);
+}
+
+function checklistFindItem(list, itemId) {
+  return list?.items.find((item) => item.id === itemId);
+}
+
+function checklistExportText() {
+  if (!_checklists.length) return "OPS-TOC Checklists\n\nNo checklists.";
+  return _checklists.map((list) => {
+    const lines = [`${list.name}`];
+    if (!list.items.length) lines.push("  [ ] No items");
+    for (const item of list.items) {
+      lines.push(`  ${item.done ? "✓" : "☐"} ${item.text}`);
+    }
+    return lines.join("\n");
+  }).join("\n\n");
+}
+
+function checklistRender() {
+  const box = el("checklist-list");
+  if (!box) return;
+  if (!_checklists.length) {
+    box.innerHTML = `
+      <div class="checklist-empty">
+        <div class="checklist-empty-title">No checklists yet</div>
+        <div class="checklist-empty-text">Create one for field tests, camping gear, node deployment, or any repeatable workflow.</div>
+        <button class="btn" id="checklist-seed-btn" type="button" style="margin-top:16px">Load field test template</button>
+      </div>`;
+    const seedBtn = document.getElementById("checklist-seed-btn");
+    if (seedBtn) seedBtn.addEventListener("click", checklistLoadSeed);
+    return;
+  }
+  box.innerHTML = _checklists.map((list, listIndex) => {
+    const total = list.items.length;
+    const done = list.items.filter((item) => item.done).length;
+    const pct = total ? Math.round((done / total) * 100) : 0;
+    const items = list.items.length ? list.items.map((item, itemIndex) => `
+      <div class="checklist-item-row ${item.done ? "done" : ""}" data-list-id="${esc(list.id)}" data-item-id="${esc(item.id)}">
+        <button class="checklist-box" type="button" data-action="toggle-item" aria-label="${item.done ? "Mark undone" : "Mark done"}"></button>
+        <button class="checklist-item-text" type="button" data-action="edit-item">${esc(item.text)}</button>
+        <button class="checklist-icon-btn" type="button" data-action="move-item-up" aria-label="Move item up" ${itemIndex === 0 ? "disabled" : ""}>↑</button>
+        <button class="checklist-icon-btn" type="button" data-action="move-item-down" aria-label="Move item down" ${itemIndex === list.items.length - 1 ? "disabled" : ""}>↓</button>
+        <button class="checklist-icon-btn danger" type="button" data-action="delete-item" aria-label="Delete item">✕</button>
+      </div>`).join("") : '<div class="checklist-no-items">No items. Add the first one below.</div>';
+    return `
+      <section class="checklist-card" data-list-id="${esc(list.id)}">
+        <div class="checklist-card-head ${list.collapsed ? "collapsed" : ""}" data-action="toggle-list">
+          <div class="checklist-card-title-block">
+            <div class="checklist-card-title">${esc(list.name)}</div>
+            <div class="checklist-progress-line">
+              <span class="checklist-progress-text">${done}/${total}</span>
+              <span class="checklist-progress-bar"><span style="width:${pct}%"></span></span>
+            </div>
+          </div>
+          <div class="checklist-card-actions">
+            <button class="checklist-icon-btn" type="button" data-action="move-list-up" aria-label="Move checklist up" ${listIndex === 0 ? "disabled" : ""}>↑</button>
+            <button class="checklist-icon-btn" type="button" data-action="move-list-down" aria-label="Move checklist down" ${listIndex === _checklists.length - 1 ? "disabled" : ""}>↓</button>
+            <button class="checklist-icon-btn" type="button" data-action="rename-list" aria-label="Rename checklist">✎</button>
+            <button class="checklist-icon-btn" type="button" data-action="reset-list" aria-label="Reset checklist">Reset</button>
+            <button class="checklist-icon-btn danger" type="button" data-action="delete-list" aria-label="Delete checklist">🗑</button>
+            <span class="checklist-collapse-arrow">▼</span>
+          </div>
+        </div>
+        <div class="checklist-card-body" ${list.collapsed ? "hidden" : ""}>
+          <div class="checklist-items">${items}</div>
+          <div class="checklist-add-row">
+            <input class="checklist-add-input" data-list-id="${esc(list.id)}" type="text" maxlength="240" placeholder="Add item">
+            <button class="btn primary" type="button" data-action="add-item">Add</button>
+          </div>
+        </div>
+      </section>`;
+  }).join("");
+}
+
+async function checklistNew() {
+  const name = (await appPrompt("Checklist name", "New Checklist", "New Checklist") || "").trim();
+  if (!name) return;
+  _checklists.push({ id: checklistUuid(), name: name.slice(0, 90), collapsed: false, items: [] });
+  checklistSave();
+  checklistRender();
+}
+
+async function checklistRename(list) {
+  const name = (await appPrompt("Checklist name", list.name, "Rename Checklist") || "").trim();
+  if (!name) return;
+  list.name = name.slice(0, 90);
+  checklistSave();
+  checklistRender();
+}
+
+async function checklistEditItem(list, item) {
+  const text = (await appPrompt("Item label", item.text, "Edit Item") || "").trim();
+  if (!text) return;
+  item.text = text.slice(0, 240);
+  checklistSave();
+  checklistRender();
+}
+
+function checklistMove(arr, from, to) {
+  if (from < 0 || to < 0 || from >= arr.length || to >= arr.length) return false;
+  const [entry] = arr.splice(from, 1);
+  arr.splice(to, 0, entry);
+  return true;
+}
+
+async function checklistExport() {
+  const text = checklistExportText();
+  try {
+    await navigator.clipboard.writeText(text);
+    await appAlert("Checklists copied to clipboard.", "Export Checklists");
+  } catch (_) {
+    const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `ops-toc-checklists-${new Date().toISOString().slice(0, 10)}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }
+}
+
+async function checklistHandleClick(event) {
+  const actionNode = event.target.closest("[data-action]");
+  if (!actionNode) return;
+  const action = actionNode.dataset.action;
+  const card = event.target.closest("[data-list-id]");
+  const listId = card?.dataset.listId;
+  const list = checklistFind(listId);
+  if (!list) return;
+  if (action !== "toggle-list") event.stopPropagation();
+
+  const row = event.target.closest("[data-item-id]");
+  const item = row ? checklistFindItem(list, row.dataset.itemId) : null;
+  const listIndex = _checklists.findIndex((entry) => entry.id === list.id);
+  const itemIndex = item ? list.items.findIndex((entry) => entry.id === item.id) : -1;
+
+  if (action === "toggle-list") list.collapsed = !list.collapsed;
+  if (action === "move-list-up") checklistMove(_checklists, listIndex, listIndex - 1);
+  if (action === "move-list-down") checklistMove(_checklists, listIndex, listIndex + 1);
+  if (action === "rename-list") return checklistRename(list);
+  if (action === "reset-list") list.items.forEach((entry) => { entry.done = false; });
+  if (action === "delete-list") {
+    if (!(await appConfirm(`Delete "${list.name}" and all of its items?`, "Delete Checklist"))) return;
+    _checklists = _checklists.filter((entry) => entry.id !== list.id);
+  }
+  if (action === "toggle-item" && item) item.done = !item.done;
+  if (action === "edit-item" && item) return checklistEditItem(list, item);
+  if (action === "move-item-up") checklistMove(list.items, itemIndex, itemIndex - 1);
+  if (action === "move-item-down") checklistMove(list.items, itemIndex, itemIndex + 1);
+  if (action === "delete-item" && item) list.items = list.items.filter((entry) => entry.id !== item.id);
+  if (action === "add-item") {
+    const input = card.querySelector(".checklist-add-input");
+    const text = (input?.value || "").trim();
+    if (!text) return;
+    list.items.push({ id: checklistUuid(), text: text.slice(0, 240), done: false });
+    if (input) input.value = "";
+  }
+
+  checklistSave();
+  checklistRender();
+}
+
+function checklistHandleKeydown(event) {
+  if (!event.target.classList.contains("checklist-add-input") || event.key !== "Enter") return;
+  event.preventDefault();
+  const card = event.target.closest("[data-list-id]");
+  const list = checklistFind(card?.dataset.listId);
+  const text = event.target.value.trim();
+  if (!list || !text) return;
+  list.items.push({ id: checklistUuid(), text: text.slice(0, 240), done: false });
+  event.target.value = "";
+  checklistSave();
+  checklistRender();
+}
+
+function initChecklists() {
+  checklistLoad();
+  checklistRender();
+  bindClick("checklist-new-btn", checklistNew);
+  bindClick("checklist-new-bottom-btn", checklistNew);
+  bindClick("checklist-export-btn", checklistExport);
+  bindClick("menu-checklist-export-btn", () => {
+    setHamburgerOpen(false);
+    checklistExport();
+  });
+  bindEvent("checklist-list", "click", checklistHandleClick);
+  bindEvent("checklist-list", "keydown", checklistHandleKeydown);
+}
+
+function updateHeaderClock() {
+  const node = el("header-clock");
+  if (!node) return;
+  const timeNode = node.querySelector(".header-clock-time");
+  const dateNode = node.querySelector(".header-clock-date");
+  const now = new Date();
+  const dd = String(now.getDate()).padStart(2, "0");
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const yy = String(now.getFullYear()).slice(-2);
+  const hh = String(now.getHours()).padStart(2, "0");
+  const min = String(now.getMinutes()).padStart(2, "0");
+  if (timeNode && dateNode) {
+    timeNode.textContent = `${hh}:${min}`;
+    dateNode.textContent = `${dd}.${mm}.${yy}`;
+  } else {
+    node.textContent = `${hh}:${min} ${dd}.${mm}.${yy}`;
+  }
+}
+
+function initHeaderClock() {
+  updateHeaderClock();
+  setInterval(updateHeaderClock, 1000);
 }
 
 function fmtDistance(meters) {
@@ -2820,6 +3088,8 @@ async function initMapAndData() {
 
 async function boot() {
   bindUi();
+  initChecklists();
+  initHeaderClock();
   // Map init deferred until MAP tab is first opened
 }
 
