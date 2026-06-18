@@ -4026,16 +4026,16 @@ const _RINGS_DEFAULT_HARDNESS = 0.5;
 const _RINGS_DEFAULT_COUNT    = 3;
 const _RINGS_DEFAULT_STEP     = 5;
 
-// anchor: [x, y] pixels from top-left of label div to the lat/lon point
+// iconSize [40,20]; anchor [x,y] = pixels from top-left to the lat/lon point
 const _CARD_ALL = [
-  { label: "N",  bearing: 0,   anchor: [5,  16], main: true  },
-  { label: "E",  bearing: 90,  anchor: [0,  8],  main: true  },
-  { label: "S",  bearing: 180, anchor: [5,  0],  main: true  },
-  { label: "W",  bearing: 270, anchor: [11, 8],  main: true  },
-  { label: "NE", bearing: 45,  anchor: [0,  16], main: false },
+  { label: "N",  bearing: 0,   anchor: [20, 20], main: true  },
+  { label: "E",  bearing: 90,  anchor: [0,  10], main: true  },
+  { label: "S",  bearing: 180, anchor: [20, 0],  main: true  },
+  { label: "W",  bearing: 270, anchor: [40, 10], main: true  },
+  { label: "NE", bearing: 45,  anchor: [0,  20], main: false },
   { label: "SE", bearing: 135, anchor: [0,  0],  main: false },
-  { label: "SW", bearing: 225, anchor: [18, 0],  main: false },
-  { label: "NW", bearing: 315, anchor: [18, 16], main: false },
+  { label: "SW", bearing: 225, anchor: [40, 0],  main: false },
+  { label: "NW", bearing: 315, anchor: [40, 20], main: false },
 ];
 
 let _ringsEnabled   = (() => { try { return localStorage.getItem("opsTocRingsEnabled") === "1"; } catch(e) { return false; } })();
@@ -4043,7 +4043,7 @@ let _ringsCount     = (() => { try { return parseInt(localStorage.getItem("opsTo
 let _ringsStep      = (() => { try { return parseFloat(localStorage.getItem("opsTocRingsStep"))   || _RINGS_DEFAULT_STEP;     } catch(e) { return _RINGS_DEFAULT_STEP;     } })();
 let _ringsColor     = (() => { try { return localStorage.getItem("opsTocRingsColor")              || _RINGS_DEFAULT_COLOR;    } catch(e) { return _RINGS_DEFAULT_COLOR;    } })();
 let _ringsHardness  = (() => { try { return parseFloat(localStorage.getItem("opsTocRingsHardness")) || _RINGS_DEFAULT_HARDNESS; } catch(e) { return _RINGS_DEFAULT_HARDNESS; } })();
-let _ringsCardinals = (() => { try { return parseInt(localStorage.getItem("opsTocRingsCardinals") || "4") || 4; } catch(e) { return 4; } })();
+let _ringsCardinals = (() => { try { const v = localStorage.getItem("opsTocRingsCardinals"); return v !== null ? parseInt(v) : 4; } catch(e) { return 4; } })();
 let _ringsLayer    = null;
 let _ringsDrawKey  = "";  // tracks last drawn state to skip redundant redraws
 
@@ -4090,8 +4090,8 @@ function _drawRangeRings() {
       const pt = _offsetByKm(pos.lat, pos.lon, cardDist, c.bearing);
       L.marker(pt, {
         icon: L.divIcon({
-          html: `<div style="font-size:${c.main ? "13px" : "11px"};color:${gcLbl};white-space:nowrap;font-weight:${c.main ? "800" : "600"};text-shadow:0 0 3px #000,0 0 6px #000,0 0 10px #000;line-height:1">${c.label}</div>`,
-          iconAnchor: c.anchor, className: "",
+          html: `<div style="width:40px;height:20px;display:flex;align-items:center;justify-content:center;font-size:${c.main ? "13px" : "11px"};color:${gcLbl};font-weight:${c.main ? "800" : "600"};text-shadow:0 0 3px #000,0 0 6px #000,0 0 10px #000;line-height:1;pointer-events:none">${c.label}</div>`,
+          iconSize: [40, 20], iconAnchor: c.anchor, className: "",
         }),
         interactive: false,
       }).addTo(_ringsLayer);
