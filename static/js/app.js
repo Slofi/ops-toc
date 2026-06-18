@@ -3699,6 +3699,7 @@ function setZoomPreset(minZ, maxZ) {
 
 let _gpsState   = { fix: false, lat: null, lon: null, alt: null, sats: 0, sats_view: 0 };
 let _gpsEnabled = false;
+let _gpsSource  = "";   // "proxy" | "direct" | "manual"
 let _gpsMarker  = null;
 let _gpsTimer   = null;
 let _gpsPrevPos = null; // { lat, lon, ts } for speed calculation
@@ -3753,6 +3754,19 @@ function _gpsUpdateDot() {
   }
 }
 
+function _gpsMarkerIcon() {
+  const accent = currentAccentColor() || DEFAULT_ACCENT;
+  if (_gpsSource === "manual") {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22"><polygon points="11,2 20,11 11,20 2,11" fill="${accent}" stroke="#fff" stroke-width="2.5"/></svg>`;
+    return L.divIcon({ className: "", html: svg, iconSize: [22, 22], iconAnchor: [11, 11] });
+  }
+  return L.divIcon({
+    className: "",
+    html: `<div style="width:14px;height:14px;background:${accent};border:2px solid #fff;border-radius:50%;box-shadow:0 0 6px ${accent}aa"></div>`,
+    iconSize: [14, 14], iconAnchor: [7, 7],
+  });
+}
+
 function _gpsUpdateMarker() {
   if (!state.map) return; // map not initialized yet (deferred until MAP tab opened)
   if (!_gpsState.fix || _gpsState.lat === null) {
@@ -3760,15 +3774,20 @@ function _gpsUpdateMarker() {
     return;
   }
   const ll = [_gpsState.lat, _gpsState.lon];
+  // Rebuild marker when source changes so the icon shape updates
+  const wantManual = _gpsSource === "manual";
+  const hasManual  = _gpsMarker && _gpsMarker._isManual;
+  if (_gpsMarker && wantManual !== hasManual) {
+    state.map.removeLayer(_gpsMarker);
+    _gpsMarker = null;
+  }
   if (!_gpsMarker) {
-    const icon = L.divIcon({
-      className: "",
-      html: '<div style="width:14px;height:14px;background:#e8b04f;border:2px solid #fff;border-radius:50%;box-shadow:0 0 6px rgba(232,176,79,0.65)"></div>',
-      iconSize: [14, 14], iconAnchor: [7, 7],
-    });
-    _gpsMarker = L.marker(ll, { icon, zIndexOffset: 1000 })
-      .bindPopup(() => {
+    const icon = _gpsMarkerIcon();
+    _gpsMarker = L.marker(ll, { icon, zIndexOffset: 1000 });
+    _gpsMarker._isManual = wantManual;
+    _gpsMarker.bindPopup(() => {
         const s = _gpsState;
+        if (_gpsSource === "manual") return `<b>Manual position</b><br>${s.lat.toFixed(6)}, ${s.lon.toFixed(6)}`;
         return `<b>GPS Position</b><br>${s.lat.toFixed(6)}, ${s.lon.toFixed(6)}<br>Alt: ${s.alt ?? "—"}m · Sats: ${s.sats}`;
       })
       .addTo(state.map);
@@ -3791,6 +3810,7 @@ async function _gpsPoll() {
   try {
     const d = await api("/api/gps");
     _gpsEnabled = d.enabled || false;
+    _gpsSource  = d.source || "";
     _gpsState   = { fix: d.fix, lat: d.lat, lon: d.lon, alt: d.alt, sats: d.sats, sats_view: d.sats_view };
 
     // Speed from position delta
