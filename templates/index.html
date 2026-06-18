@@ -90,7 +90,7 @@
         <button class="menu-item" type="button" data-settings-target="tilesets-section">Downloaded Maps</button>
         <button class="menu-item" type="button" data-settings-target="queue-section">Download Queue</button>
         <div class="menu-sep"></div>
-        <button class="menu-item" type="button" data-settings-target="gps-section">GPS</button>
+        <button class="menu-item" type="button" data-settings-target="gps-section">GPS/Position</button>
         <button class="menu-item" type="button" data-settings-target="keys-section">Map Keys</button>
         <button class="menu-item" type="button" data-settings-target="appearance-section">Appearance</button>
         <button class="menu-item" type="button" data-settings-target="app-control-section">App Control</button>
@@ -789,8 +789,8 @@
       </section>
 
       <section class="settings-section" id="gps-section">
-        <h3>GPS</h3>
-        <p class="dialog-note">Two modes: <b>OM proxy</b> (recommended when OM is running — polls OM's GPS so only one app owns the serial port) or <b>Direct serial</b> (for standalone use without OM).</p>
+        <h3>GPS/Position</h3>
+        <p class="dialog-note">Three modes: <b>OM proxy</b> (recommended when OM is running — polls OM's GPS so only one app owns the serial port), <b>Direct serial</b> (for standalone use without OM), or <b>Manual position</b> (set a fixed location on the map — no GPS dongle needed).</p>
         <div class="gps-settings-card">
           <label class="setting-row switch-row" for="gps-enabled">
             <span class="setting-label-main">
@@ -805,11 +805,12 @@
           <label class="setting-row">
             <span class="setting-label-main">
               <span>Source</span>
-              <span class="setting-label-note">Use OM proxy when OM is running; direct serial for standalone OPS-TOC.</span>
+              <span class="setting-label-note">Use OM proxy when OM is running; direct serial for standalone OPS-TOC; manual to pin a fixed location.</span>
             </span>
             <select id="gps-source-select" onchange="gpsSourceChanged()">
               <option value="proxy">OM proxy (localhost:8082)</option>
               <option value="direct">Direct serial port</option>
+              <option value="manual">Manual position</option>
             </select>
           </label>
           <div id="gps-port-row" class="setting-row" style="display:none">
@@ -820,6 +821,17 @@
             <div style="display:flex;gap:6px;align-items:center">
               <select id="gps-port-select" style="flex:1"></select>
               <button class="btn small" type="button" id="gps-scan-btn">Scan</button>
+            </div>
+          </div>
+          <div id="gps-manual-row" class="setting-row" style="display:none">
+            <span class="setting-label-main">
+              <span>Position</span>
+              <span class="setting-label-note">Tap "Pick on map" or enter coordinates manually.</span>
+            </span>
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+              <input type="text" id="gps-manual-lat" placeholder="Latitude" style="width:100px;background:var(--bg-input,#1e293b);color:var(--text,#e2e8f0);border:1px solid var(--border,#334155);border-radius:5px;padding:5px 8px;font-size:12px">
+              <input type="text" id="gps-manual-lon" placeholder="Longitude" style="width:100px;background:var(--bg-input,#1e293b);color:var(--text,#e2e8f0);border:1px solid var(--border,#334155);border-radius:5px;padding:5px 8px;font-size:12px">
+              <button class="btn small" type="button" id="gps-pick-btn">Pick on map</button>
             </div>
           </div>
         </div>

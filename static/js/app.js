@@ -3162,6 +3162,10 @@ function initMap() {
     localStorage.setItem("mapAppView", JSON.stringify({ lat: c.lat, lon: c.lng, zoom: state.map.getZoom() }));
   });
   state.map.on("click", (event) => {
+    if (_gpsPickMode) {
+      _gpsPickComplete(event.latlng.lat, event.latlng.lng);
+      return;
+    }
     if (_touchPlacing) return;
     if (!state.tool) return;
     if (state.tool === "marker") {
@@ -3288,6 +3292,7 @@ function bindUi() {
   });
   el("search-form").onsubmit = runSearch;
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && _gpsPickMode) { _gpsPickMode = false; setBanner(""); }
     if (event.key === "Escape" && state.tool) clearTool();
     if (event.key === "Escape") hideSearchResults();
     if (event.key === "Escape") setHamburgerOpen(false);
@@ -3816,7 +3821,9 @@ async function _gpsPoll() {
         row.hidden = true;
       } else {
         row.hidden = false;
-        if (d.fix) {
+        if (d.source === "manual" || d.manual) {
+          txt.textContent = `Manual position — ${Number(d.lat).toFixed(5)}, ${Number(d.lon).toFixed(5)}`;
+        } else if (d.fix) {
           txt.textContent = `Fix ✓ — ${Number(d.lat).toFixed(5)}, ${Number(d.lon).toFixed(5)} · Alt ${d.alt ?? "—"}m · Sats ${d.sats}`;
         } else {
           txt.textContent = `No fix — Sats in view: ${d.sats_view || 0}${d.error ? " · " + d.error : ""}`;
@@ -3853,18 +3860,72 @@ async function gpsScanPorts() {
 }
 
 function gpsSourceChanged() {
-  const v   = (el("gps-source-select") || {}).value;
-  const row = el("gps-port-row");
-  if (row) row.style.display = (v === "direct") ? "block" : "none";
+  const v    = (el("gps-source-select") || {}).value;
+  const row  = el("gps-port-row");
+  const mrow = el("gps-manual-row");
+  if (row)  row.style.display  = (v === "direct") ? "block" : "none";
+  if (mrow) mrow.style.display = (v === "manual") ? "block" : "none";
 }
 
 async function gpsSaveSettings() {
-  const enabled  = el("gps-enabled").checked;
-  const port     = (el("gps-port-select") || {}).value || "";
-  const src      = el("gps-source-select");
-  const om_proxy = src ? src.value === "proxy" : true;
+  const enabled = el("gps-enabled").checked;
+  const src     = el("gps-source-select");
+  const srcVal  = src ? src.value : "proxy";
+  const manual  = srcVal === "manual";
+  const port    = (el("gps-port-select") || {}).value || "";
+  const body    = { enabled, port, om_proxy: srcVal === "proxy", om_url: "http://localhost:8082", manual };
+  if (manual) {
+    const lat = parseFloat((el("gps-manual-lat") || {}).value || "");
+    const lon = parseFloat((el("gps-manual-lon") || {}).value || "");
+    if (!isNaN(lat) && !isNaN(lon)) { body.lat = lat; body.lon = lon; }
+  }
   await api("/api/gps", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ enabled, port, om_proxy, om_url: "http://localhost:8082" }) });
+    body: JSON.stringify(body) });
+  await _gpsPoll();
+}
+
+let _gpsPickMode = false;
+
+function startGpsPickMode() {
+  _gpsPickMode = true;
+  el("settings-dialog")?.close();
+  showTab("map");
+  setBanner("Click the map to set manual position — Esc to cancel");
+}
+
+async function _gpsPickComplete(lat, lon) {
+  _gpsPickMode = false;
+  setBanner("");
+  const latEl = el("gps-manual-lat");
+  const lonEl = el("gps-manual-lon");
+  if (latEl) latEl.value = lat.toFixed(6);
+  if (lonEl) lonEl.value = lon.toFixed(6);
+  await populateGpsSettings();
+  const src = el("gps-source-select");
+  if (src) { src.value = "manual"; gpsSourceChanged(); }
+  if (latEl) latEl.value = lat.toFixed(6);
+  if (lonEl) lonEl.value = lon.toFixed(6);
+  openSettings("gps-section");
+}
+
+async function populateGpsSettings() {
+  const d  = await api("/api/gps");
+  const cb = el("gps-enabled");
+  if (cb) cb.checked = d.enabled || false;
+  const src = el("gps-source-select");
+  if (src) {
+    if (d.manual) src.value = "manual";
+    else if (d.om_proxy !== false) src.value = "proxy";
+    else src.value = "direct";
+    gpsSourceChanged();
+  }
+  await gpsScanPorts();
+  const sel = el("gps-port-select");
+  if (sel && d.port) sel.value = d.port;
+  const latEl = el("gps-manual-lat");
+  const lonEl = el("gps-manual-lon");
+  if (latEl && d.manual_lat != null) latEl.value = Number(d.manual_lat).toFixed(6);
+  if (lonEl && d.manual_lon != null) lonEl.value = Number(d.manual_lon).toFixed(6);
   await _gpsPoll();
 }
 
@@ -3872,22 +3933,13 @@ async function initGps() {
   const saveBtn = el("gps-save-btn");
   const scanBtn = el("gps-scan-btn");
   const srcSel  = el("gps-source-select");
+  const pickBtn = el("gps-pick-btn");
   if (saveBtn) saveBtn.onclick = gpsSaveSettings;
   if (scanBtn) scanBtn.onclick = gpsScanPorts;
   if (srcSel)  srcSel.onchange = gpsSourceChanged;
-  // Pre-populate settings panel when opened
+  if (pickBtn) pickBtn.onclick = startGpsPickMode;
   document.querySelectorAll("[data-settings-target='gps-section']").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const d  = await api("/api/gps");
-      const cb = el("gps-enabled");
-      if (cb) cb.checked = d.enabled || false;
-      const src = el("gps-source-select");
-      if (src) { src.value = (d.om_proxy !== false) ? "proxy" : "direct"; gpsSourceChanged(); }
-      await gpsScanPorts();
-      const sel = el("gps-port-select");
-      if (sel && d.port) sel.value = d.port;
-      await _gpsPoll();
-    });
+    btn.addEventListener("click", populateGpsSettings);
   });
   await _gpsPoll();
   _gpsTimer = setInterval(_gpsPoll, 3000);

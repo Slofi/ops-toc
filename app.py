@@ -2691,14 +2691,28 @@ def api_gps_set():
     port     = str(data.get("port", "")).strip()
     om_proxy = bool(data.get("om_proxy", False))
     om_url   = str(data.get("om_url", "http://localhost:8082")).strip()
+    manual   = bool(data.get("manual", False))
     cfg = _gps.load_config()
     cfg["enabled"]  = enabled
     cfg["port"]     = port
     cfg["om_proxy"] = om_proxy
     cfg["om_url"]   = om_url
+    cfg["manual"]   = manual
+    if manual:
+        try:
+            cfg["manual_lat"] = float(data.get("lat", 0))
+            cfg["manual_lon"] = float(data.get("lon", 0))
+        except (ValueError, TypeError):
+            pass
     _gps.save_config(cfg)
     if enabled:
-        if om_proxy and om_url:
+        if manual:
+            _gps.gps_stop()
+            lat = cfg.get("manual_lat")
+            lon = cfg.get("manual_lon")
+            if lat is not None and lon is not None:
+                _gps.gps_set_manual(float(lat), float(lon))
+        elif om_proxy and om_url:
             _gps._start_proxy(om_url, fallback_port=port)
         elif port:
             _gps.gps_start(port)

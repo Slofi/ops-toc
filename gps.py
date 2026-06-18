@@ -423,7 +423,20 @@ def gps_stop():
     _gps_thread = None
 
 
+def gps_set_manual(lat: float, lon: float):
+    """Set a fixed manual position — no serial port or OM proxy needed."""
+    with gps_lock:
+        gps_state.update({"fix": True, "lat": lat, "lon": lon, "alt": None, "sats": 0, "sats_view": 0})
+        _gps_runtime.update({"port": "manual", "running": True, "port_present": True, "error": "", "source": "manual"})
+
+
 def _start_from_config(cfg):
+    if cfg.get("manual") and cfg.get("enabled"):
+        lat = cfg.get("manual_lat")
+        lon = cfg.get("manual_lon")
+        if lat is not None and lon is not None:
+            gps_set_manual(float(lat), float(lon))
+        return
     if cfg.get("om_proxy") and cfg.get("om_url"):
         _start_proxy(cfg["om_url"], fallback_port=cfg.get("port", ""))
     elif cfg.get("port"):
@@ -436,6 +449,8 @@ def _watchdog_loop():
         time.sleep(5)
         cfg = load_config()
         if not cfg.get("enabled"):
+            continue
+        if cfg.get("manual"):
             continue
         if _gps_thread and _gps_thread.is_alive():
             continue
