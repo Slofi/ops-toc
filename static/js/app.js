@@ -4086,13 +4086,13 @@ function _drawRangeRings() {
     const outerKm  = _ringsCount * _ringsStep;
     const labelKm  = outerKm * 1.18;
     const cards    = _ringsCardinals >= 8 ? _CARD_ALL : _CARD_ALL.filter(c => c.main);
-    const gcSpoke  = _hexToRgba(tinted, 0.25 + h * 0.25);
+    const gcSpoke  = _hexToRgba(tinted, 0.55 + h * 0.30);
     for (const c of cards) {
       const tip = _offsetByKm(pos.lat, pos.lon, outerKm, c.bearing);
       // Radial spoke line from center to ring edge
       L.polyline([[pos.lat, pos.lon], tip], {
-        color: gcSpoke, weight: c.main ? 1 : 0.7,
-        dashArray: c.main ? "4,6" : "2,6",
+        color: gcSpoke, weight: c.main ? 1.5 : 1,
+        dashArray: c.main ? "6,5" : "3,6",
         interactive: false,
       }).addTo(_ringsLayer);
       // Label just beyond the ring
