@@ -4026,11 +4026,24 @@ const _RINGS_DEFAULT_HARDNESS = 0.5;
 const _RINGS_DEFAULT_COUNT    = 3;
 const _RINGS_DEFAULT_STEP     = 5;
 
-let _ringsEnabled  = (() => { try { return localStorage.getItem("opsTocRingsEnabled") === "1"; } catch(e) { return false; } })();
-let _ringsCount    = (() => { try { return parseInt(localStorage.getItem("opsTocRingsCount"))  || _RINGS_DEFAULT_COUNT;    } catch(e) { return _RINGS_DEFAULT_COUNT;    } })();
-let _ringsStep     = (() => { try { return parseFloat(localStorage.getItem("opsTocRingsStep")) || _RINGS_DEFAULT_STEP;     } catch(e) { return _RINGS_DEFAULT_STEP;     } })();
-let _ringsColor    = (() => { try { return localStorage.getItem("opsTocRingsColor")            || _RINGS_DEFAULT_COLOR;    } catch(e) { return _RINGS_DEFAULT_COLOR;    } })();
-let _ringsHardness = (() => { try { return parseFloat(localStorage.getItem("opsTocRingsHardness")) || _RINGS_DEFAULT_HARDNESS; } catch(e) { return _RINGS_DEFAULT_HARDNESS; } })();
+// anchor: [x, y] pixels from top-left of label div to the lat/lon point
+const _CARD_ALL = [
+  { label: "N",  bearing: 0,   anchor: [5,  16], main: true  },
+  { label: "E",  bearing: 90,  anchor: [0,  8],  main: true  },
+  { label: "S",  bearing: 180, anchor: [5,  0],  main: true  },
+  { label: "W",  bearing: 270, anchor: [11, 8],  main: true  },
+  { label: "NE", bearing: 45,  anchor: [0,  16], main: false },
+  { label: "SE", bearing: 135, anchor: [0,  0],  main: false },
+  { label: "SW", bearing: 225, anchor: [18, 0],  main: false },
+  { label: "NW", bearing: 315, anchor: [18, 16], main: false },
+];
+
+let _ringsEnabled   = (() => { try { return localStorage.getItem("opsTocRingsEnabled") === "1"; } catch(e) { return false; } })();
+let _ringsCount     = (() => { try { return parseInt(localStorage.getItem("opsTocRingsCount"))    || _RINGS_DEFAULT_COUNT;    } catch(e) { return _RINGS_DEFAULT_COUNT;    } })();
+let _ringsStep      = (() => { try { return parseFloat(localStorage.getItem("opsTocRingsStep"))   || _RINGS_DEFAULT_STEP;     } catch(e) { return _RINGS_DEFAULT_STEP;     } })();
+let _ringsColor     = (() => { try { return localStorage.getItem("opsTocRingsColor")              || _RINGS_DEFAULT_COLOR;    } catch(e) { return _RINGS_DEFAULT_COLOR;    } })();
+let _ringsHardness  = (() => { try { return parseFloat(localStorage.getItem("opsTocRingsHardness")) || _RINGS_DEFAULT_HARDNESS; } catch(e) { return _RINGS_DEFAULT_HARDNESS; } })();
+let _ringsCardinals = (() => { try { return parseInt(localStorage.getItem("opsTocRingsCardinals") || "4") || 4; } catch(e) { return 4; } })();
 let _ringsLayer    = null;
 let _ringsDrawKey  = "";  // tracks last drawn state to skip redundant redraws
 
@@ -4043,7 +4056,7 @@ function _drawRangeRings() {
   const pos = _activePosition();
   if (!pos) { _clearRangeRings(); _ringsDrawKey = ""; return; }
   // Skip redraw if nothing relevant changed (prevents 3s-poll flicker)
-  const key = `${pos.lat.toFixed(6)},${pos.lon.toFixed(6)}|${_ringsCount}|${_ringsStep}|${_ringsColor}|${_ringsHardness}`;
+  const key = `${pos.lat.toFixed(6)},${pos.lon.toFixed(6)}|${_ringsCount}|${_ringsStep}|${_ringsColor}|${_ringsHardness}|${_ringsCardinals}`;
   if (key === _ringsDrawKey && _ringsLayer) return;
   _ringsDrawKey = key;
   _clearRangeRings();
@@ -4068,6 +4081,22 @@ function _drawRangeRings() {
       interactive: false,
     }).addTo(_ringsLayer);
   }
+  // Cardinal/intercardinal direction labels on outermost ring
+  if (_ringsCardinals > 0) {
+    const outerKm  = _ringsCount * _ringsStep;
+    const cardDist = outerKm * 1.15;
+    const cards    = _ringsCardinals >= 8 ? _CARD_ALL : _CARD_ALL.filter(c => c.main);
+    for (const c of cards) {
+      const pt = _offsetByKm(pos.lat, pos.lon, cardDist, c.bearing);
+      L.marker(pt, {
+        icon: L.divIcon({
+          html: `<div style="font-size:${c.main ? "13px" : "11px"};color:${gcLbl};white-space:nowrap;font-weight:${c.main ? "800" : "600"};text-shadow:0 0 3px #000,0 0 6px #000,0 0 10px #000;line-height:1">${c.label}</div>`,
+          iconAnchor: c.anchor, className: "",
+        }),
+        interactive: false,
+      }).addTo(_ringsLayer);
+    }
+  }
 }
 
 function _ringsUpdateSwatches() {
@@ -4089,6 +4118,20 @@ function setRingsHardness(v) {
   _ringsHardness = Math.max(0.1, Math.min(1, parseFloat(v)));
   try { localStorage.setItem("opsTocRingsHardness", String(_ringsHardness)); } catch(e) {}
   if (_ringsEnabled) _drawRangeRings();
+}
+
+function _updateCardinalsButtons() {
+  [["rings-dir-off", 0], ["rings-dir-4", 4], ["rings-dir-8", 8]].forEach(([id, val]) => {
+    const b = el(id);
+    if (b) b.classList.toggle("active", _ringsCardinals === val);
+  });
+}
+
+function setRingsCardinals(n) {
+  _ringsCardinals = n;
+  try { localStorage.setItem("opsTocRingsCardinals", String(n)); } catch(e) {}
+  _updateCardinalsButtons();
+  if (_ringsEnabled) { _ringsDrawKey = ""; _drawRangeRings(); }
 }
 
 function applyRingsSettings() {
@@ -4113,6 +4156,7 @@ function _populateRingsPanel() {
   const hardEl = el("rings-hardness");
   if (hardEl) hardEl.value = _ringsHardness;
   _ringsUpdateSwatches();
+  _updateCardinalsButtons();
 }
 
 function initRangeRings() {
