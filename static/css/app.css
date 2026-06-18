@@ -1390,9 +1390,14 @@ textarea { resize: vertical; }
   border: none;
   color: var(--muted);
   cursor: pointer;
-  font-size: 11px;
+  font-size: 13px;
   line-height: 1;
-  padding: 0 2px;
+  padding: 4px 6px;
+  min-width: 28px;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   transition: color 0.12s;
 }
 .mc-btn:hover { color: var(--text); }
@@ -1546,8 +1551,8 @@ textarea { resize: vertical; }
 .folder-chip.exclude { background: rgba(192,57,43,0.08); border-color: #c0392b; color: #c0392b; opacity: 0.85; }
 .folder-chip.exclude .mc-label { text-decoration: line-through; }
 .mc-folder-icon { margin-right: 2px; font-size: 9px; opacity: 0.65; }
-.sub-chips { display: flex; flex-wrap: wrap; gap: 4px; padding-left: 14px; }
-.sub-chip { font-size: 10px !important; padding: 2px 7px 2px 8px !important; }
+.sub-chips { display: flex; flex-wrap: wrap; gap: 6px; padding-left: 14px; margin-top: 2px; }
+.sub-chip { font-size: 11px !important; padding: 4px 8px 4px 10px !important; }
 
 /* Mission manager — folder tree */
 .mission-folder-group {
