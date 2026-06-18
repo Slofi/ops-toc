@@ -4081,17 +4081,26 @@ function _drawRangeRings() {
       interactive: false,
     }).addTo(_ringsLayer);
   }
-  // Cardinal/intercardinal direction labels on outermost ring
+  // Cardinal/intercardinal direction spokes + labels
   if (_ringsCardinals > 0) {
     const outerKm  = _ringsCount * _ringsStep;
-    const cardDist = outerKm * 1.15;
+    const labelKm  = outerKm * 1.18;
     const cards    = _ringsCardinals >= 8 ? _CARD_ALL : _CARD_ALL.filter(c => c.main);
+    const gcSpoke  = _hexToRgba(tinted, 0.25 + h * 0.25);
     for (const c of cards) {
-      const pt = _offsetByKm(pos.lat, pos.lon, cardDist, c.bearing);
-      L.marker(pt, {
+      const tip = _offsetByKm(pos.lat, pos.lon, outerKm, c.bearing);
+      // Radial spoke line from center to ring edge
+      L.polyline([[pos.lat, pos.lon], tip], {
+        color: gcSpoke, weight: c.main ? 1 : 0.7,
+        dashArray: c.main ? "4,6" : "2,6",
+        interactive: false,
+      }).addTo(_ringsLayer);
+      // Label just beyond the ring
+      const lPt = _offsetByKm(pos.lat, pos.lon, labelKm, c.bearing);
+      L.marker(lPt, {
         icon: L.divIcon({
-          html: `<div style="width:40px;height:20px;display:flex;align-items:center;justify-content:center;font-size:${c.main ? "13px" : "11px"};color:${gcLbl};font-weight:${c.main ? "800" : "600"};text-shadow:0 0 3px #000,0 0 6px #000,0 0 10px #000;line-height:1;pointer-events:none">${c.label}</div>`,
-          iconSize: [40, 20], iconAnchor: c.anchor, className: "",
+          html: `<div style="font-size:${c.main ? "13px" : "11px"};color:${gcLbl};white-space:nowrap;font-weight:${c.main ? "900" : "700"};text-shadow:0 0 4px #000,0 0 8px #000">${c.label}</div>`,
+          iconAnchor: [-2, 8], className: "",
         }),
         interactive: false,
       }).addTo(_ringsLayer);
