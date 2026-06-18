@@ -132,9 +132,9 @@ let _missionFilter     = '';
 let _missionFilterMode = ''; // '' | 'include' | 'exclude' | 'folder' | 'folder-exclude'
 let _searchQuery       = '';
 let _missions      = [];
-let _attachedGPS   = null;
-let _attachedTrack = null;
-let _logTracks     = [];
+let _attachedGPS    = null;
+let _attachedTracks = [];
+let _logTracks      = [];
 let _searchTimer   = null;
 let _toastTimer    = null;
 let _activeTab     = 'log';
@@ -294,11 +294,10 @@ function renderFields(cat, values = {}) {
 
 function onCatChange() {
   _attachedGPS = null;
-  _attachedTrack = null;
+  _attachedTracks = [];
   const line = document.getElementById('gps-line');
   if (line) line.style.display = 'none';
-  const trackLine = document.getElementById('track-line');
-  if (trackLine) trackLine.style.display = 'none';
+  _renderTrackLine();
   const sel = document.getElementById('cat-select');
   if (sel) renderFields(sel.value);
 }
@@ -370,24 +369,46 @@ function trackLogFields(track) {
 
 function setAttachedTrack(track, opts = {}) {
   if (!track) return;
-  _attachedTrack = {
+  if (_attachedTracks.some(t => t.id === track.id)) {
+    toast('Track already attached', 'err'); return;
+  }
+  const isFirst = _attachedTracks.length === 0;
+  _attachedTracks.push({
     id: track.id,
     name: track.name || 'GPS track',
     distance_m: track.distance_m || 0,
     points: Array.isArray(track.points) ? track.points.length : 0,
     started_at: track.started_at || null,
     ended_at: track.ended_at || null,
-  };
-  const catSel = document.getElementById('cat-select');
-  if (catSel) catSel.value = 'TRACK';
-  renderFields('TRACK', { ...trackLogFields(track), ...(opts.values || {}) });
-  const line = document.getElementById('track-line');
-  if (line) {
-    line.style.display = '';
-    line.innerHTML = `Track: <button class="btn small" type="button" onclick="openLogTrack(${track.id})">${esc(track.name || 'GPS track')}</button>`;
+  });
+  if (isFirst) {
+    const catSel = document.getElementById('cat-select');
+    if (catSel) catSel.value = 'TRACK';
+    renderFields('TRACK', { ...trackLogFields(track), ...(opts.values || {}) });
   }
+  _renderTrackLine();
   const sel = document.getElementById('track-attach-select');
   if (sel) sel.value = '';
+}
+
+function _renderTrackLine() {
+  const line = document.getElementById('track-line');
+  if (!line) return;
+  if (!_attachedTracks.length) { line.style.display = 'none'; return; }
+  const label = _attachedTracks.length === 1 ? 'Track:' : 'Tracks:';
+  const items = _attachedTracks.map((t, i) =>
+    `<span class="track-attach-item"
+      ><button class="btn small" type="button" onclick="openLogTrack(${t.id})">${esc(t.name)}</button
+      ><button class="btn small danger track-remove-btn" type="button" onclick="removeAttachedTrack(${i})" title="Remove track">×</button
+    ></span>`
+  ).join('');
+  line.style.display = '';
+  line.innerHTML = `<span class="track-attach-label">${label}</span>${items}`;
+}
+
+function removeAttachedTrack(idx) {
+  _attachedTracks.splice(idx, 1);
+  _renderTrackLine();
 }
 
 async function attachTrackFromSelect(sel) {
@@ -407,6 +428,7 @@ async function createLogFromTrack(id) {
   if (!track) { toast('Track not found', 'err'); return; }
   _editId = null;
   _attachedGPS = null;
+  _attachedTracks = [];
   const gpsLine = document.getElementById('gps-line');
   if (gpsLine) gpsLine.style.display = 'none';
   setAttachedTrack(track);
@@ -418,6 +440,16 @@ async function createLogFromTrack(id) {
   if (cancel) cancel.style.display = 'none';
   showTab('log');
   if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function parseTracksFromBody(body) {
+  const out = [];
+  const re = /\*\*Track:\*\*\s*([^\n#(]*?)\s*\(#(\d+)\)/gi;
+  let m;
+  while ((m = re.exec(body)) !== null) {
+    out.push({ name: m[1].trim() || 'GPS track', id: Number(m[2]) });
+  }
+  return out;
 }
 
 function parseBodyToFields(body, cat) {
@@ -452,8 +484,19 @@ function assembleBody() {
     if (val) parts.push(`**${el.dataset.field}:** ${val}`);
   });
   if (_attachedGPS) parts.push(`**GPS:** ${_attachedGPS}`);
-  if (_attachedTrack && !parts.some(p => /^\*\*Track:\*\*/i.test(p))) {
-    parts.unshift(`**Track:** ${_attachedTrack.name} (#${_attachedTrack.id})`);
+  if (_attachedTracks.length > 0) {
+    if (cat === 'TRACK') {
+      // First track is in form via the 'Track' field; append extra tracks
+      for (let i = 1; i < _attachedTracks.length; i++) {
+        const t = _attachedTracks[i];
+        parts.push(`**Track:** ${t.name} (#${t.id})`);
+      }
+    } else {
+      // Non-TRACK category: prepend all tracks explicitly
+      for (const t of _attachedTracks) {
+        parts.unshift(`**Track:** ${t.name} (#${t.id})`);
+      }
+    }
   }
   return parts.join('\n');
 }
@@ -497,16 +540,16 @@ function editEntry(id) {
   if (!e) return;
   _editId = id;
   _attachedGPS = null;
-  _attachedTrack = null;
+  _attachedTracks = [];
   const line = document.getElementById('gps-line');
   if (line) line.style.display = 'none';
-  const trackLine = document.getElementById('track-line');
-  if (trackLine) trackLine.style.display = 'none';
   const catSel = document.getElementById('cat-select');
   if (catSel) catSel.value = e.category;
   setMissionInputs(e.mission || '');
   const body   = stripMissionLine(e.body || '');
   renderFields(e.category, parseBodyToFields(body, e.category));
+  _attachedTracks = parseTracksFromBody(body).map(t => ({ id: t.id, name: t.name, distance_m: 0, points: 0, started_at: null, ended_at: null }));
+  _renderTrackLine();
   const title  = document.getElementById('composer-title');
   const cancel = document.getElementById('btn-cancel-edit');
   const panel  = document.getElementById('composer-panel');
@@ -518,11 +561,10 @@ function editEntry(id) {
 function cancelEdit() {
   _editId = null;
   _attachedGPS = null;
-  _attachedTrack = null;
+  _attachedTracks = [];
   const line = document.getElementById('gps-line');
   if (line) line.style.display = 'none';
-  const trackLine = document.getElementById('track-line');
-  if (trackLine) trackLine.style.display = 'none';
+  _renderTrackLine();
   const catSel = document.getElementById('cat-select');
   if (catSel) catSel.value = 'NOTE';
   setMissionInputs('');
@@ -553,16 +595,16 @@ function duplicateEntry(id) {
   if (!e) return;
   _editId = null;
   _attachedGPS = null;
-  _attachedTrack = null;
+  _attachedTracks = [];
   const line = document.getElementById('gps-line');
   if (line) line.style.display = 'none';
-  const trackLine = document.getElementById('track-line');
-  if (trackLine) trackLine.style.display = 'none';
   const catSel = document.getElementById('cat-select');
   if (catSel) catSel.value = e.category || 'NOTE';
   setMissionInputs(e.mission || '');
   const body = stripMissionLine(e.body || '');
   renderFields(e.category || 'NOTE', parseBodyToFields(body, e.category || 'NOTE'));
+  _attachedTracks = parseTracksFromBody(body).map(t => ({ id: t.id, name: t.name, distance_m: 0, points: 0, started_at: null, ended_at: null }));
+  _renderTrackLine();
   const title  = document.getElementById('composer-title');
   const cancel = document.getElementById('btn-cancel-edit');
   const panel  = document.getElementById('composer-panel');

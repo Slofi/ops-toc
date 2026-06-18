@@ -1289,7 +1289,10 @@ textarea { resize: vertical; }
   color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
-.track-attach-line { color: #f8d48d; }
+.track-attach-line { color: #f8d48d; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.track-attach-label { font-weight: 600; margin-right: 2px; }
+.track-attach-item { display: inline-flex; align-items: center; gap: 2px; }
+.track-remove-btn { padding: 0 5px; font-size: 13px; line-height: 1; }
 
 /* Filter bar */
 .filter-bar {
