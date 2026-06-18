@@ -119,6 +119,7 @@ const FIELDS = {
     {name:'Points', hint:'Number of recorded points'},
     {name:'Start', hint:'Track start time'},
     {name:'End', hint:'Track end time'},
+    {name:'Duration', hint:'Elapsed time (auto-calculated from timestamps)'},
     {name:'Use / Result', hint:'Patrol, route taken, search pattern, perimeter check, survey result...', multiline:true},
     {name:'Notes', hint:'Extra track context', multiline:true},
   ],
@@ -356,15 +357,67 @@ function fmtLogTrackTime(ts) {
   return ts ? tocFormatTs(ts) : '';
 }
 
+function fmtDuration(secs) {
+  if (!secs || secs <= 0) return '';
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  if (h > 0) return `${h}h ${m.toString().padStart(2, '0')}m`;
+  if (m > 0) return `${m}m ${s.toString().padStart(2, '0')}s`;
+  return `${s}s`;
+}
+
 function trackLogFields(track) {
   const points = Array.isArray(track.points) ? track.points.length : 0;
+  const dur = (track.started_at && track.ended_at && track.ended_at > track.started_at)
+    ? fmtDuration(track.ended_at - track.started_at) : '';
   return {
     Track: `${track.name || 'GPS track'} (#${track.id})`,
     Distance: fmtLogTrackDistance(track.distance_m || 0),
     Points: String(points),
     Start: fmtLogTrackTime(track.started_at),
     End: fmtLogTrackTime(track.ended_at),
+    Duration: dur,
   };
+}
+
+function _enrichTrack(t) {
+  const full = _logTracks.find(lt => Number(lt.id) === Number(t.id));
+  if (!full) return t;
+  return {
+    id: full.id,
+    name: full.name || t.name,
+    distance_m: full.distance_m || 0,
+    points: Array.isArray(full.points) ? full.points.length : 0,
+    started_at: full.started_at || null,
+    ended_at: full.ended_at || null,
+  };
+}
+
+function _updateTrackFormFields() {
+  const catSel = document.getElementById('cat-select');
+  if (!catSel || catSel.value !== 'TRACK') return;
+  if (!_attachedTracks.length) return;
+  const totalDist = _attachedTracks.reduce((s, t) => s + (t.distance_m || 0), 0);
+  const totalPts  = _attachedTracks.reduce((s, t) => s + (t.points || 0), 0);
+  const starts    = _attachedTracks.map(t => t.started_at).filter(Boolean);
+  const ends      = _attachedTracks.map(t => t.ended_at).filter(Boolean);
+  const earliest  = starts.length ? Math.min(...starts) : null;
+  const latest    = ends.length   ? Math.max(...ends)   : null;
+  const n = _attachedTracks.length;
+  const setFld = (name, val) => {
+    const el = document.querySelector(`#composer-fields [data-field="${escAttr(name)}"]`);
+    if (el) el.value = val;
+  };
+  setFld('Track', n === 1
+    ? `${_attachedTracks[0].name} (#${_attachedTracks[0].id})`
+    : `${n} tracks`);
+  setFld('Distance', fmtLogTrackDistance(totalDist));
+  setFld('Points', String(totalPts));
+  setFld('Start', earliest ? fmtLogTrackTime(earliest) : '');
+  setFld('End', latest ? fmtLogTrackTime(latest) : '');
+  setFld('Duration', (earliest && latest && latest > earliest)
+    ? fmtDuration(latest - earliest) : '');
 }
 
 function setAttachedTrack(track, opts = {}) {
@@ -386,6 +439,7 @@ function setAttachedTrack(track, opts = {}) {
     if (catSel) catSel.value = 'TRACK';
     renderFields('TRACK', { ...trackLogFields(track), ...(opts.values || {}) });
   }
+  _updateTrackFormFields();
   _renderTrackLine();
   const sel = document.getElementById('track-attach-select');
   if (sel) sel.value = '';
@@ -408,6 +462,7 @@ function _renderTrackLine() {
 
 function removeAttachedTrack(idx) {
   _attachedTracks.splice(idx, 1);
+  _updateTrackFormFields();
   _renderTrackLine();
 }
 
@@ -486,13 +541,11 @@ function assembleBody() {
   if (_attachedGPS) parts.push(`**GPS:** ${_attachedGPS}`);
   if (_attachedTracks.length > 0) {
     if (cat === 'TRACK') {
-      // First track is in form via the 'Track' field; append extra tracks
-      for (let i = 1; i < _attachedTracks.length; i++) {
-        const t = _attachedTracks[i];
-        parts.push(`**Track:** ${t.name} (#${t.id})`);
-      }
+      // Remove the auto-populated Track field ("N tracks" label) and replace with individual lines
+      const ti = parts.findIndex(p => /^\*\*Track:\*\*/i.test(p));
+      if (ti !== -1) parts.splice(ti, 1);
+      parts.unshift(..._attachedTracks.map(t => `**Track:** ${t.name} (#${t.id})`));
     } else {
-      // Non-TRACK category: prepend all tracks explicitly
       for (const t of _attachedTracks) {
         parts.unshift(`**Track:** ${t.name} (#${t.id})`);
       }
@@ -548,7 +601,7 @@ function editEntry(id) {
   setMissionInputs(e.mission || '');
   const body   = stripMissionLine(e.body || '');
   renderFields(e.category, parseBodyToFields(body, e.category));
-  _attachedTracks = parseTracksFromBody(body).map(t => ({ id: t.id, name: t.name, distance_m: 0, points: 0, started_at: null, ended_at: null }));
+  _attachedTracks = parseTracksFromBody(body).map(_enrichTrack);
   _renderTrackLine();
   const title  = document.getElementById('composer-title');
   const cancel = document.getElementById('btn-cancel-edit');
@@ -603,7 +656,7 @@ function duplicateEntry(id) {
   setMissionInputs(e.mission || '');
   const body = stripMissionLine(e.body || '');
   renderFields(e.category || 'NOTE', parseBodyToFields(body, e.category || 'NOTE'));
-  _attachedTracks = parseTracksFromBody(body).map(t => ({ id: t.id, name: t.name, distance_m: 0, points: 0, started_at: null, ended_at: null }));
+  _attachedTracks = parseTracksFromBody(body).map(_enrichTrack);
   _renderTrackLine();
   const title  = document.getElementById('composer-title');
   const cancel = document.getElementById('btn-cancel-edit');
