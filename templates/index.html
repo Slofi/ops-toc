@@ -615,11 +615,14 @@
         Name
         <input id="track-save-name" type="text" placeholder="Track name" autocomplete="off">
       </label>
-      <label>
-        Folder
-        <input id="track-save-folder" type="text" list="track-folder-datalist" placeholder="Leave blank for no folder" autocomplete="off">
+      <label>Folder</label>
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px">
+        <select id="track-folder-parent" style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;color:var(--text);font:inherit;font-size:12px;padding:5px 7px;min-height:30px;cursor:pointer">
+          <option value="">No folder</option>
+        </select>
+        <input id="track-save-subfolder" type="text" list="track-folder-datalist" placeholder="Sub-folder (optional)" autocomplete="off" style="flex:1">
         <datalist id="track-folder-datalist"></datalist>
-      </label>
+      </div>
       <label>Colour</label>
       <div id="track-save-colors" class="color-swatches"></div>
       <div class="dialog-actions">

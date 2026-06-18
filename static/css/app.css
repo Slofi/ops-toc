@@ -2137,6 +2137,9 @@ textarea { resize: vertical; }
 .track-folder-name { color: var(--accent); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; flex: 1; }
 .track-folder-count { color: var(--muted); font-size: 11px; }
 .track-in-folder { padding-left: 18px; }
+.track-subfolder-header { padding-left: 24px; background: var(--bg2); }
+.track-subfolder-header .track-folder-name { color: var(--muted); font-size: 11px; text-transform: none; letter-spacing: 0; }
+.track-in-subfolder { padding-left: 36px; }
 
 /* ── Markers dropdown menu ── */
 #markers-wrap { position: relative; }

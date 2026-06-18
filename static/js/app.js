@@ -1987,51 +1987,74 @@ function renderTrackList() {
     list.innerHTML = '<div class="empty">No GPS tracks yet. Press Track when GPS has a fix.</div>';
     return;
   }
-  // Group by folder
-  const folderMap = new Map();
+  // Build two-level folder hierarchy
+  const topMap = new Map(); // parent → Map(sub → tracks[])
   for (const track of tracks) {
-    const f = track.folder || "";
-    if (!folderMap.has(f)) folderMap.set(f, []);
-    folderMap.get(f).push(track);
+    const { parent, sub } = _parseTrackFolder(track.folder);
+    if (!topMap.has(parent)) topMap.set(parent, new Map());
+    const subMap = topMap.get(parent);
+    if (!subMap.has(sub)) subMap.set(sub, []);
+    subMap.get(sub).push(track);
   }
-  // Named folders alphabetically first, ungrouped at end
-  const folders = [...folderMap.keys()].sort((a, b) => {
+  const sortFolderKeys = (keys) => [...keys].sort((a, b) => {
     if (a === "" && b !== "") return 1;
     if (b === "" && a !== "") return -1;
     return a.localeCompare(b);
   });
+
+  const _trackRow = (track, indent) => {
+    const vis = !!state.trackVisible.get(track.id);
+    const dateStr = track.updated_at ? fmtDate(track.updated_at) : "";
+    const pts = track.points?.length || 0;
+    const distStr = fmtDistance(track.distance_m || 0);
+    const tColor = track.color || TRACK_COLOR;
+    const cls = indent === 2 ? " track-in-subfolder" : indent === 1 ? " track-in-folder" : "";
+    return `<div class="list-row${cls}" onclick="toggleTrackVisibility(${track.id})" title="${vis ? "Click to hide" : "Click to show on map"}">
+      <div class="row-icon track-icon" style="background:${vis ? tColor : "var(--surface2)"};color:${vis ? "#111" : "var(--muted)"}">trk</div>
+      <div class="row-main">
+        <div class="row-title">${esc(track.name)}</div>
+        <div class="row-sub">${distStr} · ${pts} pts${dateStr ? " · " + dateStr : ""}</div>
+      </div>
+      <div class="row-actions">
+        <button class="btn small" onclick="event.stopPropagation();flyToTrack(${track.id})">View</button>
+        <button class="btn small" onclick="event.stopPropagation();createLogFromTrack(${track.id})">Log</button>
+        <button class="btn small" onclick="event.stopPropagation();editTrack(${track.id})">Edit</button>
+        <button class="btn small" onclick="event.stopPropagation();downloadTrack(${track.id},'gpx')">GPX</button>
+      </div>
+    </div>`;
+  };
+
   let html = "";
-  for (const folder of folders) {
-    const folderTracks = folderMap.get(folder);
-    const collapsed = state.collapsedFolders.has(folder);
-    if (folder) {
-      html += `<div class="track-folder-header" onclick="toggleTrackFolder('${esc(folder)}')" data-folder="${esc(folder)}">
-        <span class="track-folder-icon">${collapsed ? "▶" : "▼"}</span>
-        <span class="track-folder-name">${esc(folder)}</span>
-        <span class="track-folder-count">${folderTracks.length}</span>
+  for (const parent of sortFolderKeys(topMap.keys())) {
+    const subMap = topMap.get(parent);
+    const parentCollapsed = parent && state.collapsedFolders.has(parent);
+    const totalCount = [...subMap.values()].reduce((n, t) => n + t.length, 0);
+
+    if (parent) {
+      html += `<div class="track-folder-header" onclick="toggleTrackFolder('${esc(parent)}')" data-folder="${esc(parent)}">
+        <span class="track-folder-icon">${parentCollapsed ? "▶" : "▼"}</span>
+        <span class="track-folder-name">${esc(parent)}</span>
+        <span class="track-folder-count">${totalCount}</span>
       </div>`;
-      if (collapsed) continue;
+      if (parentCollapsed) continue;
     }
-    for (const track of folderTracks) {
-      const vis = !!state.trackVisible.get(track.id);
-      const dateStr = track.updated_at ? fmtDate(track.updated_at) : "";
-      const pts = track.points?.length || 0;
-      const distStr = fmtDistance(track.distance_m || 0);
-      const tColor = track.color || TRACK_COLOR;
-      html += `
-      <div class="list-row${folder ? " track-in-folder" : ""}" onclick="toggleTrackVisibility(${track.id})" title="${vis ? "Click to hide" : "Click to show on map"}">
-        <div class="row-icon track-icon" style="background:${vis ? tColor : "var(--surface2)"};color:${vis ? "#111" : "var(--muted)"}">trk</div>
-        <div class="row-main">
-          <div class="row-title">${esc(track.name)}</div>
-          <div class="row-sub">${distStr} · ${pts} pts${dateStr ? " · " + dateStr : ""}</div>
-        </div>
-        <div class="row-actions">
-          <button class="btn small" onclick="event.stopPropagation();flyToTrack(${track.id})">View</button>
-          <button class="btn small" onclick="event.stopPropagation();createLogFromTrack(${track.id})">Log</button>
-          <button class="btn small" onclick="event.stopPropagation();editTrack(${track.id})">Edit</button>
-          <button class="btn small" onclick="event.stopPropagation();downloadTrack(${track.id},'gpx')">GPX</button>
-        </div>
-      </div>`;
+
+    for (const sub of sortFolderKeys(subMap.keys())) {
+      const subTracks = subMap.get(sub);
+      const subKey = sub ? `${parent} / ${sub}` : "";
+      const subCollapsed = subKey && state.collapsedFolders.has(subKey);
+
+      if (sub) {
+        html += `<div class="track-folder-header track-subfolder-header" onclick="toggleTrackFolder('${esc(subKey)}')" data-folder="${esc(subKey)}">
+          <span class="track-folder-icon">${subCollapsed ? "▶" : "▼"}</span>
+          <span class="track-folder-name">${esc(sub)}</span>
+          <span class="track-folder-count">${subTracks.length}</span>
+        </div>`;
+        if (subCollapsed) continue;
+      }
+
+      const indent = sub ? 2 : parent ? 1 : 0;
+      for (const track of subTracks) html += _trackRow(track, indent);
     }
   }
   list.innerHTML = html;
@@ -2094,11 +2117,35 @@ async function editTrack(id) {
   }
 }
 
+function _parseTrackFolder(folder) {
+  if (!folder) return { parent: "", sub: "" };
+  const idx = folder.indexOf(" / ");
+  if (idx === -1) return { parent: folder, sub: "" };
+  return { parent: folder.slice(0, idx), sub: folder.slice(idx + 3) };
+}
+
+function _buildTrackFolder(parent, sub) {
+  const p = (parent || "").trim();
+  const s = (sub || "").trim();
+  if (!p) return s || "";
+  return s ? `${p} / ${s}` : p;
+}
+
 function populateFolderDatalist() {
+  const allFolders = [...new Set([...state.tracks.values()].map((t) => t.folder).filter(Boolean))].sort();
+  const parents = [...new Set(allFolders.map(f => _parseTrackFolder(f).parent).filter(Boolean))].sort();
+  const subs    = [...new Set(allFolders.map(f => _parseTrackFolder(f).sub).filter(Boolean))].sort();
+
+  const pSel = el("track-folder-parent");
+  if (pSel) {
+    const cur = pSel.value;
+    pSel.innerHTML = '<option value="">No folder</option>' +
+      parents.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join("");
+    if (parents.includes(cur)) pSel.value = cur;
+  }
+
   const dl = el("track-folder-datalist");
-  if (!dl) return;
-  const folders = [...new Set([...state.tracks.values()].map((t) => t.folder).filter(Boolean))].sort();
-  dl.innerHTML = folders.map((f) => `<option value="${esc(f)}">`).join("");
+  if (dl) dl.innerHTML = subs.map(s => `<option value="${esc(s)}">`).join("");
 }
 
 function trackDialogSelectColor(c) {
@@ -2131,8 +2178,19 @@ function showTrackSaveDialog(opts = {}) {
     infoEl.textContent = info;
     infoEl.style.display = info ? "" : "none";
     el("track-save-name").value = name;
-    el("track-save-folder").value = folder;
     populateFolderDatalist();
+    const _pf = _parseTrackFolder(folder);
+    const _pSel = el("track-folder-parent");
+    if (_pSel && _pf.parent) {
+      if (!_pSel.querySelector(`option[value="${esc(_pf.parent)}"]`)) {
+        const opt = document.createElement("option");
+        opt.value = _pf.parent; opt.textContent = _pf.parent;
+        _pSel.appendChild(opt);
+      }
+      _pSel.value = _pf.parent;
+    }
+    const _sfEl = el("track-save-subfolder");
+    if (_sfEl) _sfEl.value = _pf.sub;
     renderTrackSaveColors(color);
 
     const discardBtn = el("track-save-discard");
@@ -2156,7 +2214,7 @@ function showTrackSaveDialog(opts = {}) {
       dialog.close();
       finish({
         name: el("track-save-name").value.trim() || name || "GPS track",
-        folder: el("track-save-folder").value.trim(),
+        folder: _buildTrackFolder(el("track-folder-parent")?.value, el("track-save-subfolder")?.value),
         color: _trackSaveSelectedColor,
       });
     };
