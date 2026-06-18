@@ -91,6 +91,7 @@
         <button class="menu-item" type="button" data-settings-target="queue-section">Download Queue</button>
         <div class="menu-sep"></div>
         <button class="menu-item" type="button" data-settings-target="gps-section">GPS/Position</button>
+        <button class="menu-item" type="button" data-settings-target="rings-section">Range Rings</button>
         <button class="menu-item" type="button" data-settings-target="keys-section">Map Keys</button>
         <button class="menu-item" type="button" data-settings-target="appearance-section">Appearance</button>
         <button class="menu-item" type="button" data-settings-target="app-control-section">App Control</button>
@@ -790,12 +791,13 @@
 
       <section class="settings-section" id="gps-section">
         <h3>GPS/Position</h3>
-        <p class="dialog-note">Three modes: <b>OM proxy</b> (recommended when OM is running — polls OM's GPS so only one app owns the serial port), <b>Direct serial</b> (for standalone use without OM), or <b>Manual position</b> (set a fixed location on the map — no GPS dongle needed).</p>
+
+        <p class="dialog-note"><b>GPS receiver</b> — live position from dongle or OM proxy.</p>
         <div class="gps-settings-card">
           <label class="setting-row switch-row" for="gps-enabled">
             <span class="setting-label-main">
               <span>GPS receiver</span>
-              <span class="setting-label-note">Enable live position and track recording input.</span>
+              <span class="setting-label-note">Enable live position and track recording.</span>
             </span>
             <span class="switch-control">
               <input type="checkbox" id="gps-enabled">
@@ -805,12 +807,11 @@
           <label class="setting-row">
             <span class="setting-label-main">
               <span>Source</span>
-              <span class="setting-label-note">Use OM proxy when OM is running; direct serial for standalone OPS-TOC; manual to pin a fixed location.</span>
+              <span class="setting-label-note">Use OM proxy when OM is running; direct serial for standalone.</span>
             </span>
             <select id="gps-source-select" onchange="gpsSourceChanged()">
               <option value="proxy">OM proxy (localhost:8082)</option>
               <option value="direct">Direct serial port</option>
-              <option value="manual">Manual position</option>
             </select>
           </label>
           <div id="gps-port-row" class="setting-row" style="display:none">
@@ -823,23 +824,97 @@
               <button class="btn small" type="button" id="gps-scan-btn">Scan</button>
             </div>
           </div>
-          <div id="gps-manual-row" class="setting-row" style="display:none">
-            <span class="setting-label-main">
-              <span>Position</span>
-              <span class="setting-label-note">Tap "Pick on map" or enter coordinates manually.</span>
-            </span>
-            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-              <input type="text" id="gps-manual-lat" placeholder="Latitude" style="width:100px;background:var(--bg-input,#1e293b);color:var(--text,#e2e8f0);border:1px solid var(--border,#334155);border-radius:5px;padding:5px 8px;font-size:12px">
-              <input type="text" id="gps-manual-lon" placeholder="Longitude" style="width:100px;background:var(--bg-input,#1e293b);color:var(--text,#e2e8f0);border:1px solid var(--border,#334155);border-radius:5px;padding:5px 8px;font-size:12px">
-              <button class="btn small" type="button" id="gps-pick-btn">Pick on map</button>
-            </div>
-          </div>
         </div>
         <div id="gps-status-row" class="gps-status-row" hidden>
           <span id="gps-status-text" class="field-help"></span>
         </div>
         <div class="section-actions">
           <button class="btn primary" type="button" id="gps-save-btn">Save GPS Settings</button>
+        </div>
+
+        <p class="dialog-note" style="margin-top:16px"><b>Fixed position</b> — static diamond pin, no dongle needed. GPS takes priority when live fix is available.</p>
+        <div class="gps-settings-card">
+          <label class="setting-row switch-row" for="fixed-pos-enabled">
+            <span class="setting-label-main">
+              <span>Fixed position</span>
+              <span class="setting-label-note">Show a diamond pin at the set location.</span>
+            </span>
+            <span class="switch-control">
+              <input type="checkbox" id="fixed-pos-enabled">
+              <span class="switch-slider" aria-hidden="true"></span>
+            </span>
+          </label>
+          <div class="setting-row">
+            <span class="setting-label-main">
+              <span>Coordinates</span>
+              <span class="setting-label-note">Tap Pick to click a location on the map.</span>
+            </span>
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+              <input type="text" id="fixed-pos-lat" placeholder="Lat" style="width:88px;background:var(--bg-input,#1e293b);color:var(--text,#e2e8f0);border:1px solid var(--border,#334155);border-radius:5px;padding:5px 8px;font-size:12px">
+              <input type="text" id="fixed-pos-lon" placeholder="Lon" style="width:88px;background:var(--bg-input,#1e293b);color:var(--text,#e2e8f0);border:1px solid var(--border,#334155);border-radius:5px;padding:5px 8px;font-size:12px">
+              <button class="btn small" type="button" id="fixed-pos-pick-btn">Pick</button>
+            </div>
+          </div>
+        </div>
+        <div class="section-actions">
+          <button class="btn primary" type="button" id="fixed-pos-save-btn">Save Fixed Position</button>
+        </div>
+      </section>
+
+      <section class="settings-section" id="rings-section">
+        <h3>Range Rings</h3>
+        <p class="dialog-note">Concentric distance rings centered on the active position (GPS fix takes priority over fixed position).</p>
+        <div class="gps-settings-card">
+          <label class="setting-row switch-row" for="rings-enabled">
+            <span class="setting-label-main">
+              <span>Show rings</span>
+              <span class="setting-label-note">Overlay range rings on the map.</span>
+            </span>
+            <span class="switch-control">
+              <input type="checkbox" id="rings-enabled">
+              <span class="switch-slider" aria-hidden="true"></span>
+            </span>
+          </label>
+          <div class="setting-row">
+            <span class="setting-label-main">
+              <span>Ring count</span>
+              <span class="setting-label-note">Number of rings to draw (1–10).</span>
+            </span>
+            <input type="number" id="rings-count" min="1" max="10" value="3" style="width:64px;background:var(--bg-input,#1e293b);color:var(--text,#e2e8f0);border:1px solid var(--border,#334155);border-radius:5px;padding:5px 8px;font-size:12px">
+          </div>
+          <div class="setting-row">
+            <span class="setting-label-main">
+              <span>Ring spacing (km)</span>
+              <span class="setting-label-note">Distance between rings.</span>
+            </span>
+            <input type="number" id="rings-step" min="0.1" max="500" step="0.1" value="5" style="width:64px;background:var(--bg-input,#1e293b);color:var(--text,#e2e8f0);border:1px solid var(--border,#334155);border-radius:5px;padding:5px 8px;font-size:12px">
+          </div>
+          <div class="setting-row">
+            <span class="setting-label-main">
+              <span>Colour</span>
+            </span>
+            <div>
+              <div class="color-swatches" id="rings-swatches">
+                <button class="color-swatch" data-color="#ffffff" style="background:#ffffff" title="White"></button>
+                <button class="color-swatch" data-color="#aaaaaa" style="background:#aaaaaa" title="Gray"></button>
+                <button class="color-swatch" data-color="#e8b04f" style="background:#e8b04f" title="Accent"></button>
+                <button class="color-swatch" data-color="#ef4444" style="background:#ef4444" title="Red"></button>
+                <button class="color-swatch" data-color="#3b82f6" style="background:#3b82f6" title="Blue"></button>
+                <button class="color-swatch" data-color="#22c55e" style="background:#22c55e" title="Green"></button>
+                <input type="color" id="rings-color-custom" class="color-swatch-custom" title="Custom colour">
+              </div>
+            </div>
+          </div>
+          <div class="setting-row">
+            <span class="setting-label-main">
+              <span>Hardness</span>
+              <span class="setting-label-note">Ring opacity and saturation.</span>
+            </span>
+            <input type="range" id="rings-hardness" min="0.1" max="1" step="0.05" value="0.5" style="flex:1;accent-color:var(--accent)">
+          </div>
+        </div>
+        <div class="section-actions">
+          <button class="btn primary" type="button" id="rings-apply-btn">Apply</button>
         </div>
       </section>
 

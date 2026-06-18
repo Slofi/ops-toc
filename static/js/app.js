@@ -3754,19 +3754,6 @@ function _gpsUpdateDot() {
   }
 }
 
-function _gpsMarkerIcon() {
-  const accent = currentAccentColor() || DEFAULT_ACCENT;
-  if (_gpsSource === "manual") {
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22"><polygon points="11,2 20,11 11,20 2,11" fill="${accent}" stroke="#fff" stroke-width="2.5"/></svg>`;
-    return L.divIcon({ className: "", html: svg, iconSize: [22, 22], iconAnchor: [11, 11] });
-  }
-  return L.divIcon({
-    className: "",
-    html: `<div style="width:14px;height:14px;background:${accent};border:2px solid #fff;border-radius:50%;box-shadow:0 0 6px ${accent}aa"></div>`,
-    iconSize: [14, 14], iconAnchor: [7, 7],
-  });
-}
-
 function _gpsUpdateMarker() {
   if (!state.map) return; // map not initialized yet (deferred until MAP tab opened)
   if (!_gpsState.fix || _gpsState.lat === null) {
@@ -3774,20 +3761,16 @@ function _gpsUpdateMarker() {
     return;
   }
   const ll = [_gpsState.lat, _gpsState.lon];
-  // Rebuild marker when source changes so the icon shape updates
-  const wantManual = _gpsSource === "manual";
-  const hasManual  = _gpsMarker && _gpsMarker._isManual;
-  if (_gpsMarker && wantManual !== hasManual) {
-    state.map.removeLayer(_gpsMarker);
-    _gpsMarker = null;
-  }
   if (!_gpsMarker) {
-    const icon = _gpsMarkerIcon();
-    _gpsMarker = L.marker(ll, { icon, zIndexOffset: 1000 });
-    _gpsMarker._isManual = wantManual;
-    _gpsMarker.bindPopup(() => {
+    const accent = currentAccentColor() || DEFAULT_ACCENT;
+    const icon = L.divIcon({
+      className: "",
+      html: `<div style="width:14px;height:14px;background:${accent};border:2px solid #fff;border-radius:50%;box-shadow:0 0 6px ${accent}aa"></div>`,
+      iconSize: [14, 14], iconAnchor: [7, 7],
+    });
+    _gpsMarker = L.marker(ll, { icon, zIndexOffset: 1000 })
+      .bindPopup(() => {
         const s = _gpsState;
-        if (_gpsSource === "manual") return `<b>Manual position</b><br>${s.lat.toFixed(6)}, ${s.lon.toFixed(6)}`;
         return `<b>GPS Position</b><br>${s.lat.toFixed(6)}, ${s.lon.toFixed(6)}<br>Alt: ${s.alt ?? "—"}m · Sats: ${s.sats}`;
       })
       .addTo(state.map);
@@ -3832,6 +3815,8 @@ async function _gpsPoll() {
     _gpsUpdateDot();
     _updateSpeedHud();
     _gpsUpdateMarker();
+    _updateFixedMarker();
+    _drawRangeRings();
     captureGpsPoint();
     // update status text in settings panel if visible
     const row = el("gps-status-row");
@@ -3841,9 +3826,7 @@ async function _gpsPoll() {
         row.hidden = true;
       } else {
         row.hidden = false;
-        if (d.source === "manual" || d.manual) {
-          txt.textContent = `Manual position — ${Number(d.lat).toFixed(5)}, ${Number(d.lon).toFixed(5)}`;
-        } else if (d.fix) {
+        if (d.fix) {
           txt.textContent = `Fix ✓ — ${Number(d.lat).toFixed(5)}, ${Number(d.lon).toFixed(5)} · Alt ${d.alt ?? "—"}m · Sats ${d.sats}`;
         } else {
           txt.textContent = `No fix — Sats in view: ${d.sats_view || 0}${d.error ? " · " + d.error : ""}`;
@@ -3880,27 +3863,18 @@ async function gpsScanPorts() {
 }
 
 function gpsSourceChanged() {
-  const v    = (el("gps-source-select") || {}).value;
-  const row  = el("gps-port-row");
-  const mrow = el("gps-manual-row");
-  if (row)  row.style.display  = (v === "direct") ? "block" : "none";
-  if (mrow) mrow.style.display = (v === "manual") ? "block" : "none";
+  const v   = (el("gps-source-select") || {}).value;
+  const row = el("gps-port-row");
+  if (row) row.style.display = (v === "direct") ? "block" : "none";
 }
 
 async function gpsSaveSettings() {
-  const enabled = el("gps-enabled").checked;
-  const src     = el("gps-source-select");
-  const srcVal  = src ? src.value : "proxy";
-  const manual  = srcVal === "manual";
-  const port    = (el("gps-port-select") || {}).value || "";
-  const body    = { enabled, port, om_proxy: srcVal === "proxy", om_url: "http://localhost:8082", manual };
-  if (manual) {
-    const lat = parseFloat((el("gps-manual-lat") || {}).value || "");
-    const lon = parseFloat((el("gps-manual-lon") || {}).value || "");
-    if (!isNaN(lat) && !isNaN(lon)) { body.lat = lat; body.lon = lon; }
-  }
+  const enabled  = el("gps-enabled").checked;
+  const src      = el("gps-source-select");
+  const srcVal   = src ? src.value : "proxy";
+  const port     = (el("gps-port-select") || {}).value || "";
   await api("/api/gps", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body) });
+    body: JSON.stringify({ enabled, port, om_proxy: srcVal === "proxy", om_url: "http://localhost:8082" }) });
   await _gpsPoll();
 }
 
@@ -3910,21 +3884,23 @@ function startGpsPickMode() {
   _gpsPickMode = true;
   el("settings-dialog")?.close();
   showTab("map");
-  setBanner("Click the map to set manual position — Esc to cancel");
+  setBanner("Click the map to set fixed position — Esc to cancel");
 }
 
 async function _gpsPickComplete(lat, lon) {
   _gpsPickMode = false;
   setBanner("");
-  const latEl = el("gps-manual-lat");
-  const lonEl = el("gps-manual-lon");
+  const latEl = el("fixed-pos-lat");
+  const lonEl = el("fixed-pos-lon");
   if (latEl) latEl.value = lat.toFixed(6);
   if (lonEl) lonEl.value = lon.toFixed(6);
   await populateGpsSettings();
-  const src = el("gps-source-select");
-  if (src) { src.value = "manual"; gpsSourceChanged(); }
+  // Restore picked coords (populateGpsSettings resets them from saved state)
   if (latEl) latEl.value = lat.toFixed(6);
   if (lonEl) lonEl.value = lon.toFixed(6);
+  // Auto-enable the toggle so the pin shows after Save
+  const cb = el("fixed-pos-enabled");
+  if (cb) cb.checked = true;
   openSettings("gps-section");
 }
 
@@ -3933,31 +3909,21 @@ async function populateGpsSettings() {
   const cb = el("gps-enabled");
   if (cb) cb.checked = d.enabled || false;
   const src = el("gps-source-select");
-  if (src) {
-    if (d.manual) src.value = "manual";
-    else if (d.om_proxy !== false) src.value = "proxy";
-    else src.value = "direct";
-    gpsSourceChanged();
-  }
+  if (src) { src.value = (d.om_proxy !== false) ? "proxy" : "direct"; gpsSourceChanged(); }
   await gpsScanPorts();
   const sel = el("gps-port-select");
   if (sel && d.port) sel.value = d.port;
-  const latEl = el("gps-manual-lat");
-  const lonEl = el("gps-manual-lon");
-  if (latEl && d.manual_lat != null) latEl.value = Number(d.manual_lat).toFixed(6);
-  if (lonEl && d.manual_lon != null) lonEl.value = Number(d.manual_lon).toFixed(6);
   await _gpsPoll();
+  _populateFixedPosPanel();
 }
 
 async function initGps() {
   const saveBtn = el("gps-save-btn");
   const scanBtn = el("gps-scan-btn");
   const srcSel  = el("gps-source-select");
-  const pickBtn = el("gps-pick-btn");
   if (saveBtn) saveBtn.onclick = gpsSaveSettings;
   if (scanBtn) scanBtn.onclick = gpsScanPorts;
   if (srcSel)  srcSel.onchange = gpsSourceChanged;
-  if (pickBtn) pickBtn.onclick = startGpsPickMode;
   document.querySelectorAll("[data-settings-target='gps-section']").forEach((btn) => {
     btn.addEventListener("click", populateGpsSettings);
   });
@@ -3965,8 +3931,218 @@ async function initGps() {
   _gpsTimer = setInterval(_gpsPoll, 3000);
 }
 
+// ── Geo / colour helpers (shared by fixed pos and range rings) ──────────────
+
+function _hexToRgba(hex, alpha) {
+  const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+function _tintColor(hex, v) {
+  const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16);
+  const m = c => Math.round(c + (255 - c) * (1 - v));
+  return "#" + [m(r),m(g),m(b)].map(x => x.toString(16).padStart(2,"0")).join("");
+}
+function _offsetByKm(lat, lon, km, bearingDeg) {
+  const R = 6371, d = km / R, b = bearingDeg * Math.PI / 180;
+  const φ1 = lat * Math.PI / 180, λ1 = lon * Math.PI / 180;
+  const φ2 = Math.asin(Math.sin(φ1) * Math.cos(d) + Math.cos(φ1) * Math.sin(d) * Math.cos(b));
+  const λ2 = λ1 + Math.atan2(Math.sin(b) * Math.sin(d) * Math.cos(φ1), Math.cos(d) - Math.sin(φ1) * Math.sin(φ2));
+  return [φ2 * 180 / Math.PI, λ2 * 180 / Math.PI];
+}
+
+function _activePosition() {
+  if (_gpsEnabled && _gpsState.fix && _gpsState.lat != null)
+    return { lat: _gpsState.lat, lon: _gpsState.lon };
+  if (_fixedPosEnabled && _fixedPosLat != null && _fixedPosLon != null)
+    return { lat: _fixedPosLat, lon: _fixedPosLon };
+  return null;
+}
+
+// ── Fixed position ──────────────────────────────────────────────────────────
+
+let _fixedPosEnabled = (() => { try { return localStorage.getItem("opsTocFixedPosEnabled") === "1"; } catch(e) { return false; } })();
+let _fixedPosLat = (() => { try { const v = localStorage.getItem("opsTocFixedPosLat"); return v != null ? parseFloat(v) : null; } catch(e) { return null; } })();
+let _fixedPosLon = (() => { try { const v = localStorage.getItem("opsTocFixedPosLon"); return v != null ? parseFloat(v) : null; } catch(e) { return null; } })();
+let _fixedMarker = null;
+
+function _updateFixedMarker() {
+  if (!state.map) return;
+  const show = _fixedPosEnabled && _fixedPosLat != null && _fixedPosLon != null;
+  if (!show) {
+    if (_fixedMarker) { state.map.removeLayer(_fixedMarker); _fixedMarker = null; }
+    return;
+  }
+  const ll = [_fixedPosLat, _fixedPosLon];
+  const accent = currentAccentColor() || DEFAULT_ACCENT;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22"><polygon points="11,2 20,11 11,20 2,11" fill="${accent}" stroke="#fff" stroke-width="2.5"/></svg>`;
+  const icon = L.divIcon({ className: "", html: svg, iconSize: [22, 22], iconAnchor: [11, 11] });
+  if (!_fixedMarker) {
+    _fixedMarker = L.marker(ll, { icon, zIndexOffset: 900 })
+      .bindPopup(`<b>Fixed position</b><br>${_fixedPosLat.toFixed(6)}, ${_fixedPosLon.toFixed(6)}`)
+      .addTo(state.map);
+  } else {
+    _fixedMarker.setLatLng(ll).setIcon(icon);
+    _fixedMarker.setPopupContent(`<b>Fixed position</b><br>${_fixedPosLat.toFixed(6)}, ${_fixedPosLon.toFixed(6)}`);
+  }
+}
+
+function saveFixedPosition() {
+  const latVal   = parseFloat((el("fixed-pos-lat") || {}).value || "");
+  const lonVal   = parseFloat((el("fixed-pos-lon") || {}).value || "");
+  const enabled  = !!(el("fixed-pos-enabled") || {}).checked;
+  if (!isNaN(latVal) && !isNaN(lonVal)) { _fixedPosLat = latVal; _fixedPosLon = lonVal; }
+  _fixedPosEnabled = enabled;
+  try {
+    localStorage.setItem("opsTocFixedPosEnabled", enabled ? "1" : "0");
+    if (_fixedPosLat != null) localStorage.setItem("opsTocFixedPosLat", String(_fixedPosLat));
+    if (_fixedPosLon != null) localStorage.setItem("opsTocFixedPosLon", String(_fixedPosLon));
+  } catch(e) {}
+  _updateFixedMarker();
+  _drawRangeRings();
+}
+
+function _populateFixedPosPanel() {
+  const cb = el("fixed-pos-enabled");
+  if (cb) cb.checked = _fixedPosEnabled;
+  const latEl = el("fixed-pos-lat");
+  const lonEl = el("fixed-pos-lon");
+  if (latEl && _fixedPosLat != null) latEl.value = _fixedPosLat.toFixed(6);
+  if (lonEl && _fixedPosLon != null) lonEl.value = _fixedPosLon.toFixed(6);
+}
+
+function initFixedPos() {
+  const saveBtn = el("fixed-pos-save-btn");
+  const pickBtn = el("fixed-pos-pick-btn");
+  if (saveBtn) saveBtn.onclick = saveFixedPosition;
+  if (pickBtn) pickBtn.onclick = startGpsPickMode;
+  _populateFixedPosPanel();
+  _updateFixedMarker();
+}
+
+// ── Range rings ─────────────────────────────────────────────────────────────
+
+const _RINGS_DEFAULT_COLOR    = "#aaaaaa";
+const _RINGS_DEFAULT_HARDNESS = 0.5;
+const _RINGS_DEFAULT_COUNT    = 3;
+const _RINGS_DEFAULT_STEP     = 5;
+
+let _ringsEnabled  = (() => { try { return localStorage.getItem("opsTocRingsEnabled") === "1"; } catch(e) { return false; } })();
+let _ringsCount    = (() => { try { return parseInt(localStorage.getItem("opsTocRingsCount"))  || _RINGS_DEFAULT_COUNT;    } catch(e) { return _RINGS_DEFAULT_COUNT;    } })();
+let _ringsStep     = (() => { try { return parseFloat(localStorage.getItem("opsTocRingsStep")) || _RINGS_DEFAULT_STEP;     } catch(e) { return _RINGS_DEFAULT_STEP;     } })();
+let _ringsColor    = (() => { try { return localStorage.getItem("opsTocRingsColor")            || _RINGS_DEFAULT_COLOR;    } catch(e) { return _RINGS_DEFAULT_COLOR;    } })();
+let _ringsHardness = (() => { try { return parseFloat(localStorage.getItem("opsTocRingsHardness")) || _RINGS_DEFAULT_HARDNESS; } catch(e) { return _RINGS_DEFAULT_HARDNESS; } })();
+let _ringsLayer    = null;
+let _ringsDrawKey  = "";  // tracks last drawn state to skip redundant redraws
+
+function _clearRangeRings() {
+  if (_ringsLayer) { try { state.map && state.map.removeLayer(_ringsLayer); } catch(e) {} _ringsLayer = null; }
+}
+
+function _drawRangeRings() {
+  if (!_ringsEnabled || !state.map) { _clearRangeRings(); _ringsDrawKey = ""; return; }
+  const pos = _activePosition();
+  if (!pos) { _clearRangeRings(); _ringsDrawKey = ""; return; }
+  // Skip redraw if nothing relevant changed (prevents 3s-poll flicker)
+  const key = `${pos.lat.toFixed(6)},${pos.lon.toFixed(6)}|${_ringsCount}|${_ringsStep}|${_ringsColor}|${_ringsHardness}`;
+  if (key === _ringsDrawKey && _ringsLayer) return;
+  _ringsDrawKey = key;
+  _clearRangeRings();
+  _ringsLayer = L.layerGroup().addTo(state.map);
+  const h      = _ringsHardness;
+  const tinted = _tintColor(_ringsColor, h);
+  const gc     = _hexToRgba(tinted, 0.45 + h * 0.35);
+  const gcLbl  = _hexToRgba(tinted, 0.80 + h * 0.20);
+  const wRing  = 0.6 + h * 1.4;
+  for (let i = 1; i <= _ringsCount; i++) {
+    const km = i * _ringsStep;
+    L.circle([pos.lat, pos.lon], {
+      radius: km * 1000, color: gc, weight: wRing, fillOpacity: 0, interactive: false,
+    }).addTo(_ringsLayer);
+    const lPt  = _offsetByKm(pos.lat, pos.lon, km, 0);
+    const label = km >= 1 ? `${km % 1 === 0 ? km : km.toFixed(1)}km` : `${Math.round(km * 1000)}m`;
+    L.marker(lPt, {
+      icon: L.divIcon({
+        html: `<div style="font-size:11px;color:${gcLbl};white-space:nowrap;font-weight:700;text-shadow:0 0 3px #000,0 0 6px #000,0 0 10px #000">${label}</div>`,
+        iconAnchor: [-2, 8], className: "",
+      }),
+      interactive: false,
+    }).addTo(_ringsLayer);
+  }
+}
+
+function _ringsUpdateSwatches() {
+  document.querySelectorAll("#rings-swatches .color-swatch").forEach(s => {
+    s.classList.toggle("selected", s.dataset.color === _ringsColor);
+  });
+  const custom = el("rings-color-custom");
+  if (custom) custom.value = _ringsColor;
+}
+
+function setRingsColor(color) {
+  _ringsColor = color;
+  try { localStorage.setItem("opsTocRingsColor", color); } catch(e) {}
+  _ringsUpdateSwatches();
+  if (_ringsEnabled) _drawRangeRings();
+}
+
+function setRingsHardness(v) {
+  _ringsHardness = Math.max(0.1, Math.min(1, parseFloat(v)));
+  try { localStorage.setItem("opsTocRingsHardness", String(_ringsHardness)); } catch(e) {}
+  if (_ringsEnabled) _drawRangeRings();
+}
+
+function applyRingsSettings() {
+  const count = parseInt((el("rings-count") || {}).value  || "") || _RINGS_DEFAULT_COUNT;
+  const step  = parseFloat((el("rings-step") || {}).value || "") || _RINGS_DEFAULT_STEP;
+  _ringsCount = Math.max(1, Math.min(10, count));
+  _ringsStep  = Math.max(0.1, step);
+  try {
+    localStorage.setItem("opsTocRingsCount", String(_ringsCount));
+    localStorage.setItem("opsTocRingsStep",  String(_ringsStep));
+  } catch(e) {}
+  if (_ringsEnabled) _drawRangeRings();
+}
+
+function _populateRingsPanel() {
+  const cb = el("rings-enabled");
+  if (cb) cb.checked = _ringsEnabled;
+  const countEl = el("rings-count");
+  if (countEl) countEl.value = _ringsCount;
+  const stepEl = el("rings-step");
+  if (stepEl) stepEl.value = _ringsStep;
+  const hardEl = el("rings-hardness");
+  if (hardEl) hardEl.value = _ringsHardness;
+  _ringsUpdateSwatches();
+}
+
+function initRangeRings() {
+  const cb = el("rings-enabled");
+  if (cb) cb.onchange = () => {
+    _ringsEnabled = cb.checked;
+    try { localStorage.setItem("opsTocRingsEnabled", cb.checked ? "1" : "0"); } catch(e) {}
+    _drawRangeRings();
+  };
+  const applyBtn = el("rings-apply-btn");
+  if (applyBtn) applyBtn.onclick = applyRingsSettings;
+  const countEl = el("rings-count");
+  if (countEl) countEl.onchange = applyRingsSettings;
+  const stepEl = el("rings-step");
+  if (stepEl) stepEl.onchange = applyRingsSettings;
+  document.querySelectorAll("#rings-swatches .color-swatch").forEach(s => {
+    s.onclick = () => setRingsColor(s.dataset.color);
+  });
+  const custom = el("rings-color-custom");
+  if (custom) custom.oninput = () => setRingsColor(custom.value);
+  const hardEl = el("rings-hardness");
+  if (hardEl) hardEl.oninput = () => setRingsHardness(hardEl.value);
+  document.querySelectorAll("[data-settings-target='rings-section']").forEach(btn => {
+    btn.addEventListener("click", _populateRingsPanel);
+  });
+  _populateRingsPanel();
+}
+
 // Hook into existing DOMContentLoaded / init cycle
 document.addEventListener("DOMContentLoaded", () => {
   // initMap is already called — hook GPS after a short delay to let map init settle
-  setTimeout(initGps, 500);
+  setTimeout(() => { initGps(); initFixedPos(); initRangeRings(); }, 500);
 });
