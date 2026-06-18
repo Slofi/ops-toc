@@ -517,9 +517,12 @@ function checklistParseJsonImport(text) {
 function checklistParseTextImport(text) {
   const lists = [];
   let current = null;
+  let currentFolder = "Imported";
   for (const rawLine of text.split(/\r?\n/)) {
     const line = rawLine.trim();
     if (!line || /^OPS-TOC Checklists$/i.test(line)) continue;
+
+    // Checklist item
     const itemMatch = line.match(/^(?:[-*]\s*)?(✓|☑|☐|\[[xX✓]\]|\[\s?\]|\[\])\s*(.+)$/);
     if (itemMatch && current) {
       current.items.push({
@@ -529,15 +532,48 @@ function checklistParseTextImport(text) {
       });
       continue;
     }
-    const header = line.replace(/^#+\s*/, "").match(/^\[([^\]]+)\]\s*(.+)$/);
-    current = {
-      id: checklistUuid(),
-      folder: checklistFolderName(header ? header[1] : "Imported"),
-      name: (header ? header[2] : line.replace(/^#+\s*/, "")).slice(0, 90) || "Imported Checklist",
-      collapsed: false,
-      items: [],
-    };
-    lists.push(current);
+
+    // Markdown heading
+    const headingMatch = line.match(/^(#+)\s*(.*)/);
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      const content = headingMatch[2].trim();
+      if (!content) continue;
+      if (level === 1) {
+        // H1 sets the folder context for all following checklists
+        const folderOverride = content.match(/^\[([^\]]+)\]\s*(.+)$/);
+        currentFolder = checklistFolderName(folderOverride ? folderOverride[1] : content) || "Imported";
+        current = null;
+      } else {
+        // H2+ creates a checklist; [Folder] prefix overrides the current folder
+        const folderOverride = content.match(/^\[([^\]]+)\]\s*(.+)$/);
+        current = {
+          id: checklistUuid(),
+          folder: checklistFolderName(folderOverride ? folderOverride[1] : currentFolder),
+          name: (folderOverride ? folderOverride[2] : content).slice(0, 90) || "Imported Checklist",
+          collapsed: false,
+          items: [],
+        };
+        lists.push(current);
+      }
+      continue;
+    }
+
+    // Plain [Folder] Name line — OPS-TOC text export format, round-trip compatible
+    const exportHeader = line.match(/^\[([^\]]+)\]\s*(.+)$/);
+    if (exportHeader) {
+      current = {
+        id: checklistUuid(),
+        folder: checklistFolderName(exportHeader[1]),
+        name: exportHeader[2].trim().slice(0, 90) || "Imported Checklist",
+        collapsed: false,
+        items: [],
+      };
+      lists.push(current);
+      continue;
+    }
+
+    // Skip everything else: dividers, plain text, italics, etc.
   }
   return lists.filter((list) => list.items.length || list.name);
 }
