@@ -129,7 +129,7 @@ let _entries       = [];
 let _editId        = null;
 let _catFilter     = 'ALL';
 let _missionFilter     = '';
-let _missionFilterMode = ''; // '' | 'include' | 'exclude'
+let _missionFilterMode = ''; // '' | 'include' | 'exclude' | 'folder' | 'folder-exclude'
 let _searchQuery       = '';
 let _missions      = [];
 let _attachedGPS   = null;
@@ -187,6 +187,49 @@ function escAttr(s) { return esc(s); }
 function jsAttr(s) { return escAttr(jsSafe(s)); }
 function classToken(s) {
   return String(s || '').replace(/[^a-zA-Z0-9_-]/g, '-');
+}
+
+function parseMission(name) {
+  if (!name) return { folder: null, sub: null };
+  const idx = name.indexOf(' / ');
+  if (idx === -1) return { folder: null, sub: name };
+  return { folder: name.slice(0, idx), sub: name.slice(idx + 3) };
+}
+
+function groupMissions(missions) {
+  const folders = Object.create(null);
+  const standalone = [];
+  for (const m of missions) {
+    const p = parseMission(m.name);
+    if (p.folder) {
+      if (!folders[p.folder]) folders[p.folder] = { name: p.folder, count: 0, subs: [] };
+      folders[p.folder].count += m.count;
+      folders[p.folder].subs.push({ ...m, subName: p.sub });
+    } else {
+      standalone.push(m);
+    }
+  }
+  return { folders, standalone };
+}
+
+function getMissionValue() {
+  const prefix = document.getElementById('mission-folder-prefix')?.value || '';
+  const input  = (document.getElementById('mission-input')?.value || '').trim();
+  if (!input) return '';
+  return prefix ? `${prefix} / ${input}` : input;
+}
+
+function setMissionInputs(fullName) {
+  const sel = document.getElementById('mission-folder-prefix');
+  const inp = document.getElementById('mission-input');
+  if (!fullName) {
+    if (sel) sel.value = '';
+    if (inp) inp.value = '';
+    return;
+  }
+  const p = parseMission(fullName);
+  if (sel) sel.value = p.folder || '';
+  if (inp) inp.value = p.sub !== null ? p.sub : fullName;
 }
 
 // ── GPS header text ───────────────────────────────────────────────────
@@ -367,8 +410,7 @@ async function createLogFromTrack(id) {
   const gpsLine = document.getElementById('gps-line');
   if (gpsLine) gpsLine.style.display = 'none';
   setAttachedTrack(track);
-  const missInput = document.getElementById('mission-input');
-  if (missInput && !missInput.value && track.folder) missInput.value = track.folder;
+  if (track.folder && !getMissionValue()) setMissionInputs(track.folder);
   const title = document.getElementById('composer-title');
   const cancel = document.getElementById('btn-cancel-edit');
   const panel = document.getElementById('composer-panel');
@@ -423,11 +465,10 @@ function stripMissionLine(body) {
 async function saveEntry() {
   const body = assembleBody();
   if (!body) { toast('Body required', 'err'); return; }
-  const catSel    = document.getElementById('cat-select');
-  const missInput = document.getElementById('mission-input');
-  const cat       = catSel ? catSel.value : 'NOTE';
-  const mission   = missInput ? missInput.value.trim() : '';
-  const fullBody  = mission ? `**Mission / Folder:** ${mission}\n${body}` : body;
+  const catSel  = document.getElementById('cat-select');
+  const cat     = catSel ? catSel.value : 'NOTE';
+  const mission = getMissionValue();
+  const fullBody = mission ? `**Mission / Folder:** ${mission}\n${body}` : body;
 
   const url    = _editId ? `/api/log/entries/${_editId}` : '/api/log/entries';
   const method = _editId ? 'PUT' : 'POST';
@@ -462,9 +503,8 @@ function editEntry(id) {
   const trackLine = document.getElementById('track-line');
   if (trackLine) trackLine.style.display = 'none';
   const catSel = document.getElementById('cat-select');
-  const missInput = document.getElementById('mission-input');
   if (catSel) catSel.value = e.category;
-  if (missInput) missInput.value = e.mission || '';
+  setMissionInputs(e.mission || '');
   const body   = stripMissionLine(e.body || '');
   renderFields(e.category, parseBodyToFields(body, e.category));
   const title  = document.getElementById('composer-title');
@@ -484,9 +524,8 @@ function cancelEdit() {
   const trackLine = document.getElementById('track-line');
   if (trackLine) trackLine.style.display = 'none';
   const catSel = document.getElementById('cat-select');
-  const missInput = document.getElementById('mission-input');
   if (catSel) catSel.value = 'NOTE';
-  if (missInput) missInput.value = '';
+  setMissionInputs('');
   renderFields('NOTE');
   const title  = document.getElementById('composer-title');
   const cancel = document.getElementById('btn-cancel-edit');
@@ -520,9 +559,8 @@ function duplicateEntry(id) {
   const trackLine = document.getElementById('track-line');
   if (trackLine) trackLine.style.display = 'none';
   const catSel = document.getElementById('cat-select');
-  const missInput = document.getElementById('mission-input');
   if (catSel) catSel.value = e.category || 'NOTE';
-  if (missInput) missInput.value = e.mission || '';
+  setMissionInputs(e.mission || '');
   const body = stripMissionLine(e.body || '');
   renderFields(e.category || 'NOTE', parseBodyToFields(body, e.category || 'NOTE'));
   const title  = document.getElementById('composer-title');
@@ -546,10 +584,21 @@ function renderEntries() {
   let list = _entries;
   if (_catFilter && _catFilter !== 'ALL') list = list.filter(e => e.category === _catFilter);
   if (_missionFilter) {
-    if (_missionFilterMode === 'exclude') {
-      list = list.filter(e => (e.mission || '').toLowerCase() !== _missionFilter.toLowerCase());
+    const fl = _missionFilter.toLowerCase();
+    if (_missionFilterMode === 'folder') {
+      list = list.filter(e => {
+        const ml = (e.mission || '').toLowerCase();
+        return ml === fl || ml.startsWith(fl + ' / ');
+      });
+    } else if (_missionFilterMode === 'folder-exclude') {
+      list = list.filter(e => {
+        const ml = (e.mission || '').toLowerCase();
+        return ml !== fl && !ml.startsWith(fl + ' / ');
+      });
+    } else if (_missionFilterMode === 'exclude') {
+      list = list.filter(e => (e.mission || '').toLowerCase() !== fl);
     } else {
-      list = list.filter(e => (e.mission || '').toLowerCase() === _missionFilter.toLowerCase());
+      list = list.filter(e => (e.mission || '').toLowerCase() === fl);
     }
   }
   if (_searchQuery) {
@@ -666,6 +715,22 @@ function setMissionFilter(val) {
   renderEntries();
 }
 
+function cycleFolderFilter(folderName) {
+  if (_missionFilter !== folderName || !_missionFilterMode.startsWith('folder')) {
+    _missionFilter = folderName;
+    _missionFilterMode = 'folder';
+  } else if (_missionFilterMode === 'folder') {
+    _missionFilterMode = 'folder-exclude';
+  } else {
+    _missionFilter = '';
+    _missionFilterMode = '';
+  }
+  const sel = document.getElementById('mission-filter');
+  if (sel) sel.value = _missionFilter;
+  renderMissionsStrip();
+  renderEntries();
+}
+
 function debounceSearch(val) {
   clearTimeout(_searchTimer);
   _searchTimer = setTimeout(() => { _searchQuery = val; renderEntries(); }, 250);
@@ -679,6 +744,7 @@ async function loadMissions() {
     renderMissionsStrip();
     updateMissionSelect();
     updateMissionsDatalist();
+    updateFolderPrefixSelect();
     renderMissionManager();
   } catch (_) {}
 }
@@ -687,20 +753,78 @@ function renderMissionsStrip() {
   const strip = document.getElementById('missions-strip');
   if (!strip) return;
   if (!_missions.length) { strip.innerHTML = ''; return; }
-  strip.innerHTML = _missions.map(m => {
+
+  const { folders, standalone } = groupMissions(_missions);
+  let html = '';
+
+  for (const folder of Object.values(folders)) {
+    const isFolder  = _missionFilter === folder.name && _missionFilterMode === 'folder';
+    const isFolderX = _missionFilter === folder.name && _missionFilterMode === 'folder-exclude';
+    const cls = isFolder ? ' active' : isFolderX ? ' exclude' : '';
+    const tip = isFolder ? 'Click to exclude folder' : isFolderX ? 'Click to clear filter' : 'Filter by folder';
+    html += `<div class="folder-group">`;
+    html += `<span class="mission-chip folder-chip${cls}"
+      data-folder="${escAttr(folder.name)}"
+      onclick="cycleFolderFilter('${jsAttr(folder.name)}')"
+      title="${tip}"
+      ><span class="mc-folder-icon">▸</span
+      ><span class="mc-label">${esc(folder.name)}</span
+      ><span class="mc-count">${folder.count}</span
+    ></span>`;
+    html += `<div class="sub-chips">`;
+    for (const sub of folder.subs) {
+      const isInclude = _missionFilter === sub.name && _missionFilterMode === 'include';
+      const isExclude = _missionFilter === sub.name && _missionFilterMode === 'exclude';
+      const scls = isInclude ? ' active' : isExclude ? ' exclude' : '';
+      html += `<span class="mission-chip sub-chip${scls}"
+        data-mission="${escAttr(sub.name)}"
+        onclick="cycleMissionFilter('${jsAttr(sub.name)}')"
+        title="${esc(sub.subName)}"
+        ><span class="mc-label">${esc(sub.subName)}</span
+        ><span class="mc-count">${sub.count}</span
+        ><button class="mc-btn" title="Rename" onclick="event.stopPropagation();renameMission('${jsAttr(sub.name)}')">✎</button
+        ><button class="mc-btn" title="Remove tag" onclick="event.stopPropagation();deleteMission('${jsAttr(sub.name)}')">×</button
+      ></span>`;
+    }
+    html += `</div></div>`;
+  }
+
+  for (const m of standalone) {
     const isInclude = _missionFilter === m.name && _missionFilterMode === 'include';
     const isExclude = _missionFilter === m.name && _missionFilterMode === 'exclude';
     const cls = isInclude ? ' active' : isExclude ? ' exclude' : '';
     const tip = isInclude ? 'Click to exclude this mission' : isExclude ? 'Click to clear filter' : 'Filter by mission';
-    return `<span class="mission-chip${cls}"
-           data-mission="${escAttr(m.name)}"
-           onclick="cycleMissionFilter('${jsAttr(m.name)}')"
-           title="${tip}"
-           ><span class="mc-label">${esc(m.name)}</span><span class="mc-count">${m.count}</span
-           ><button class="mc-btn" title="Rename" onclick="event.stopPropagation();renameMission('${jsAttr(m.name)}')">✎</button
-           ><button class="mc-btn" title="Remove mission tag" onclick="event.stopPropagation();deleteMission('${jsAttr(m.name)}')">×</button
+    html += `<span class="mission-chip${cls}"
+      data-mission="${escAttr(m.name)}"
+      onclick="cycleMissionFilter('${jsAttr(m.name)}')"
+      title="${tip}"
+      ><span class="mc-label">${esc(m.name)}</span><span class="mc-count">${m.count}</span
+      ><button class="mc-btn" title="Rename" onclick="event.stopPropagation();renameMission('${jsAttr(m.name)}')">✎</button
+      ><button class="mc-btn" title="Remove mission tag" onclick="event.stopPropagation();deleteMission('${jsAttr(m.name)}')">×</button
     ></span>`;
-  }).join('');
+  }
+
+  strip.innerHTML = html;
+}
+
+function _missionCardHtml(m, name, isSubCard) {
+  const cats = Object.entries(m.categories || {}).sort((a, b) => b[1] - a[1]);
+  const catHtml = cats.length
+    ? cats.map(([cat, n]) => `<span class="toc-cat-badge toc-cat-${classToken(cat)}">${esc(cat)} ${n}</span>`).join('')
+    : '<span style="color:var(--muted)">No categories</span>';
+  const cardCls = isSubCard ? 'mission-card sub-mission-card' : 'mission-card';
+  return `<div class="${cardCls}">
+    <div class="mission-card-main">
+      <div class="mission-card-name">${esc(name)}</div>
+      <div class="mission-card-meta">${m.count} entr${m.count===1?'y':'ies'} · Last ${tocFormatTs(m.last_ts||0)}</div>
+      <div class="mission-card-cats">${catHtml}</div>
+    </div>
+    <div class="mission-card-actions">
+      <button class="btn small" onclick="openMission('${jsAttr(m.name)}')">View</button>
+      <button class="btn small" onclick="renameMission('${jsAttr(m.name)}')">Rename</button>
+      <button class="btn small danger" onclick="deleteMission('${jsAttr(m.name)}')">Remove tag</button>
+    </div>
+  </div>`;
 }
 
 function renderMissionManager() {
@@ -710,28 +834,47 @@ function renderMissionManager() {
     list.innerHTML = '<div class="toc-empty">No missions yet. Add a Mission / Folder name in the Log composer.</div>';
     return;
   }
-  list.innerHTML = _missions.map(m => {
-    const cats = Object.entries(m.categories || {}).sort((a, b) => b[1] - a[1]);
-    const catHtml = cats.length
-      ? cats.map(([cat, n]) => `<span class="toc-cat-badge toc-cat-${classToken(cat)}">${esc(cat)} ${n}</span>`).join('')
-      : '<span style="color:var(--muted)">No categories</span>';
-    return `<div class="mission-card">
-      <div class="mission-card-main">
-        <div class="mission-card-name">${esc(m.name)}</div>
-        <div class="mission-card-meta">${m.count} entr${m.count===1?'y':'ies'} · Last ${tocFormatTs(m.last_ts||0)}</div>
-        <div class="mission-card-cats">${catHtml}</div>
-      </div>
-      <div class="mission-card-actions">
-        <button class="btn small" onclick="openMission('${jsAttr(m.name)}')">View</button>
-        <button class="btn small" onclick="renameMission('${jsAttr(m.name)}')">Rename</button>
-        <button class="btn small danger" onclick="deleteMission('${jsAttr(m.name)}')">Remove tag</button>
-      </div>
-    </div>`;
-  }).join('');
+
+  const { folders, standalone } = groupMissions(_missions);
+  let html = '';
+
+  for (const folder of Object.values(folders)) {
+    html += `<div class="mission-folder-group">
+      <div class="mission-folder-header">
+        <div class="mission-folder-title">
+          <span class="mission-folder-icon">▸</span>
+          ${esc(folder.name)}
+          <span class="mission-folder-count">${folder.count} total</span>
+        </div>
+        <div class="mission-folder-actions">
+          <button class="btn small" onclick="openFolderFilter('${jsAttr(folder.name)}')">View all</button>
+        </div>
+      </div>`;
+    for (const sub of folder.subs) {
+      html += _missionCardHtml(sub, sub.subName, true);
+    }
+    html += `</div>`;
+  }
+
+  for (const m of standalone) {
+    html += _missionCardHtml(m, m.name, false);
+  }
+
+  list.innerHTML = html;
 }
 
 function openMission(name) {
   setMissionFilter(name);
+  showTab('log');
+}
+
+function openFolderFilter(folderName) {
+  _missionFilter = folderName;
+  _missionFilterMode = 'folder';
+  const sel = document.getElementById('mission-filter');
+  if (sel) sel.value = folderName;
+  renderMissionsStrip();
+  renderEntries();
   showTab('log');
 }
 
@@ -784,15 +927,46 @@ function updateMissionSelect() {
   const sel = document.getElementById('mission-filter');
   if (!sel) return;
   const cur = sel.value;
-  sel.innerHTML = '<option value="">All missions</option>' +
-    _missions.map(m => `<option value="${esc(m.name)}">${esc(m.name)} (${m.count})</option>`).join('');
+  const { folders, standalone } = groupMissions(_missions);
+  let html = '<option value="">All missions</option>';
+  for (const folder of Object.values(folders)) {
+    html += `<optgroup label="▸ ${esc(folder.name)} (${folder.count})">`;
+    for (const sub of folder.subs) {
+      html += `<option value="${esc(sub.name)}">${esc(sub.subName)} (${sub.count})</option>`;
+    }
+    html += '</optgroup>';
+  }
+  for (const m of standalone) {
+    html += `<option value="${esc(m.name)}">${esc(m.name)} (${m.count})</option>`;
+  }
+  sel.innerHTML = html;
   sel.value = cur;
 }
 
 function updateMissionsDatalist() {
   const dl = document.getElementById('missions-datalist');
   if (!dl) return;
-  dl.innerHTML = _missions.map(m => `<option value="${esc(m.name)}">`).join('');
+  const { folders, standalone } = groupMissions(_missions);
+  const options = [];
+  for (const folder of Object.values(folders)) {
+    for (const sub of folder.subs) {
+      options.push(`<option value="${esc(sub.subName)}">`);
+    }
+  }
+  for (const m of standalone) {
+    options.push(`<option value="${esc(m.name)}">`);
+  }
+  dl.innerHTML = options.join('');
+}
+
+function updateFolderPrefixSelect() {
+  const sel = document.getElementById('mission-folder-prefix');
+  if (!sel) return;
+  const { folders } = groupMissions(_missions);
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">No folder</option>' +
+    Object.keys(folders).map(f => `<option value="${esc(f)}">${esc(f)}</option>`).join('');
+  if (Object.keys(folders).includes(cur)) sel.value = cur;
 }
 
 // ── Log import ────────────────────────────────────────────────────────

@@ -1516,6 +1516,70 @@ textarea { resize: vertical; }
 .mission-card-cats { display: flex; gap: 4px; flex-wrap: wrap; }
 .mission-card-actions { display: flex; gap: 5px; flex-shrink: 0; }
 
+/* Folder prefix select in composer */
+#mission-folder-prefix {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 6px;
+  min-height: 28px;
+  cursor: pointer;
+  max-width: 130px;
+}
+#mission-folder-prefix:focus { outline: none; border-color: var(--accent); }
+
+/* Mission strip — folder groups */
+.folder-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.folder-chip {
+  border-radius: 6px !important;
+}
+.folder-chip.exclude { background: rgba(192,57,43,0.08); border-color: #c0392b; color: #c0392b; opacity: 0.85; }
+.folder-chip.exclude .mc-label { text-decoration: line-through; }
+.mc-folder-icon { margin-right: 2px; font-size: 9px; opacity: 0.65; }
+.sub-chips { display: flex; flex-wrap: wrap; gap: 4px; padding-left: 14px; }
+.sub-chip { font-size: 10px !important; padding: 2px 7px 2px 8px !important; }
+
+/* Mission manager — folder tree */
+.mission-folder-group {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.mission-folder-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--bg3);
+  border-bottom: 1px solid var(--border);
+}
+.mission-folder-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+  font-size: 13px;
+}
+.mission-folder-icon { color: var(--accent); font-size: 10px; }
+.mission-folder-count { color: var(--muted); font-size: 11px; font-weight: normal; }
+.mission-folder-actions { display: flex; gap: 4px; }
+.sub-mission-card {
+  border-radius: 0 !important;
+  border: none !important;
+  border-bottom: 1px solid var(--border) !important;
+  border-left: 2px solid var(--accent-mid) !important;
+  margin: 0 !important;
+  background: var(--bg2) !important;
+}
+.sub-mission-card:last-child { border-bottom: none !important; }
+
 /* Toast */
 #toast {
   position: fixed;

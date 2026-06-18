@@ -134,7 +134,10 @@
               <option value="WEATHER">WEATHER</option>
               <option value="TRACK">TRACK</option>
             </select>
-            <input type="text" id="mission-input" placeholder="Mission / Folder (optional)"
+            <select id="mission-folder-prefix" title="Folder prefix (optional)">
+              <option value="">No folder</option>
+            </select>
+            <input type="text" id="mission-input" placeholder="Mission / sub-mission name"
                    list="missions-datalist" autocomplete="off">
             <datalist id="missions-datalist"></datalist>
             <button class="btn small" onclick="insertNow()">Now</button>
