@@ -1,0 +1,22 @@
+# Machine-local GPS config (runtime — each machine sets its own port)
+gps_config.json
+
+# Databases
+*.db
+*.db-shm
+*.db-wal
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+venv/
+.venv/
+
+# Syncthing conflict files
+*.sync-conflict-*
+
+# OS
+.DS_Store
+Thumbs.db

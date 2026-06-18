@@ -1,6 +1,0 @@
-{
-  "enabled": true,
-  "port": "auto",
-  "om_proxy": false,
-  "om_url": "http://localhost:8082"
-}

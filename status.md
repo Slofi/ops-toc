@@ -58,7 +58,7 @@ journalctl --user -u ops-toc -f
 
 - OPS-TOC owns all map-specific controls: markers, drawings, GPS tracks, offline downloads, and downloaded-map management.
 - OPS-TOC owns the standalone field workflow: LOG, MISSIONS, SOP, and CHECKLIST tabs.
-- CHECKLIST is pure frontend state in localStorage key `ops_toc_checklists`. It supports folders/types, multiple editable checklists, progress bars, reset, item reorder, text export, JSON export, and import from JSON/TXT/MD. Markdown task items such as `- [ ] item`, `- [] item`, and `- [x] item` import as checklist rows.
+- CHECKLIST is pure frontend state in localStorage key `ops_toc_checklists`. It supports folders, multiple editable checklists, progress bars, reset, item reorder, text/JSON export, and import from JSON/TXT/MD. In Markdown: H1 sets the folder, H2+ creates checklists, `- [ ]`/`- [x]` are items. Field test checklist: `~/Projects/ops-toc/TEST/field-test-checklist.md`. See CHECKLIST System section in Full Reference for full format spec and authoring guide.
 - LOG/MISSIONS read and write OM's shared `toc_log` table directly in `~/overmesh/overmesh_prefs.db`.
 - OM and OPS-TOC now share the same TOC category set, including `WEATHER`.
 - `log-app.service` / standalone TOC-app is retired, stopped, and disabled.
@@ -86,7 +86,8 @@ journalctl --user -u ops-toc -f
 
 ## Changelog
 
-**2026-06-18** — CHECKLIST session update: added the editable CHECKLIST tab after SOP, with localStorage persistence (`ops_toc_checklists`), folders/types, collapsible checklist cards, rename/delete/reset, progress counts/bars, item add/edit/delete/toggle/reorder, text/JSON export, and import from JSON/TXT/MD. Removed the temporary "Load field templates" button and cleaned out the backend `/api/checklists/seed` route, since Import now covers saved/template files. Copied Desktop test checklist files into repo `TEST/` without removing the Desktop originals. Header clock now shows 24h time with seconds and date in `DD.MM.YY`. Settings/App Control UI was enlarged for touch. In-app UI Zoom now has a built-in 1.15x base scale so visible `100%` matches the user's previous `115%`; old saved `115%` is migrated to `100%` once.
+**2026-06-18** — Checklist import: H1 now sets folder context (no more "Imported" default for MD files), H2+ creates checklist cards, dividers/plain text skipped. Round-trip with OPS-TOC text export preserved. `ad39768`.
+**2026-06-18** — CHECKLIST tab added (Codex): editable CHECKLIST tab after SOP, with localStorage persistence (`ops_toc_checklists`), folders/types, collapsible checklist cards, rename/delete/reset, progress counts/bars, item add/edit/delete/toggle/reorder, text/JSON export, and import from JSON/TXT/MD. Removed the temporary "Load field templates" button and cleaned out the backend `/api/checklists/seed` route, since Import now covers saved/template files. Copied Desktop test checklist files into repo `TEST/` without removing the Desktop originals. Header clock now shows 24h time with seconds and date in `DD.MM.YY`. Settings/App Control UI was enlarged for touch. In-app UI Zoom now has a built-in 1.15x base scale so visible `100%` matches the user's previous `115%`; old saved `115%` is migrated to `100%` once.
 
 **2026-06-16** — Fixed GPS port conflict: OPS-TOC's `gps_config.json` had the NRF52840 (MT node) saved as GPS port instead of the u-blox dongle. Root cause of no-fix was port contention: OM and OPS-TOC both trying to read `/dev/ttyACM2` simultaneously. Fix: disabled OM GPS to release port, changed OPS-TOC config to `port: "auto"` (auto-detects u-blox correctly). Also filtered `list_ports()` in `gps.py` to exclude `ttyS*` internal serial ports (not USB, not GPS). Port dropdown in Settings → GPS is already present (visible when "Direct serial" is selected). Running `fix: true`, 12 sats. Not committed yet.
 
@@ -133,7 +134,99 @@ journalctl --user -u ops-toc -f
 
 ---
 ---
+---
 # ////// FULL REFERENCE //////
+
+## CHECKLIST System
+
+Pure frontend — no backend. All state lives in browser `localStorage`.
+
+### Storage keys
+| Key | Contents |
+|-----|----------|
+| `ops_toc_checklists` | JSON array of all checklists |
+| `ops_toc_checklist_folders_collapsed` | JSON array of collapsed folder names |
+| `ops_toc_checklists_backup_<timestamp>` | Auto-backup taken before each import |
+
+### Data structure
+```json
+[
+  {
+    "id": "abc123",
+    "name": "CD Hardware & Power",
+    "folder": "CD Field Test Checklist",
+    "collapsed": false,
+    "items": [
+      { "id": "def456", "text": "Battery charged", "done": false },
+      { "id": "ghi789", "text": "Rock 5B powers on", "done": true }
+    ]
+  }
+]
+```
+
+### Import — supported formats
+
+**Markdown (recommended for authoring):**
+```markdown
+# Folder Name           ← H1 sets folder for everything below
+## Checklist Name       ← H2 creates a new checklist card
+- [ ] Unchecked item
+- [x] Checked item
+## Another Checklist    ← next H2 = new card, same folder
+- [ ] Item
+```
+- H1 = folder context. No checklist is created from H1.
+- H2+ = checklist name. All items below it belong to it.
+- Items: `- [ ]`, `- [x]`, `☐`, `✓`, `☑` all recognised.
+- Dividers (`---`), italics, plain text lines → skipped (ignored).
+- No H1 → all checklists land in "Imported" folder.
+- `[Folder] Name` prefix on any heading → explicit folder override.
+
+**OPS-TOC text export (round-trip):**
+```
+[Folder] Checklist Name
+  ☐ Item 1
+  ✓ Done item
+```
+
+**JSON export (round-trip):** re-import the exported `.json` directly.
+
+### Export
+- **Text export** → plain text file, `[Folder] Name` + `☐`/`✓` items. Human-readable.
+- **JSON export** → full data dump, preserves done state. Use for backup/restore.
+
+### Field test checklist
+- Source file: `~/Projects/ops-toc/TEST/field-test-checklist.md`
+- 10 sections, 92 items, folder = "CD Field Test Checklist"
+- To load: CHECKLIST tab → Import → select that file
+- To update: edit the `.md` file, re-import (backs up current before replacing)
+
+### How to create or edit a checklist (for Claude)
+Write a `.md` file with this structure and import it via the Import button:
+
+```markdown
+# Folder Name
+## Section / Checklist Name
+- [ ] Item one
+- [ ] Item two
+- [x] Pre-checked item
+
+## Another Section
+- [ ] Item
+```
+
+Each `##` becomes a separate card inside the folder set by `#`.
+Multiple folders in one file: add a new `#` heading to switch folders mid-file.
+To update a single checklist: delete it in the UI, re-import the updated file
+(or edit items directly in the UI with the pencil icon).
+
+### In-app editing
+- Rename checklist: pencil icon on card header
+- Add item: `+ Add item` at bottom of card
+- Edit/delete item: pencil/trash on each row
+- Reorder items: drag handle
+- Reset progress: circular arrow (unchecks all items)
+- Delete checklist: trash icon on card header
 
 ## Architecture
 
