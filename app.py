@@ -43,6 +43,7 @@ _TRACK_RE   = re.compile(r'\*\*Track:\*\*.*?#(\d+)', re.I)
 _LOG_CATS   = {'NOTE', 'PLAN', 'SITREP', 'ALERT', 'ACTION', 'COMMS', 'CONTACT', 'POSITION', 'INTEL', 'WEATHER', 'TRACK'}
 
 app = Flask(__name__)
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0  # no static-file caching during active development
 download_jobs: dict[str, dict[str, Any]] = {}
 download_lock = threading.Lock()
 download_condition = threading.Condition(download_lock)
