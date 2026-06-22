@@ -86,6 +86,8 @@ journalctl --user -u ops-toc -f
 
 ## Changelog
 
+**2026-06-22** — GPS enabled flag bug fixed: `api_gps_set()` was defaulting `enabled=False` when the key was absent from the POST body, so any partial settings save silently disabled GPS. Fixed by loading existing config first and using `cfg.get("enabled", True)` as default. `load_config()` fallback also changed to `enabled:True, port:auto`. Commit `abc69a2`.
+
 **2026-06-18** — Touch targets: sub-chips 10→11px font, 2→4px vertical padding; mc-btn (rename/delete) 13px, 28×28px min tap area. Commit `ffd8a6c`.
 **2026-06-18** — Multi-track stats: `_updateTrackFormFields()` combines Distance/Points/Start/End/Duration across all attached tracks. Duration field added to TRACK template. `assembleBody()` outputs individual `**Track:** name (#id)` lines, not the "N tracks" label. `_enrichTrack()` restores full data from `_logTracks` on edit. Commit `61ac8d4`.
 **2026-06-18** — Multiple tracks per log entry: `_attachedTracks[]` replaces single track; first track sets TRACK category/fields, subsequent append to bar with × remove buttons; dedup check; `parseTracksFromBody()` restores on edit. Commit `41212b1`.
