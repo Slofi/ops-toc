@@ -1833,6 +1833,23 @@ textarea { resize: vertical; }
   gap: 8px;
 }
 .checklist-folder-body[hidden] { display: none; }
+.checklist-parent-body {
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+  margin-left: 6px;
+}
+.checklist-sub-folder-head {
+  background: rgba(255,255,255,0.015);
+  border-radius: 7px;
+  min-height: 38px;
+}
+.checklist-sub-folder-head .checklist-folder-kicker {
+  opacity: 0.6;
+  font-size: 8px;
+}
+.checklist-sub-folder-head .checklist-folder-name {
+  font-size: 13px;
+}
 .checklist-card {
   background: var(--bg2);
   border: 1px solid var(--border);

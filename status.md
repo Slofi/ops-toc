@@ -86,6 +86,13 @@ journalctl --user -u ops-toc -f
 
 ## Changelog
 
+**2026-06-18** — Touch targets: sub-chips 10→11px font, 2→4px vertical padding; mc-btn (rename/delete) 13px, 28×28px min tap area. Commit `ffd8a6c`.
+**2026-06-18** — Multi-track stats: `_updateTrackFormFields()` combines Distance/Points/Start/End/Duration across all attached tracks. Duration field added to TRACK template. `assembleBody()` outputs individual `**Track:** name (#id)` lines, not the "N tracks" label. `_enrichTrack()` restores full data from `_logTracks` on edit. Commit `61ac8d4`.
+**2026-06-18** — Multiple tracks per log entry: `_attachedTracks[]` replaces single track; first track sets TRACK category/fields, subsequent append to bar with × remove buttons; dedup check; `parseTracksFromBody()` restores on edit. Commit `41212b1`.
+**2026-06-18** — Track sub-folders: ` / ` separator in track `folder` field; two-level collapsible track list; save/edit dialog uses prefix select + sub-folder input. Commit `310af31`.
+**2026-06-18** — Cardinal directions on range rings: Off/4/8 toggle; dashed spoke lines from position center to ring edge; N/S/E/W/NE/NW/SE/SW letter labels at 1.18× outerKm. Dialog close bug fixed (`type="button"`), localStorage init bug fixed.
+**2026-06-18** — Mission sub-folders: ` / ` separator convention; folder groups with sub-chips in strip; prefix select + name input in composer; cycleFolderFilter(), folder-exclude mode, Mission Manager tree view.
+**2026-06-18** — UI zoom: `BASE_UI_SCALE` reduced 1.15 → 1.09; 100% no longer overflows 1920×1200 screen (speed HUD was partially off-screen). Commit `19c97da`.
 **2026-06-18** — Checklist import: H1 now sets folder context (no more "Imported" default for MD files), H2+ creates checklist cards, dividers/plain text skipped. Round-trip with OPS-TOC text export preserved. `ad39768`.
 **2026-06-18** — CHECKLIST tab added (Codex): editable CHECKLIST tab after SOP, with localStorage persistence (`ops_toc_checklists`), folders/types, collapsible checklist cards, rename/delete/reset, progress counts/bars, item add/edit/delete/toggle/reorder, text/JSON export, and import from JSON/TXT/MD. Removed the temporary "Load field templates" button and cleaned out the backend `/api/checklists/seed` route, since Import now covers saved/template files. Copied Desktop test checklist files into repo `TEST/` without removing the Desktop originals. Header clock now shows 24h time with seconds and date in `DD.MM.YY`. Settings/App Control UI was enlarged for touch. In-app UI Zoom now has a built-in 1.15x base scale so visible `100%` matches the user's previous `115%`; old saved `115%` is migrated to `100%` once.
 

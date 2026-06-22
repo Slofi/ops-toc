@@ -301,6 +301,12 @@ function checklistFolderName(folder) {
   return String(folder || "General").trim().slice(0, 60) || "General";
 }
 
+function checklistParseFolder(folder) {
+  const i = folder.indexOf(" / ");
+  if (i === -1) return { parent: folder, sub: null };
+  return { parent: folder.slice(0, i), sub: folder.slice(i + 3) };
+}
+
 function checklistFolderStats(entries) {
   const total = entries.reduce((sum, entry) => sum + entry.list.items.length, 0);
   const done = entries.reduce((sum, entry) => sum + entry.list.items.filter((item) => item.done).length, 0);
@@ -330,13 +336,22 @@ function checklistRender() {
       </div>`;
     return;
   }
-  const groups = new Map();
+  const FLAT = "\x00flat";
+  const parentMap = new Map();
   _checklists.forEach((list, listIndex) => {
-    const folder = checklistFolderName(list.folder);
-    if (!groups.has(folder)) groups.set(folder, []);
-    groups.get(folder).push({ list, listIndex });
+    const full = checklistFolderName(list.folder);
+    const { parent, sub } = checklistParseFolder(full);
+    const subKey = sub !== null ? sub : FLAT;
+    if (!parentMap.has(parent)) parentMap.set(parent, new Map());
+    const subMap = parentMap.get(parent);
+    if (!subMap.has(subKey)) subMap.set(subKey, []);
+    subMap.get(subKey).push({ list, listIndex });
   });
-  box.innerHTML = [...groups.entries()].map(([folder, entries]) => checklistFolderHtml(folder, entries)).join("");
+  box.innerHTML = [...parentMap.entries()].map(([parent, subMap]) => {
+    const isFlat = subMap.size === 1 && subMap.has(FLAT);
+    if (isFlat) return checklistFolderHtml(parent, subMap.get(FLAT));
+    return checklistParentFolderHtml(parent, subMap);
+  }).join("");
 }
 
 function checklistFolderHtml(folder, entries) {
@@ -357,10 +372,58 @@ function checklistFolderHtml(folder, entries) {
     </section>`;
 }
 
+function checklistParentFolderHtml(parent, subMap) {
+  const collapsed = _checklistCollapsedFolders.has(parent);
+  let totalLists = 0, totalDone = 0, totalItems = 0;
+  subMap.forEach((entries) => {
+    totalLists += entries.length;
+    entries.forEach(({ list }) => {
+      totalItems += list.items.length;
+      totalDone += list.items.filter((i) => i.done).length;
+    });
+  });
+  const bodies = [...subMap.entries()].map(([subKey, entries]) => {
+    if (subKey === "\x00flat") return entries.map(({ list, listIndex }) => checklistCardHtml(list, listIndex)).join("");
+    return checklistSubFolderHtml(subKey, `${parent} / ${subKey}`, entries);
+  }).join("");
+  return `
+    <section class="checklist-folder checklist-folder-parent" data-folder-parent="${esc(parent)}">
+      <button class="checklist-folder-head ${collapsed ? "collapsed" : ""}" type="button" data-action="toggle-parent-folder">
+        <span class="checklist-folder-labels">
+          <span class="checklist-folder-kicker">Folder</span>
+          <span class="checklist-folder-name">${esc(parent)}</span>
+        </span>
+        <span class="checklist-folder-count">${totalLists} list${totalLists === 1 ? "" : "s"} · ${totalDone}/${totalItems}</span>
+        <span class="checklist-folder-arrow">▼</span>
+      </button>
+      <div class="checklist-folder-body checklist-parent-body" ${collapsed ? "hidden" : ""}>${bodies}</div>
+    </section>`;
+}
+
+function checklistSubFolderHtml(sub, fullFolder, entries) {
+  const collapsed = _checklistCollapsedFolders.has(fullFolder);
+  const stats = checklistFolderStats(entries);
+  const cards = entries.map(({ list, listIndex }) => checklistCardHtml(list, listIndex)).join("");
+  return `
+    <section class="checklist-folder checklist-sub-folder" data-folder="${esc(fullFolder)}">
+      <button class="checklist-folder-head checklist-sub-folder-head ${collapsed ? "collapsed" : ""}" type="button" data-action="toggle-folder">
+        <span class="checklist-folder-labels">
+          <span class="checklist-folder-kicker">↳ Sub</span>
+          <span class="checklist-folder-name">${esc(sub)}</span>
+        </span>
+        <span class="checklist-folder-count">${entries.length} list${entries.length === 1 ? "" : "s"} · ${stats.done}/${stats.total}</span>
+        <span class="checklist-folder-arrow">▼</span>
+      </button>
+      <div class="checklist-folder-body" ${collapsed ? "hidden" : ""}>${cards}</div>
+    </section>`;
+}
+
 function checklistCardHtml(list, listIndex) {
   const total = list.items.length;
   const done = list.items.filter((item) => item.done).length;
   const pct = total ? Math.round((done / total) * 100) : 0;
+  const { sub: folderSub } = checklistParseFolder(checklistFolderName(list.folder));
+  const folderLabel = folderSub !== null ? folderSub : checklistFolderName(list.folder);
   const items = list.items.length ? list.items.map((item, itemIndex) => `
       <div class="checklist-item-row ${item.done ? "done" : ""}" data-list-id="${esc(list.id)}" data-item-id="${esc(item.id)}">
         <button class="checklist-box" type="button" data-action="toggle-item" aria-label="${item.done ? "Mark undone" : "Mark done"}"></button>
@@ -373,7 +436,7 @@ function checklistCardHtml(list, listIndex) {
       <section class="checklist-card" data-list-id="${esc(list.id)}">
         <div class="checklist-card-head ${list.collapsed ? "collapsed" : ""}" data-action="toggle-list">
           <div class="checklist-card-title-block">
-            <div class="checklist-card-folder">${esc(checklistFolderName(list.folder))}</div>
+            <div class="checklist-card-folder">${esc(folderLabel)}</div>
             <div class="checklist-card-title">${esc(list.name)}</div>
             <div class="checklist-progress-line">
               <span class="checklist-progress-text">${done}/${total}</span>
@@ -618,6 +681,15 @@ async function checklistHandleClick(event) {
     const folder = checklistFolderName(event.target.closest("[data-folder]")?.dataset.folder);
     if (_checklistCollapsedFolders.has(folder)) _checklistCollapsedFolders.delete(folder);
     else _checklistCollapsedFolders.add(folder);
+    checklistSaveFolderState();
+    checklistRender();
+    return;
+  }
+  if (action === "toggle-parent-folder") {
+    const parent = event.target.closest("[data-folder-parent]")?.dataset.folderParent;
+    if (!parent) return;
+    if (_checklistCollapsedFolders.has(parent)) _checklistCollapsedFolders.delete(parent);
+    else _checklistCollapsedFolders.add(parent);
     checklistSaveFolderState();
     checklistRender();
     return;
