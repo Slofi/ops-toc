@@ -52,7 +52,7 @@ def load_config() -> dict:
             return json.loads(_config_path.read_text())
         except Exception:
             pass
-    return {"enabled": False, "port": "", "om_proxy": True, "om_url": "http://localhost:8082"}
+    return {"enabled": True, "port": "auto", "om_proxy": False, "om_url": "http://localhost:8082"}
 
 
 def save_config(cfg: dict):

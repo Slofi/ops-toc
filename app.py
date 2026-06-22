@@ -2688,12 +2688,12 @@ def api_gps_get():
 @app.route("/api/gps", methods=["POST"])
 def api_gps_set():
     data     = request.get_json(silent=True) or {}
-    enabled  = bool(data.get("enabled", False))
+    cfg = _gps.load_config()
+    enabled  = bool(data.get("enabled", cfg.get("enabled", True)))
     port     = str(data.get("port", "")).strip()
     om_proxy = bool(data.get("om_proxy", False))
     om_url   = str(data.get("om_url", "http://localhost:8082")).strip()
     manual   = bool(data.get("manual", False))
-    cfg = _gps.load_config()
     cfg["enabled"]  = enabled
     cfg["port"]     = port
     cfg["om_proxy"] = om_proxy
