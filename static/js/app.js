@@ -3150,7 +3150,10 @@ async function stopApp() {
   if (stopBtn) stopBtn.disabled = true;
   if (menuShutdownBtn) menuShutdownBtn.disabled = true;
   el("update-status").textContent = "Stopping OPS-TOC service...";
-  showServiceSplash("OPS-TOC offline. Start it back up from the Dashboard!");
+  const _sd = document.createElement('div');
+  _sd.style.cssText = 'position:fixed;inset:0;background:#000;z-index:9999;display:flex;align-items:center;justify-content:center;font-family:system-ui,sans-serif';
+  _sd.innerHTML = `<div style="text-align:center;padding:32px;max-width:440px"><div style="font-size:clamp(2.5rem,8vw,5.5rem);font-weight:700;color:var(--accent);letter-spacing:0.04em;line-height:1;margin-bottom:28px">OPS-TOC</div><div style="font-size:2rem;color:var(--muted);margin-bottom:14px">&#x23FB;</div><div style="font-size:1rem;color:#ccc;margin-bottom:10px">OPS-TOC stopped.</div><div style="font-size:0.85rem;color:#666;line-height:1.5;margin-bottom:18px">Restart OPS-TOC using the same method you normally use on this machine.</div><div style="font-size:0.78rem;color:#555;margin-bottom:6px">Or run:</div><code onclick="navigator.clipboard.writeText(this.textContent)" title="Click to copy" style="display:inline-block;font-size:0.78rem;background:#111722;border:1px solid rgba(255,255,255,0.08);padding:6px 14px;border-radius:8px;cursor:pointer;user-select:all;color:#aaa">systemctl --user start ops-toc</code><div style="font-size:0.78rem;color:#555;margin-top:14px">Or launch from the Dashboard.</div></div>`;
+  document.body.appendChild(_sd);
   try {
     await api("/api/service/stop", { method: "POST" });
     el("update-status").textContent = "OPS-TOC is stopping. Start it again from the dashboard when needed.";
