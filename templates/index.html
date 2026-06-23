@@ -206,13 +206,14 @@
           </div>
         </div>
         <div id="drawing-list"></div>
-        <div class="panel-head border-top">
+        <div class="panel-head border-top" onclick="toggleSideSection('tracks')" style="cursor:pointer">
           <div>
             <div class="panel-title">Tracks</div>
             <div class="panel-subtitle">Recorded GPS traces.</div>
           </div>
+          <span class="side-section-arrow" id="arrow-tracks">▶</span>
         </div>
-        <div id="track-list"></div>
+        <div id="track-list" class="side-section-body"></div>
       </aside>
 
       <section id="map-wrap">
@@ -798,7 +799,7 @@
       <section class="settings-section" id="gps-section">
         <h3>GPS/Position</h3>
 
-        <p class="dialog-note"><b>GPS receiver</b> — live position from dongle or OM proxy.</p>
+        <p class="dialog-note"><b>GPS receiver</b> - live position from USB dongle, internal BN-220/BN-280, or OM proxy.</p>
         <div class="gps-settings-card">
           <label class="setting-row switch-row" for="gps-enabled">
             <span class="setting-label-main">
@@ -823,7 +824,7 @@
           <div id="gps-port-row" class="setting-row" style="display:none">
             <span class="setting-label-main">
               <span>Port</span>
-              <span class="setting-label-note">Auto is recommended for the Cyberdeck GNSS receiver.</span>
+              <span class="setting-label-note">Choose Auto for USB dongles or Internal BN-220/BN-280 for the GPIO UART receiver.</span>
             </span>
             <div style="display:flex;gap:6px;align-items:center">
               <select id="gps-port-select" style="flex:1"></select>

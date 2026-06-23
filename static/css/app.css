@@ -469,6 +469,10 @@ select {
   text-transform: uppercase;
 }
 .panel-subtitle { color: var(--muted); font-size: 11px; margin-top: 2px; }
+.side-section-arrow { font-size: 9px; color: var(--muted); transition: transform 0.2s; user-select: none; }
+.side-section-arrow.open { transform: rotate(90deg); }
+.side-section-body { overflow: hidden; }
+.side-section-body.collapsed { display: none; }
 
 .list-row {
   display: flex;

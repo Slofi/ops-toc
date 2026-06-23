@@ -25,7 +25,8 @@ const state = {
   queuePoll: 0,
   offlineBounds: null,
   offlineJobId: null,
-  collapsedFolders: new Set(),
+  collapsedFolders: (function() { try { return new Set(JSON.parse(localStorage.getItem("ops_toc_collapsed_folders") || "[]")); } catch(e) { return new Set(); } })(),
+  seenFolders:      (function() { try { return new Set(JSON.parse(localStorage.getItem("ops_toc_seen_folders")     || "[]")); } catch(e) { return new Set(); } })(),
 };
 
 const el = (id) => document.getElementById(id);
@@ -2099,6 +2100,10 @@ function renderTrackList() {
   let html = "";
   for (const parent of sortFolderKeys(topMap.keys())) {
     const subMap = topMap.get(parent);
+    if (parent && !state.seenFolders.has(parent)) {
+      state.seenFolders.add(parent);
+      state.collapsedFolders.add(parent);
+    }
     const parentCollapsed = parent && state.collapsedFolders.has(parent);
     const totalCount = [...subMap.values()].reduce((n, t) => n + t.length, 0);
 
@@ -2114,6 +2119,10 @@ function renderTrackList() {
     for (const sub of sortFolderKeys(subMap.keys())) {
       const subTracks = subMap.get(sub);
       const subKey = sub ? `${parent} / ${sub}` : "";
+      if (subKey && !state.seenFolders.has(subKey)) {
+        state.seenFolders.add(subKey);
+        state.collapsedFolders.add(subKey);
+      }
       const subCollapsed = subKey && state.collapsedFolders.has(subKey);
 
       if (sub) {
@@ -2135,6 +2144,8 @@ function renderTrackList() {
 function toggleTrackFolder(folder) {
   if (state.collapsedFolders.has(folder)) state.collapsedFolders.delete(folder);
   else state.collapsedFolders.add(folder);
+  localStorage.setItem("ops_toc_collapsed_folders", JSON.stringify([...state.collapsedFolders]));
+  localStorage.setItem("ops_toc_seen_folders",     JSON.stringify([...state.seenFolders]));
   renderTrackList();
 }
 
@@ -4327,8 +4338,51 @@ function initRangeRings() {
   _populateRingsPanel();
 }
 
+
+// ── Side panel section collapse ───────────────────────────────────────────
+const SIDE_SECTIONS = ['markers', 'tracks'];
+const SIDE_SECTION_KEY = 'ops_toc_side_collapsed';
+
+function _sideSectionIds(name) {
+  return {
+    body:  name === 'markers' ? 'marker-list' : 'track-list',
+    arrow: 'arrow-' + name,
+  };
+}
+
+function toggleSideSection(name) {
+  const collapsed = _getSideCollapsed();
+  if (collapsed.has(name)) collapsed.delete(name);
+  else collapsed.add(name);
+  _saveSideCollapsed(collapsed);
+  _applySideSection(name, collapsed.has(name));
+}
+
+function _applySideSection(name, isCollapsed) {
+  const { body, arrow } = _sideSectionIds(name);
+  const bodyEl  = document.getElementById(body);
+  const arrowEl = document.getElementById(arrow);
+  if (bodyEl)  bodyEl.classList.toggle('collapsed', isCollapsed);
+  if (arrowEl) arrowEl.classList.toggle('open', !isCollapsed);
+}
+
+function _getSideCollapsed() {
+  try { return new Set(JSON.parse(localStorage.getItem(SIDE_SECTION_KEY) || '["markers","tracks"]')); }
+  catch { return new Set(['markers', 'tracks']); }
+}
+
+function _saveSideCollapsed(set) {
+  localStorage.setItem(SIDE_SECTION_KEY, JSON.stringify([...set]));
+}
+
+function initSideSections() {
+  const collapsed = _getSideCollapsed();
+  SIDE_SECTIONS.forEach(name => _applySideSection(name, collapsed.has(name)));
+}
+
 // Hook into existing DOMContentLoaded / init cycle
 document.addEventListener("DOMContentLoaded", () => {
+  initSideSections();
   // initMap is already called — hook GPS after a short delay to let map init settle
   setTimeout(() => { initGps(); initFixedPos(); initRangeRings(); }, 500);
 });
