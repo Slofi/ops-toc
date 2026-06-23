@@ -2676,13 +2676,22 @@ import gps as _gps
 _gps.init(APP_ROOT)
 
 
-@app.route("/api/gps")
-def api_gps_get():
+def _gps_payload():
     with _gps.gps_lock:
         pos = dict(_gps.gps_state)
         rt  = dict(_gps._gps_runtime)
     cfg = _gps.load_config()
-    return jsonify({**cfg, **pos, **rt})
+    return {**cfg, **pos, **rt}
+
+
+@app.route("/api/gps")
+def api_gps_get():
+    return jsonify(_gps_payload())
+
+
+@app.route("/api/settings/gps")
+def api_settings_gps_get():
+    return jsonify(_gps_payload())
 
 
 @app.route("/api/gps", methods=["POST"])

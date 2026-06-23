@@ -27,6 +27,8 @@ const state = {
   offlineJobId: null,
   collapsedFolders: (function() { try { return new Set(JSON.parse(localStorage.getItem("ops_toc_collapsed_folders") || "[]")); } catch(e) { return new Set(); } })(),
   seenFolders:      (function() { try { return new Set(JSON.parse(localStorage.getItem("ops_toc_seen_folders")     || "[]")); } catch(e) { return new Set(); } })(),
+  collapsedMarkerFolders: (function() { try { return new Set(JSON.parse(localStorage.getItem("ops_toc_collapsed_marker_folders") || "[]")); } catch(e) { return new Set(); } })(),
+  seenMarkerFolders:      (function() { try { return new Set(JSON.parse(localStorage.getItem("ops_toc_seen_marker_folders")     || "[]")); } catch(e) { return new Set(); } })(),
 };
 
 const el = (id) => document.getElementById(id);
@@ -60,6 +62,7 @@ function installControlFeedback() {
     ".checklist-card-head",
     ".checklist-item-row",
     ".track-folder-header",
+    ".marker-folder-header",
     ".color-swatch",
     ".color-swatch-custom",
     ".switch-control",
@@ -1369,7 +1372,9 @@ function openMarkerDialog(marker = null, latlng = null) {
   el("marker-desc").value = marker?.description || "";
   el("marker-emoji").value = marker?.emoji || "pin";
   el("marker-category").value = marker?.category || "note";
+  el("marker-folder").value = marker?.folder || "";
   el("marker-status").textContent = "";
+  populateMarkerFolderDatalist();
   el("marker-dialog").showModal();
   setTimeout(() => el("marker-name").focus(), 80);
 }
@@ -1384,6 +1389,7 @@ async function saveMarker(event) {
     description: el("marker-desc").value.trim(),
     emoji: el("marker-emoji").value.trim() || "pin",
     category: el("marker-category").value.trim() || "note",
+    folder: el("marker-folder").value.trim(),
   };
   try {
     if (id) {
@@ -1439,17 +1445,91 @@ function renderMarkerList() {
     list.innerHTML = '<div class="empty">No markers yet. Use Add Marker, then tap the map.</div>';
     return;
   }
-  list.innerHTML = markers.map((m) => `
-    <div class="list-row" onclick="flyToMarker(${m.id})">
+
+  const topMap = new Map();
+  for (const m of markers) {
+    const { parent, sub } = _parseTrackFolder(m.folder || "");
+    if (!topMap.has(parent)) topMap.set(parent, new Map());
+    const subMap = topMap.get(parent);
+    if (!subMap.has(sub)) subMap.set(sub, []);
+    subMap.get(sub).push(m);
+  }
+  const sortKeys = (keys) => [...keys].sort((a, b) => {
+    if (a === "" && b !== "") return 1;
+    if (b === "" && a !== "") return -1;
+    return a.localeCompare(b);
+  });
+
+  const _markerRow = (m, indent) => {
+    const cls = indent === 2 ? " track-in-subfolder" : indent === 1 ? " track-in-folder" : "";
+    return `<div class="list-row${cls}" onclick="flyToMarker(${m.id})">
       <div class="row-icon">${esc((m.emoji || "pin").slice(0, 3))}</div>
       <div class="row-main">
         <div class="row-title">${esc(m.name)}</div>
-        <div class="row-sub">${esc(m.category || "note")} - ${m.lat.toFixed(4)}, ${m.lon.toFixed(4)}</div>
+        <div class="row-sub">${esc(m.category || "note")} · ${m.lat.toFixed(4)}, ${m.lon.toFixed(4)}</div>
       </div>
       <div class="row-actions">
         <button class="btn small" onclick="event.stopPropagation();editMarker(${m.id})">Edit</button>
       </div>
-    </div>`).join("");
+    </div>`;
+  };
+
+  let html = "";
+  for (const parent of sortKeys(topMap.keys())) {
+    const subMap = topMap.get(parent);
+    if (parent && !state.seenMarkerFolders.has(parent)) {
+      state.seenMarkerFolders.add(parent);
+      state.collapsedMarkerFolders.add(parent);
+    }
+    const parentCollapsed = parent && state.collapsedMarkerFolders.has(parent);
+    const totalCount = [...subMap.values()].reduce((n, t) => n + t.length, 0);
+
+    if (parent) {
+      html += `<div class="track-folder-header marker-folder-header" onclick="toggleMarkerFolder('${esc(parent)}')" data-folder="${esc(parent)}">
+        <span class="track-folder-icon">${parentCollapsed ? "▶" : "▼"}</span>
+        <span class="track-folder-name">${esc(parent)}</span>
+        <span class="track-folder-count">${totalCount}</span>
+      </div>`;
+      if (parentCollapsed) continue;
+    }
+
+    for (const sub of sortKeys(subMap.keys())) {
+      const subMarkers = subMap.get(sub);
+      const subKey = sub ? `${parent} / ${sub}` : "";
+      if (subKey && !state.seenMarkerFolders.has(subKey)) {
+        state.seenMarkerFolders.add(subKey);
+        state.collapsedMarkerFolders.add(subKey);
+      }
+      const subCollapsed = subKey && state.collapsedMarkerFolders.has(subKey);
+
+      if (sub) {
+        html += `<div class="track-folder-header track-subfolder-header marker-folder-header" onclick="toggleMarkerFolder('${esc(subKey)}')" data-folder="${esc(subKey)}">
+          <span class="track-folder-icon">${subCollapsed ? "▶" : "▼"}</span>
+          <span class="track-folder-name">${esc(sub)}</span>
+          <span class="track-folder-count">${subMarkers.length}</span>
+        </div>`;
+        if (subCollapsed) continue;
+      }
+
+      const indent = sub ? 2 : parent ? 1 : 0;
+      for (const m of subMarkers) html += _markerRow(m, indent);
+    }
+  }
+  list.innerHTML = html;
+}
+
+function toggleMarkerFolder(folder) {
+  if (state.collapsedMarkerFolders.has(folder)) state.collapsedMarkerFolders.delete(folder);
+  else state.collapsedMarkerFolders.add(folder);
+  localStorage.setItem("ops_toc_collapsed_marker_folders", JSON.stringify([...state.collapsedMarkerFolders]));
+  localStorage.setItem("ops_toc_seen_marker_folders",     JSON.stringify([...state.seenMarkerFolders]));
+  renderMarkerList();
+}
+
+function populateMarkerFolderDatalist() {
+  const allFolders = [...new Set([...state.markers.values()].map((m) => m.folder).filter(Boolean))].sort();
+  const dl = el("marker-folder-datalist");
+  if (dl) dl.innerHTML = allFolders.map(f => `<option value="${esc(f)}">`).join("");
 }
 
 function flyToMarker(id) {
