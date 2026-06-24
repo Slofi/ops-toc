@@ -2528,6 +2528,7 @@ function captureGpsPoint() {
   setRecordingButton();
   const distance = trackDistance(state.recording.points);
   setBanner(`Recording GPS track - ${state.recording.points.length} pts - ${fmtDistance(distance)}`);
+  try { localStorage.setItem('ops_toc_active_track', JSON.stringify({...state.recording, recMinInterval: _recMinInterval})); } catch (_) {}
 }
 
 async function startTrackRecording() {
@@ -2552,6 +2553,7 @@ async function stopTrackRecording() {
   if (!recording) return;
 
   if (recording.points.length < 2) {
+    localStorage.removeItem('ops_toc_active_track');
     state.recording = null;
     if (state.recordingLayer) { state.map.removeLayer(state.recordingLayer); state.recordingLayer = null; }
     setRecordingButton();
@@ -2576,6 +2578,7 @@ async function stopTrackRecording() {
 
   if (result === null) return; // cancelled — keep recording
 
+  localStorage.removeItem('ops_toc_active_track');
   state.recording = null;
   if (state.recordingLayer) { state.map.removeLayer(state.recordingLayer); state.recordingLayer = null; }
   setRecordingButton();
@@ -3537,6 +3540,26 @@ function bindUi() {
 let _mapDataLoaded = false;
 let _touchPlacing = false;
 
+function _recoverActiveTrack() {
+  try {
+    const saved = localStorage.getItem('ops_toc_active_track');
+    if (!saved) return;
+    const rec = JSON.parse(saved);
+    if (!rec || !Array.isArray(rec.points) || rec.points.length < 1) {
+      localStorage.removeItem('ops_toc_active_track');
+      return;
+    }
+    state.recording = { points: rec.points, started_at: rec.started_at, ended_at: rec.ended_at };
+    if (rec.recMinInterval) _recMinInterval = rec.recMinInterval;
+    updateRecordingLayer();
+    setRecordingButton();
+    const distance = trackDistance(state.recording.points);
+    setBanner(`Track resumed — ${state.recording.points.length} pts · ${fmtDistance(distance)} (tap Stop to save)`);
+  } catch (_) {
+    localStorage.removeItem('ops_toc_active_track');
+  }
+}
+
 async function initMapAndData() {
   if (state.map) {
     // already initialized — just invalidate size in case it was hidden
@@ -3547,6 +3570,7 @@ async function initMapAndData() {
   await loadLayers();
   await Promise.all([loadMarkers(), loadDrawings(), loadTracks()]);
   _mapDataLoaded = true;
+  _recoverActiveTrack();
 }
 
 async function boot() {
