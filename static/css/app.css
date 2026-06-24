@@ -724,6 +724,13 @@ input, textarea {
   max-width: none;
   padding: 9px 11px;
 }
+.setting-row select {
+  width: 100%;
+  min-width: 0;
+}
+.setting-row > div {
+  min-width: 0;
+}
 input:focus, textarea:focus, select:focus {
   outline: none;
   border-color: var(--accent);
