@@ -4152,7 +4152,7 @@ async function initGps() {
     btn.addEventListener("click", populateGpsSettings);
   });
   await _gpsPoll();
-  _gpsTimer = setInterval(_gpsPoll, 3000);
+  _gpsTimer = setInterval(_gpsPoll, 1000);
 }
 
 // ── Geo / colour helpers (shared by fixed pos and range rings) ──────────────
