@@ -8,10 +8,18 @@
   <link rel="stylesheet" href="/static/css/app.css">
 </head>
 <body>
-  <div id="service-splash" class="service-splash" hidden>
-    <div class="service-splash-panel">
-      <div class="service-splash-brand">OPS-TOC</div>
-      <div id="service-splash-message" class="service-splash-message">OPS-TOC restarting...</div>
+  <div id="service-splash" class="service-splash" hidden data-mode="restart">
+    <div class="ss-panel">
+      <div class="ss-reticle"><span class="ss-rc"></span>
+        <div class="ss-wordmark">OPS-TOC</div>
+        <div class="ss-tagline">Tactical Operations Center</div>
+      </div>
+      <div class="ss-status-wrap"><div class="ss-status"><span class="ss-txt-shutdown">OFFLINE</span><span class="ss-txt-restart">RESTARTING</span></div></div>
+      <div class="ss-anim"><div class="ss-dots"><div class="ss-dot"></div><div class="ss-dot"></div><div class="ss-dot"></div><div class="ss-dot"></div></div></div>
+      <div class="ss-hint">
+        <div class="ss-hint-label">To restart</div>
+        <code class="ss-hint-cmd" onclick="navigator.clipboard.writeText(this.textContent)" title="Click to copy">systemctl --user restart ops-toc</code>
+      </div>
     </div>
   </div>
   <header id="toolbar">

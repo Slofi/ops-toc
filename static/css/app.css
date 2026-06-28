@@ -41,36 +41,57 @@ body {
   padding: 8px;
 }
 
+/* ── Service splash (shutdown / restart) ── */
 .service-splash {
-  position: fixed;
-  inset: 0;
-  z-index: 10000;
-  display: grid;
-  place-items: center;
-  background: #000;
-  color: var(--text);
+  position: fixed; inset: 0; z-index: 10000;
+  background: var(--bg);
+  background-image: repeating-linear-gradient(0deg, transparent 0, transparent 3px, rgba(0,0,0,0.05) 3px, rgba(0,0,0,0.05) 4px);
+  display: grid; place-items: center;
+  animation: ss-fadein .35s ease;
 }
 .service-splash[hidden] { display: none !important; }
-.service-splash-panel {
-  display: grid;
-  gap: 12px;
-  justify-items: center;
-  padding: 24px;
-  text-align: center;
+@keyframes ss-fadein { from { opacity: 0; } to { opacity: 1; } }
+.ss-panel { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 48px 60px; }
+
+/* reticle — corner brackets framing the wordmark */
+.ss-reticle { position: relative; padding: 24px 44px 20px; margin-bottom: 24px; }
+.ss-reticle::before, .ss-reticle::after,
+.ss-reticle .ss-rc::before, .ss-reticle .ss-rc::after {
+  content: ''; position: absolute; width: 18px; height: 18px;
+  border-color: var(--accent); border-style: solid;
+  animation: ss-ret 3s ease-in-out infinite;
 }
-.service-splash-brand {
-  color: var(--accent);
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-}
-.service-splash-message {
-  color: var(--text);
-  font-size: clamp(22px, 4vw, 42px);
-  font-weight: 750;
-  letter-spacing: 0.02em;
-}
+.ss-reticle::before     { top:0; left:0;  border-width: 1.5px 0 0 1.5px; }
+.ss-reticle::after      { top:0; right:0; border-width: 1.5px 1.5px 0 0; }
+.ss-reticle .ss-rc::before { bottom:0; left:0;  border-width: 0 0 1.5px 1.5px; }
+.ss-reticle .ss-rc::after  { bottom:0; right:0; border-width: 0 1.5px 1.5px 0; }
+@keyframes ss-ret { 0%,100%{opacity:.3} 50%{opacity:.85} }
+
+.ss-wordmark { font-size: clamp(36px, 8vw, 70px); font-weight: 800; letter-spacing: 0.22em; text-indent: 0.22em; color: var(--accent); text-transform: uppercase; line-height: 1; }
+.ss-tagline  { font-size: 10px; font-weight: 600; letter-spacing: 0.32em; text-indent: 0.32em; color: var(--muted); text-transform: uppercase; margin-top: 9px; }
+
+.ss-status-wrap { margin-top: 36px; height: 20px; }
+.ss-status { font-size: 12px; font-weight: 700; letter-spacing: 0.30em; text-indent: 0.30em; text-transform: uppercase; }
+.service-splash[data-mode="shutdown"] .ss-status      { color: var(--red); }
+.service-splash[data-mode="restart"]  .ss-status      { color: var(--accent); }
+.service-splash[data-mode="shutdown"] .ss-txt-restart { display: none; }
+.service-splash[data-mode="restart"]  .ss-txt-shutdown{ display: none; }
+
+.ss-anim { margin-top: 18px; height: 28px; display: flex; align-items: center; justify-content: center; }
+.ss-dots { display: flex; gap: 8px; }
+.ss-dot  { width: 5px; height: 5px; border-radius: 50%; animation: ss-dot 1.6s ease-in-out infinite; }
+.ss-dot:nth-child(2) { animation-delay: .22s; }
+.ss-dot:nth-child(3) { animation-delay: .44s; }
+.ss-dot:nth-child(4) { animation-delay: .66s; }
+@keyframes ss-dot { 0%,80%,100%{opacity:.2;transform:scale(1)} 40%{opacity:1;transform:scale(1.3)} }
+.service-splash[data-mode="shutdown"] .ss-dot { background: var(--red); }
+.service-splash[data-mode="restart"]  .ss-dot { background: var(--accent); }
+
+.ss-hint { margin-top: 42px; display: flex; flex-direction: column; align-items: center; gap: 7px; }
+.service-splash[data-mode="restart"] .ss-hint { visibility: hidden; }
+.ss-hint-label { font-size: 10px; letter-spacing: 0.16em; color: var(--text-muted); text-transform: uppercase; }
+.ss-hint-cmd { font-family: "Consolas","Cascadia Mono","Courier New",monospace; font-size: 11.5px; color: var(--muted); background: rgba(255,255,255,0.025); border: 1px solid rgba(255,255,255,0.07); border-radius: 4px; padding: 6px 14px; letter-spacing: 0.03em; cursor: pointer; user-select: all; }
+.ss-hint-cmd:hover { border-color: rgba(255,255,255,0.14); color: var(--text); }
 
 /* ── Main tabs in toolbar ── */
 .main-tabs {
@@ -2383,3 +2404,4 @@ a.menu-item {
   #search-input { width: min(160px, 18vw); }
   #search-form { min-width: 0; }
 }
+.service-splash[data-mode="shutdown"] .ss-anim{display:none}

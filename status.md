@@ -70,6 +70,7 @@ journalctl --user -u ops-toc -f
 
 ## Pending
 
+- **BUG: Internal GPS (BN-280 on UART3 /dev/ttyS3) INOP** — module powered (cyan LED blinking), port opens, but zero bytes received at all baud rates. UBX init ruled out (same with init disabled). Likely: T wire not making contact at BN-280 pad or Rock 5B pin 35. To diagnose: (1) loopback test — bridge pin 12↔35, send/receive via pyserial; (2) recheck T wire seating at both ends. USB dongle in car is primary GPS in the meantime.
 
 - **MapTiler Topo offline — Slovenia z9–16:** Subscribe to MT Flex ($25/month), open OPS-TOC on CD, confirm MapTiler API key is set (Settings → Keys), start MT Topo z9–16 download for Slovenia. ~899k tiles, ~$65 total ($25 base + ~$40 extra at $0.10/1000). Should finish in a few hours with 16-worker downloader. Copy `.mbtiles` to HD via rsync when done. Cancel Flex subscription after. File lands at `~/maps/mbtiles/` — works immediately with mbtileserver on both CD and HD.
 
@@ -424,3 +425,37 @@ Proxy integration:
 Caveat:
 
 - A backup from the original live GPS patch remains in the checkout as `gps.py.before-ttyS-gps`.
+
+## Internal GPS Field Diagnosis — 2026-06-28
+
+Cyberdeck was tested outside with the internal BN-280-style GPS on Rock 5B UART3 (`/dev/ttyS3`).
+
+- UART3 hardware path is working:
+  - `/dev/ttyS3` exists.
+  - `uart3-m1` is enabled in `/boot/armbianEnv.txt`.
+  - `gpsd.service` and `gpsd.socket` are masked/inactive.
+  - OPS-TOC is the only normal owner of `/dev/ttyS3`.
+- Raw 9600 baud serial showed valid u-blox binary frames (`b5 62 ...`), so the module is powered and communicating digitally.
+- OPS-TOC reader only parses NMEA. The module was outputting UBX/binary-first, so `gps.py` was patched to force UART1 output protocol to NMEA before enabling GGA/GSV messages.
+- With OPS-TOC stopped and the receiver forced to NMEA-only, the module emitted clean NMEA:
+  - `$GNGGA,,,,,,0,00,99.99,,,,,,*56`
+  - `$GPGSV,1,1,00*79`
+  - `$GLGSV,1,1,00*65`
+- A 45-second exclusive read outside repeatedly showed `0` GPS satellites and `0` GLONASS satellites in view.
+- u-blox hardware monitor:
+  - `aStatus=2`
+  - `aPower=1`
+  - `jamInd=0`
+- GNSS config:
+  - GPS enabled.
+  - GLONASS enabled.
+  - SBAS/QZSS enabled.
+  - Galileo/BeiDou disabled.
+
+Current conclusion:
+
+- Rock 5B UART communication is fixed/confirmed.
+- OPS-TOC can configure the receiver for NMEA and read it.
+- Remaining failure is RF/reception-side: `sats_view` stays `0` despite outdoor clear-sky test.
+- User reported the module power wire had previously been connected to `P` for a few minutes instead of `V`. On the `P G T R V B` marking, `P` is PPS, not power. This may have stressed/damaged the receiver even though UART still works.
+- Next isolation test if resumed: remove/raise the BN-280 from the faceplate/case, power only correct `V/G`, connect module `T` to Rock RX, white ceramic patch facing sky, keep it away from deck electronics for 5-10 minutes. If `sats_view` remains `0`, replace the BN-280.

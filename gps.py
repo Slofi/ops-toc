@@ -15,6 +15,7 @@ Settings stored in gps_config.json next to the app.
 from __future__ import annotations
 import json
 import logging
+import struct
 import threading
 import time
 import urllib.request
@@ -302,6 +303,10 @@ def _ubx(cls, id_, payload=b''):
 
 
 def _init_device(ser):
+    # Some BN-220/BN-280 modules remember UBX-only output. Force UART1 to
+    # accept UBX/NMEA commands but emit NMEA, which is what this reader parses.
+    ser.write(_ubx(0x06, 0x00, struct.pack("<BBHIIHHHH", 1, 0, 0, 0x08D0, 9600, 0x0003, 0x0002, 0, 0)))
+    time.sleep(0.1)
     for nmea_id in (0x00, 0x04, 0x03):
         ser.write(_ubx(0x06, 0x01, bytes([0xF0, nmea_id, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00])))
         time.sleep(0.05)
