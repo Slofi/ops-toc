@@ -1652,6 +1652,57 @@ function speedPercentile(arr, p) {
   return s[Math.min(Math.floor(s.length * p), s.length - 1)];
 }
 
+function _medianFilter3(arr) {
+  return arr.map((v, i) => {
+    if (i === 0 || i === arr.length - 1) return v;
+    const trio = [arr[i - 1], v, arr[i + 1]];
+    trio.sort((a, b) => a - b);
+    return trio[1];
+  });
+}
+
+function _bisectTs(data, targetTs) {
+  let lo = 0, hi = data.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if ((data[mid].ts || 0) < targetTs) lo = mid + 1;
+    else hi = mid;
+  }
+  if (lo > 0 && Math.abs((data[lo - 1].ts || 0) - targetTs) < Math.abs((data[lo].ts || 0) - targetTs)) lo--;
+  return lo;
+}
+
+function _fmtTs(ts, long) {
+  const d = new Date(ts * 1000);
+  const h = d.getHours().toString().padStart(2, '0');
+  const m = d.getMinutes().toString().padStart(2, '0');
+  const s = d.getSeconds().toString().padStart(2, '0');
+  return long ? `${h}:${m}:${s}` : `${h}:${m}`;
+}
+
+function _makeTimeLabels(tRange) {
+  if (!tRange || !tRange.min || !tRange.max) return [];
+  const { min, max } = tRange;
+  const duration = max - min;
+  if (duration < 60) return [];
+  const step = 5 * 60; // 5-minute grid
+  const firstTick = Math.ceil(min / step) * step;
+  const ticks = [];
+  for (let ts = firstTick; ts <= max; ts += step) {
+    const frac = (ts - min) / duration;
+    if (frac < 0 || frac > 1.001) continue;
+    const d = new Date(ts * 1000);
+    const totalMin = d.getHours() * 60 + d.getMinutes();
+    let type, label = null;
+    if      (totalMin % 60 === 0) { type = 'hour';    label = _fmtTs(ts); }
+    else if (totalMin % 30 === 0) { type = 'half';    label = _fmtTs(ts); }
+    else if (totalMin % 15 === 0) { type = 'quarter'; }
+    else                          { type = '5min';    }
+    ticks.push({ frac: Math.min(frac, 1), type, label });
+  }
+  return ticks;
+}
+
 function trackStats(track) {
   const pts = track.points;
   if (!pts || pts.length < 2) return null;
@@ -1783,7 +1834,7 @@ function makeTrackEndIcon(label, bg) {
 
 // Chart layout constants (viewBox space)
 const _CCW = 316, _CCH = 95; // viewBox width/height
-const _CPL = 34, _CPR = 4, _CPT = 5, _CPB = 8; // padding: left (y-axis labels), right, top, bottom
+const _CPL = 34, _CPR = 4, _CPT = 5, _CPB = 16; // padding: left (y-axis labels), right, top, bottom (bottom extra for time labels)
 
 let _chartInteractInit = false;
 function _initTrackChartInteractions() {
@@ -1833,31 +1884,101 @@ function _initTrackChartInteractions() {
       };
       grip.onpointerup = grip.onpointercancel = () => {
         grip.onpointermove = grip.onpointerup = grip.onpointercancel = null;
+        _rerenderCharts();
       };
     });
   }
 }
 
-function makeChartSvg(values, color) {
-  const cw = _CCW, ch = _CCH, pl = _CPL, pr = _CPR, pt = _CPT, pb = _CPB;
+function _rerenderCharts() {
+  const body = el('track-chart-body');
+  if (!body || !_activeChartData) return;
+  const { speedData, altData, speedCap, tRange } = _activeChartData;
+  const hasSpeed = speedData.some(d => d.v > 0.5);
+  const hasAlt = altData.length > 1;
+
+  const xLabels = _makeTimeLabels(tRange);
+
+  // Measure both wraps before rendering so sibling refs have correct dimensions
+  const speedBlock = hasSpeed ? body.querySelector('[data-chart="speed"]') : null;
+  const altBlock   = hasAlt   ? body.querySelector('[data-chart="alt"]')   : null;
+  const speedWrap  = speedBlock && speedBlock.querySelector('.chart-svg-wrap');
+  const altWrap    = altBlock   && altBlock.querySelector('.chart-svg-wrap');
+  const sCw = speedWrap ? (speedWrap.clientWidth  || _CCW) : _CCW;
+  const sCh = speedWrap ? (speedWrap.clientHeight || _CCH) : _CCH;
+  const aCw = altWrap   ? (altWrap.clientWidth    || _CCW) : _CCW;
+  const aCh = altWrap   ? (altWrap.clientHeight   || _CCH) : _CCH;
+
+  // Pre-compute effective min/max (with headroom) for cross-chart dot Y positioning
+  const speedVals = speedData.map(d => d.v);
+  const altVals   = altData.map(d => d.v);
+  const sMinV = speedVals.length ? Math.min(...speedVals) : 0;
+  const sMaxV = speedVals.length ? Math.max(...speedVals) * 1.2 : 1;  // headroom 0.2
+  const aMinV = altVals.length   ? Math.min(...altVals)   : 0;
+  const aMaxV = altVals.length   ? Math.max(...altVals) * 1.1 : 1;    // headroom 0.1
+
+  if (hasSpeed && speedWrap) {
+    speedWrap.innerHTML = makeChartSvg(speedVals, '#e8b04f', sCw, sCh, 0.2, xLabels, speedData.map(d => d.ts));
+    const sib = hasAlt ? { block: altBlock, data: altData, cw: aCw, ch: aCh, minV: aMinV, maxV: aMaxV, range: aMaxV - aMinV || 1, chartType: 'alt' } : null;
+    _bindChartScrub(speedBlock, speedData, 'speed', speedCap, sCw, sCh, sib, 0.2);
+  }
+  if (hasAlt && altWrap) {
+    altWrap.innerHTML = makeChartSvg(altVals, '#4fc3f7', aCw, aCh, 0.1, xLabels, altData.map(d => d.ts));
+    const sib = hasSpeed ? { block: speedBlock, data: speedData, cw: sCw, ch: sCh, minV: sMinV, maxV: sMaxV, range: sMaxV - sMinV || 1, chartType: 'speed' } : null;
+    _bindChartScrub(altBlock, altData, 'alt', null, aCw, aCh, sib, 0.1);
+  }
+}
+
+function makeChartSvg(values, color, cw, ch, headroom, xLabels, timestamps) {
+  cw = cw || _CCW; ch = ch || _CCH; headroom = headroom || 0;
+  const pl = _CPL, pr = _CPR, pt = _CPT, pb = _CPB;
   if (!values || values.length < 2) return '';
   const minV = Math.min(...values);
-  const maxV = Math.max(...values);
-  const range = maxV - minV || 1;
+  const actualMaxV = Math.max(...values);
+  const effectiveMaxV = actualMaxV * (1 + headroom);
+  const range = effectiveMaxV - minV || 1;
   const n = values.length;
 
-  const toX = (i) => pl + (i / (n - 1)) * (cw - pl - pr);
+  // Time-based X positioning so chart aligns with the time tick axis
+  const tsMin = timestamps && timestamps[0];
+  const tsMax = timestamps && timestamps[n - 1];
+  const tsDur = tsMin && tsMax && tsMax > tsMin ? tsMax - tsMin : 0;
+  const toX = tsDur
+    ? (i) => pl + ((timestamps[i] - tsMin) / tsDur) * (cw - pl - pr)
+    : (i) => pl + (i / (n - 1)) * (cw - pl - pr);
   const toY = (v) => ch - pb - ((v - minV) / range) * (ch - pt - pb);
 
-  // Grid lines + Y-axis labels (4 levels: 0%, 33%, 67%, 100% of range)
+  // Grid lines + Y-axis labels against actual data range (not headroom zone)
   let grid = '';
+  const actualRange = actualMaxV - minV || 1;
   for (let g = 0; g <= 3; g++) {
     const frac = g / 3;
-    const v = minV + frac * range;
+    const v = minV + frac * actualRange;
     const y = toY(v).toFixed(1);
     const label = Math.round(v);
     grid += `<line x1="${pl}" y1="${y}" x2="${cw - pr}" y2="${y}" stroke="rgba(255,255,255,0.07)" stroke-width="1"/>`;
     grid += `<text x="${(pl - 4).toFixed(1)}" y="${y}" fill="rgba(122,136,154,0.78)" font-size="8.5" font-family="monospace" text-anchor="end" dominant-baseline="middle">${label}</text>`;
+  }
+
+  // X-axis time ticks — styled by type
+  let xAxisSvg = '';
+  const chartBottomY = ch - pb;
+  if (xLabels && xLabels.length) {
+    for (const { frac, type, label } of xLabels) {
+      const x = (pl + frac * (cw - pl - pr)).toFixed(1);
+      let tickH, stroke, strokeW;
+      if      (type === 'hour')    { tickH = 11; stroke = 'rgba(195,210,230,0.88)'; strokeW = 1.2; }
+      else if (type === 'half')    { tickH = 8;  stroke = 'rgba(150,168,192,0.68)'; strokeW = 1.0; }
+      else if (type === 'quarter') { tickH = 5;  stroke = 'rgba(110,128,152,0.52)'; strokeW = 0.8; }
+      else                         { tickH = 3;  stroke = 'rgba(85,100,120,0.38)';  strokeW = 0.7; }
+      xAxisSvg += `<line x1="${x}" y1="${chartBottomY.toFixed(1)}" x2="${x}" y2="${(chartBottomY + tickH).toFixed(1)}" stroke="${stroke}" stroke-width="${strokeW}"/>`;
+      if (label) {
+        const anchor = frac < 0.08 ? 'start' : frac > 0.92 ? 'end' : 'middle';
+        const fontSize = type === 'hour' ? 7.5 : 7;
+        const fill = type === 'hour' ? 'rgba(180,195,218,0.88)' : 'rgba(138,155,178,0.72)';
+        xAxisSvg += `<text x="${x}" y="${(ch - 2).toFixed(1)}" fill="${fill}" font-size="${fontSize}" font-family="monospace" text-anchor="${anchor}">${label}</text>`;
+      }
+    }
   }
 
   const xs = values.map((_, i) => toX(i));
@@ -1865,17 +1986,27 @@ function makeChartSvg(values, color) {
   const linePts = xs.map((x, i) => `${x.toFixed(1)},${ys[i].toFixed(1)}`).join(' ');
   const fillPts = `${xs[0].toFixed(1)},${toY(minV).toFixed(1)} ` + linePts + ` ${xs.at(-1).toFixed(1)},${toY(minV).toFixed(1)}`;
 
+  // Tooltip group (positioned and populated by _bindChartScrub)
+  const tipW = 64, tipH = 28;
+  const tooltipSvg =
+    `<g class="chart-tooltip" opacity="0" pointer-events="none">` +
+    `<rect class="chart-tip-bg" x="0" y="0" width="${tipW}" height="${tipH}" rx="3" ry="3" fill="rgba(10,12,20,0.93)" stroke="rgba(255,255,255,0.18)" stroke-width="0.5"/>` +
+    `<text class="chart-tip-val" x="${tipW / 2}" y="11" font-size="9" font-family="monospace" fill="#f0f4ff" text-anchor="middle" dominant-baseline="middle">--</text>` +
+    `<text class="chart-tip-time" x="${tipW / 2}" y="22" font-size="7.5" font-family="monospace" fill="rgba(140,158,185,0.9)" text-anchor="middle" dominant-baseline="middle">--:--:--</text>` +
+    `</g>`;
+
   return `<svg viewBox="0 0 ${cw} ${ch}" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg">` +
-    grid +
+    grid + xAxisSvg +
     `<polygon points="${fillPts}" fill="${color}" fill-opacity="0.18"/>` +
     `<polyline points="${linePts}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round"/>` +
     `<circle class="chart-scrub-dot" cx="-99" cy="-99" r="4.5" fill="#ff4444" stroke="white" stroke-width="1.5" pointer-events="none" opacity="0"/>` +
     `<line class="chart-scrub-line" x1="-99" y1="${pt}" x2="-99" y2="${ch - pb}" stroke="rgba(255,68,68,0.38)" stroke-width="1" pointer-events="none" opacity="0"/>` +
     `<rect class="chart-event-area" x="${pl}" y="0" width="${cw - pl - pr}" height="${ch}" fill="transparent"/>` +
+    tooltipSvg +
     `</svg>`;
 }
 
-function _bindChartScrub(container, data, chartType, cap) {
+function _bindChartScrub(container, data, chartType, cap, cw, ch, sibling, headroom) {
   if (!container || !data || data.length < 2) return;
   const svg = container.querySelector('.chart-svg-wrap svg');
   if (!svg) return;
@@ -1885,43 +2016,129 @@ function _bindChartScrub(container, data, chartType, cap) {
   const statEl = container.querySelector('.chart-stat');
   if (!dot || !area) return;
 
-  const cw = _CCW, ch = _CCH, pl = _CPL, pr = _CPR, pt = _CPT, pb = _CPB;
+  cw = cw || _CCW; ch = ch || _CCH; headroom = headroom || 0;
+  const pl = _CPL, pr = _CPR, pt = _CPT, pb = _CPB;
   const n = data.length;
   const vals = data.map(d => d.v);
   const minV = Math.min(...vals);
-  const maxV = Math.max(...vals);
-  const range = maxV - minV || 1;
+  // Use same effective max as makeChartSvg so dot Y matches the drawn line
+  const effectiveMaxV = Math.max(...vals) * (1 + headroom);
+  const range = effectiveMaxV - minV || 1;
+
+  function _moveSiblingDot(frac) {
+    if (!sibling) return;
+    const sibSvg = sibling.block.querySelector('.chart-svg-wrap svg');
+    if (!sibSvg) return;
+    const sibDot  = sibSvg.querySelector('.chart-scrub-dot');
+    const sibLine = sibSvg.querySelector('.chart-scrub-line');
+    const sibTip  = sibSvg.querySelector('.chart-tooltip');
+    const tR = _activeChartData && _activeChartData.tRange;
+    const tDur = tR ? tR.max - tR.min : 0;
+    const sibN = sibling.data.length;
+    const sibIdx = (tDur && sibling.data[0] && sibling.data[0].ts)
+      ? _bisectTs(sibling.data, tR.min + frac * tDur)
+      : Math.min(Math.round(frac * (sibN - 1)), sibN - 1);
+    const sibItem = sibling.data[sibIdx];
+    if (sibItem && sibDot) {
+      const sibX = (tDur && sibItem.ts
+        ? pl + ((sibItem.ts - tR.min) / tDur) * (sibling.cw - pl - pr)
+        : pl + (sibIdx / (sibN - 1)) * (sibling.cw - pl - pr)
+      ).toFixed(1);
+      const sibY = (sibling.ch - pb - ((sibItem.v - sibling.minV) / sibling.range) * (sibling.ch - pt - pb)).toFixed(1);
+      sibDot.setAttribute('cx', sibX); sibDot.setAttribute('cy', sibY); sibDot.setAttribute('opacity', '1');
+      if (sibTip) {
+        const tipW = 64, tipH = 28;
+        const sx = parseFloat(sibX), sy = parseFloat(sibY);
+        let tipX = sx - tipW / 2;
+        tipX = Math.max(pl, Math.min(sibling.cw - pr - tipW, tipX));
+        let tipY = sy - tipH - 7;
+        if (tipY < pt) tipY = sy + 7;
+        const cx = (tipX + tipW / 2).toFixed(1);
+        sibTip.querySelector('.chart-tip-bg').setAttribute('x', tipX.toFixed(1));
+        sibTip.querySelector('.chart-tip-bg').setAttribute('y', tipY.toFixed(1));
+        const valEl = sibTip.querySelector('.chart-tip-val');
+        if (valEl) {
+          valEl.setAttribute('x', cx); valEl.setAttribute('y', (tipY + 10).toFixed(1));
+          valEl.textContent = sibling.chartType === 'speed' ? `${sibItem.v.toFixed(1)} km/h` : `${Math.round(sibItem.v)} m`;
+        }
+        const timeEl = sibTip.querySelector('.chart-tip-time');
+        if (timeEl) { timeEl.setAttribute('x', cx); timeEl.setAttribute('y', (tipY + 21).toFixed(1)); timeEl.textContent = sibItem.ts ? _fmtTs(sibItem.ts, true) : ''; }
+        sibTip.setAttribute('opacity', '1');
+      }
+    }
+    if (sibLine && sibItem) {
+      const sibLineX = (tDur && sibItem.ts
+        ? pl + ((sibItem.ts - tR.min) / tDur) * (sibling.cw - pl - pr)
+        : pl + frac * (sibling.cw - pl - pr)
+      ).toFixed(1);
+      sibLine.setAttribute('x1', sibLineX); sibLine.setAttribute('x2', sibLineX); sibLine.setAttribute('opacity', '0.6');
+    }
+  }
+
+  function _clearSiblingDot() {
+    if (!sibling) return;
+    const sibSvg = sibling.block.querySelector('.chart-svg-wrap svg');
+    if (!sibSvg) return;
+    const sibDot  = sibSvg.querySelector('.chart-scrub-dot');
+    const sibLine = sibSvg.querySelector('.chart-scrub-line');
+    const sibTip  = sibSvg.querySelector('.chart-tooltip');
+    if (sibDot)  sibDot.setAttribute('opacity', '0');
+    if (sibLine) sibLine.setAttribute('opacity', '0');
+    if (sibTip)  sibTip.setAttribute('opacity', '0');
+  }
 
   function scrub(clientX) {
     const rect = svg.getBoundingClientRect();
-    // Convert screen X → viewBox X (works regardless of rendered size due to viewBox)
     const vbX = (clientX - rect.left) / rect.width * cw;
     const frac = Math.max(0, Math.min(1, (vbX - pl) / (cw - pl - pr)));
-    const idx = Math.min(Math.round(frac * (n - 1)), n - 1);
+
+    // Find nearest data point by actual timestamp so scrub aligns with time axis
+    const tR = _activeChartData && _activeChartData.tRange;
+    const tDur = tR ? tR.max - tR.min : 0;
+    let idx;
+    if (tDur && data[0] && data[0].ts) {
+      idx = _bisectTs(data, tR.min + frac * tDur);
+    } else {
+      idx = Math.min(Math.round(frac * (n - 1)), n - 1);
+    }
     const item = data[idx];
     if (!item) return;
 
-    const svgX = (pl + (idx / (n - 1)) * (cw - pl - pr)).toFixed(1);
+    // X position from item's actual timestamp so dot sits on the drawn line
+    const svgX = (tDur && item.ts
+      ? pl + ((item.ts - tR.min) / tDur) * (cw - pl - pr)
+      : pl + (idx / (n - 1)) * (cw - pl - pr)
+    ).toFixed(1);
     const svgY = (ch - pb - ((item.v - minV) / range) * (ch - pt - pb)).toFixed(1);
-    dot.setAttribute('cx', svgX);
-    dot.setAttribute('cy', svgY);
-    dot.setAttribute('opacity', '1');
-    if (scrubLine) {
-      scrubLine.setAttribute('x1', svgX);
-      scrubLine.setAttribute('x2', svgX);
-      scrubLine.setAttribute('opacity', '1');
+    dot.setAttribute('cx', svgX); dot.setAttribute('cy', svgY); dot.setAttribute('opacity', '1');
+    if (scrubLine) { scrubLine.setAttribute('x1', svgX); scrubLine.setAttribute('x2', svgX); scrubLine.setAttribute('opacity', '1'); }
+
+    // Tooltip bubble
+    const tip = svg.querySelector('.chart-tooltip');
+    if (tip) {
+      const tipW = 64, tipH = 28;
+      const sx = parseFloat(svgX), sy = parseFloat(svgY);
+      let tipX = sx - tipW / 2;
+      tipX = Math.max(pl, Math.min(cw - pr - tipW, tipX));
+      let tipY = sy - tipH - 7;
+      if (tipY < pt) tipY = sy + 7;
+      const cx = (tipX + tipW / 2).toFixed(1);
+      tip.querySelector('.chart-tip-bg').setAttribute('x', tipX.toFixed(1));
+      tip.querySelector('.chart-tip-bg').setAttribute('y', tipY.toFixed(1));
+      const valEl = tip.querySelector('.chart-tip-val');
+      if (valEl) { valEl.setAttribute('x', cx); valEl.setAttribute('y', (tipY + 10).toFixed(1)); valEl.textContent = chartType === 'speed' ? `${item.v.toFixed(1)} km/h` : `${Math.round(item.v)} m`; }
+      const timeEl = tip.querySelector('.chart-tip-time');
+      if (timeEl) { timeEl.setAttribute('x', cx); timeEl.setAttribute('y', (tipY + 21).toFixed(1)); timeEl.textContent = item.ts ? _fmtTs(item.ts, true) : ''; }
+      tip.setAttribute('opacity', '1');
     }
-    if (statEl) {
-      statEl.textContent = chartType === 'speed'
-        ? `${item.v.toFixed(1)} km/h`
-        : `${Math.round(item.v)} m`;
-    }
+
+    if (statEl) statEl.textContent = chartType === 'speed' ? `${item.v.toFixed(1)} km/h` : `${Math.round(item.v)} m`;
+
+    _moveSiblingDot(frac);
 
     if (state.map && item.lat != null && item.lon != null) {
       if (!_chartScrubMarker) {
-        _chartScrubMarker = L.circleMarker([item.lat, item.lon], {
-          radius: 8, color: '#ff4444', fillColor: '#ff4444', fillOpacity: 0.85, weight: 2.5,
-        }).addTo(state.map);
+        _chartScrubMarker = L.circleMarker([item.lat, item.lon], { radius: 8, color: '#ff4444', fillColor: '#ff4444', fillOpacity: 0.85, weight: 2.5 }).addTo(state.map);
       } else {
         _chartScrubMarker.setLatLng([item.lat, item.lon]);
       }
@@ -1931,10 +2148,10 @@ function _bindChartScrub(container, data, chartType, cap) {
   function clearScrub() {
     dot.setAttribute('opacity', '0');
     if (scrubLine) scrubLine.setAttribute('opacity', '0');
-    if (_chartScrubMarker && state.map) {
-      state.map.removeLayer(_chartScrubMarker);
-      _chartScrubMarker = null;
-    }
+    const tip = svg.querySelector('.chart-tooltip');
+    if (tip) tip.setAttribute('opacity', '0');
+    _clearSiblingDot();
+    if (_chartScrubMarker && state.map) { state.map.removeLayer(_chartScrubMarker); _chartScrubMarker = null; }
     if (statEl && _activeChartData) {
       if (chartType === 'speed') {
         const s = _activeChartData.speedData;
@@ -1976,20 +2193,24 @@ function showTrackChart(track) {
     const dt = Math.max((pts[i].ts || 0) - (pts[i - 1].ts || 0), 1);
     rawSpeeds.push(d / dt * 3.6);
   }
-  const speedCap = speedPercentile(rawSpeeds, 0.95) || 1;
-  const speedData = rawSpeeds.map((raw, i) => ({
-    v: Math.min(raw, speedCap),
+  const smoothedSpeeds = _medianFilter3(_medianFilter3(rawSpeeds));
+  const speedCap = speedPercentile(smoothedSpeeds, 0.95) || 1;
+  const speedData = smoothedSpeeds.map((v, i) => ({
+    v: Math.min(v, speedCap),
     lat: (pts[i].lat + pts[i + 1].lat) / 2,
     lon: (pts[i].lon + pts[i + 1].lon) / 2,
+    ts: ((pts[i].ts || 0) + (pts[i + 1].ts || 0)) / 2,
   }));
 
   // Build altitude data with per-point lat/lon
   const altData = [];
   for (const p of pts) {
-    if (p.alt != null) altData.push({ v: Number(p.alt), lat: p.lat, lon: p.lon });
+    if (p.alt != null) altData.push({ v: Number(p.alt), lat: p.lat, lon: p.lon, ts: p.ts });
   }
 
-  _activeChartData = { speedData, altData, speedCap };
+  const allTs = pts.map(p => p.ts).filter(Boolean);
+  const tRange = allTs.length >= 2 ? { min: allTs[0], max: allTs[allTs.length - 1] } : null;
+  _activeChartData = { speedData, altData, speedCap, tRange };
 
   const hasSpeed = speedData.some(d => d.v > 0.5);
   const hasAlt = altData.length > 1;
@@ -2030,6 +2251,7 @@ function showTrackChart(track) {
   }
   panel.hidden = false;
   _initTrackChartInteractions();
+  _rerenderCharts();
 }
 
 function hideTrackChart() {
@@ -2432,27 +2654,12 @@ function updateRecordingLayer() {
 
 function setRecordingButton() {
   const btn = el("track-record-btn");
-  const discardBtn = el("track-discard-btn");
   if (!btn) return;
   const active = Boolean(state.recording);
   btn.classList.toggle("active", active);
   btn.textContent = active ? `Stop (${state.recording.points.length})` : "Track";
-  if (discardBtn) discardBtn.hidden = !active;
 }
 
-async function discardTrackRecording() {
-  if (!state.recording) return;
-  const pts = state.recording.points.length;
-  const ok = await appConfirm(`Discard recording? ${pts} point${pts !== 1 ? "s" : ""} will be lost.`, "Discard Track");
-  if (!ok) return;
-  state.recording = null;
-  if (state.recordingLayer) {
-    state.map.removeLayer(state.recordingLayer);
-    state.recordingLayer = null;
-  }
-  setRecordingButton();
-  setBanner("");
-}
 
 const RECORD_INTERVALS = [1, 2, 5, 10, 30, 60, 120, 300];
 let _recMinInterval = (() => {

@@ -1,7 +1,7 @@
 type:: project
 status:: active
 tags:: #ops-toc #map-app #leaflet #offline-maps #field-log #cyberdeck
-updated:: 2026-06-18
+updated:: 2026-06-28
 
 # OPS-TOC
 
@@ -16,7 +16,7 @@ updated:: 2026-06-18
 | **Data dir**  | ~/maps/ (DB + MBTiles shared with all CD apps) |
 | **Repo**      | github.com/Slofi/ops-toc |
 | **Git location** | `~/Projects/ops-toc/` (direct — no longer via map-app/) |
-| **Latest pushed app commit** | `af00804 Speed up tile downloads with parallel workers` |
+| **Latest pushed app commit** | `417734d` — working tree ahead (chart overhaul + GPS UART3, pending push) |
 
 ## Access
 
@@ -70,6 +70,7 @@ journalctl --user -u ops-toc -f
 
 ## Pending
 
+
 - **MapTiler Topo offline — Slovenia z9–16:** Subscribe to MT Flex ($25/month), open OPS-TOC on CD, confirm MapTiler API key is set (Settings → Keys), start MT Topo z9–16 download for Slovenia. ~899k tiles, ~$65 total ($25 base + ~$40 extra at $0.10/1000). Should finish in a few hours with 16-worker downloader. Copy `.mbtiles` to HD via rsync when done. Cancel Flex subscription after. File lands at `~/maps/mbtiles/` — works immediately with mbtileserver on both CD and HD.
 
 - **HD responsive UI** — CSS media query adaptation for small screens (≤600px). Compact toolbar, touch-optimized LOG composer, map-first layout with LOG/SOP as slide-up panels. One codebase, adapts automatically. Implement once HD screen arrives and real hardware can be tested.
@@ -86,7 +87,11 @@ journalctl --user -u ops-toc -f
 
 ## Changelog
 
-**2026-06-22** — GPS enabled flag bug fixed: `api_gps_set()` was defaulting `enabled=False` when the key was absent from the POST body, so any partial settings save silently disabled GPS. Fixed by loading existing config first and using `cfg.get("enabled", True)` as default. `load_config()` fallback also changed to `enabled:True, port:auto`. Commit `abc69a2`.
+**2026-06-28** — Track chart overhaul: removed toolbar Discard button (Stop dialog only); fixed SVG text deformation on panel resize (dynamic viewBox re-render); 2-pass median filter eliminates GPS jitter spikes; 20%/10% headroom on speed/altitude; time axis with 5-min ticks (4 styles: hour/half/quarter/5-min); scrub tooltip bubble on both charts simultaneously; red dot + scrub line on both charts; timestamp-based X positioning throughout.
+**2026-06-23** — Internal Cyberdeck GPS (Rock 5B UART3 /dev/ttyS3): `gps.py` lists it as first-class source, `port_present()` handles ttyS* via filesystem check, u-blox NMEA init also enables UART1. README + API docs updated.
+**2026-06-23** — Styled full-page shutdown splash: big "OPS-TOC" in accent, restart command, Dashboard hint. Commit `417734d`
+**2026-06-23** — GPS source fix also committed to docs. Commit `312b4df`
+**2026-06-22** — GPS enabled flag bug fixed: `api_gps_set()` defaulting `enabled=False` on absent key — silenced any partial settings save. Commit `abc69a2`.
 
 **2026-06-18** — Touch targets: sub-chips 10→11px font, 2→4px vertical padding; mc-btn (rename/delete) 13px, 28×28px min tap area. Commit `ffd8a6c`.
 **2026-06-18** — Multi-track stats: `_updateTrackFormFields()` combines Distance/Points/Start/End/Duration across all attached tracks. Duration field added to TRACK template. `assembleBody()` outputs individual `**Track:** name (#id)` lines, not the "N tracks" label. `_enrichTrack()` restores full data from `_logTracks` on edit. Commit `61ac8d4`.
@@ -353,3 +358,69 @@ API keys stored in browser localStorage: `thunderforestApiKey`, `mapTilerApiKey`
 | `/api/tracks/<id>/gpx` | GET | Export track as GPX |
 | `/api/tracks/<id>/geojson` | GET | Export track as GeoJSON |
 | `/api/tracks/<id>/drawing` | POST | Convert track to a drawing |
+
+## GPS / Position Update — 2026-06-23
+
+OPS-TOC now supports the Cyberdeck internal Beitian BN-220/BN-280-style GPS on the Rock 5B GPIO UART as a first-class GPS source.
+
+Hardware and system state:
+
+- GPS module markings are `P G T R V B`.
+- Correct wiring:
+  - `V` -> Rock 5B pin 1, 3.3V
+  - `G` -> Rock 5B pin 9, GND
+  - `T` -> Rock 5B pin 35, `UART3_RX_M1`
+  - `R` -> Rock 5B pin 12, `UART3_TX_M1`
+  - `P` is PPS, not power; leave unconnected unless PPS is needed.
+  - `B` remains unconnected.
+- `/dev/ttyS3` is the Rock 5B UART3 M1 serial device.
+- `uart3-m1` is enabled in `/boot/armbianEnv.txt`.
+- `gpsd` and `gpsd.socket` were stopped/disabled so OPS-TOC can own `/dev/ttyS3`.
+
+Code changes:
+
+- `gps.py`
+  - Lists `/dev/ttyS3` as `Internal BN-220 / BN-280 GPS - Rock 5B UART3 (/dev/ttyS3)`.
+  - Keeps `Auto-detect USB GPS` for USB dongles.
+  - Treats `/dev/ttyS*` ports as present via filesystem existence checks, because pyserial's USB port listing does not cover the GPIO UART cleanly.
+  - u-blox NMEA init now enables messages on UART1 as well as USB, so direct serial over GPIO continues emitting NMEA.
+- `templates/index.html`
+  - GPS/Position copy now distinguishes USB dongle, internal BN-220/BN-280, and OM proxy.
+- `app.py`
+  - Adds `GET /api/settings/gps`, returning the same live payload as `/api/gps`.
+
+Current verified OPS-TOC config:
+
+```json
+{
+  "enabled": true,
+  "port": "/dev/ttyS3",
+  "om_proxy": false,
+  "om_url": "http://localhost:8082",
+  "manual": false
+}
+```
+
+Live verification:
+
+- `systemctl --user is-active ops-toc.service` -> `active`
+- `GET /api/gps/ports` returns:
+  - `auto` / `Auto-detect USB GPS - no USB dongle found`
+  - `/dev/ttyS3` / `Internal BN-220 / BN-280 GPS - Rock 5B UART3 (/dev/ttyS3)`
+- `GET /api/settings/gps` returned a real direct fix from `/dev/ttyS3`:
+  - lat around `46.03918`
+  - lon around `14.49765`
+  - altitude around `331-337m`
+  - `sats: 5`
+  - `sats_view: 7-8`
+  - `source: direct`
+
+Proxy integration:
+
+- Other CD apps that support OM-style GPS proxy can use OPS-TOC as the provider by setting the proxy base URL to `http://localhost:8090` on the same machine.
+- They should poll `http://localhost:8090/api/settings/gps`.
+- The response includes `fix`, `lat`, `lon`, `alt`, `sats`, `sats_view`, `enabled`, `port`, `running`, `port_present`, `source`, and config fields.
+
+Caveat:
+
+- A backup from the original live GPS patch remains in the checkout as `gps.py.before-ttyS-gps`.
