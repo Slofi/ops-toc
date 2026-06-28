@@ -89,6 +89,10 @@ _GPS_KEYWORDS = (
     "bu-353", "skytraq", "mtk", "sirf",
 )
 
+_INTERNAL_GPS_PORTS = (
+    ("/dev/ttyS3", "Internal BN-220 / BN-280 GPS - Rock 5B UART3 (/dev/ttyS3)"),
+)
+
 
 def _looks_like_gps(device: str) -> bool:
     text = (_product_for_tty(device) + " " + _manufacturer_for_tty(device)).lower()
@@ -133,8 +137,13 @@ def detect_gps_port() -> str:
 
 
 def _port_label(device: str) -> str:
-    """Return 'device — product name' using sysfs, or just device if unavailable."""
+    """Return a human-friendly label for a selectable GPS port."""
     import os, re as _re
+    for internal_dev, internal_label in _INTERNAL_GPS_PORTS:
+        if device == internal_dev:
+            return internal_label
+    if device.startswith("/dev/ttyS"):
+        return f"Internal serial GPS - {device}"
     real = os.path.realpath(device) if device.startswith("/dev/serial/by-id/") else device
     m = _re.search(r'ttyACM(\d+)|ttyUSB(\d+)', real)
     if not m:
@@ -143,19 +152,29 @@ def _port_label(device: str) -> str:
     if device.startswith("/dev/serial/by-id/"):
         # Show only the symlink name (basename) so the dropdown isn't huge.
         short = device.split("/")[-1]
-        return f"{short} — {product} (stable, recommended)" if product else f"{short} (stable, recommended)"
-    return f"{device} — {product}" if product else device
+        return f"USB GPS dongle - {short} - {product} (stable, recommended)" if product else f"USB GPS dongle - {short} (stable, recommended)"
+    return f"USB GPS dongle - {device} - {product}" if product else f"USB GPS dongle - {device}"
+
+
+def _internal_gps_entries() -> list:
+    import os
+    cfg_port = str(load_config().get("port", "")).strip()
+    candidates = list(_INTERNAL_GPS_PORTS)
+    if cfg_port.startswith("/dev/ttyS") and cfg_port not in {dev for dev, _ in candidates}:
+        candidates.append((cfg_port, _port_label(cfg_port)))
+    return [
+        {"device": dev, "label": label}
+        for dev, label in candidates
+        if os.path.exists(dev)
+    ]
 
 
 def list_ports() -> list:
     """List GPS-capable serial ports.
 
-    Returns both raw /dev/tty* devices and their stable /dev/serial/by-id/*
-    symlinks (when present). The by-id paths survive socket swaps and reboots,
-    so they're the preferred selection for USB GPS dongles.
-
-    Only USB serial ports (ttyACM*, ttyUSB*) are included — internal ttyS*
-    ports are never GPS dongles and just clutter the list.
+    USB GPS dongles are listed with their stable /dev/serial/by-id/* symlink
+    when available. The Cyberdeck internal BN-220/BN-280 receiver is exposed
+    as the Rock 5B UART3 port (/dev/ttyS3).
     """
     import glob, os
     try:
@@ -178,15 +197,15 @@ def list_ports() -> list:
 
     # by-id first so the recommended stable path is the natural first choice.
     devices = by_id_links + tty_devices
-    entries = [{"device": p, "label": _port_label(p)} for p in devices]
+    entries = _internal_gps_entries() + [{"device": p, "label": _port_label(p)} for p in devices]
 
     # Synthetic auto-detect entry: scans USB-serial devices for GPS/GNSS
     # signatures at runtime, follows the device across socket/dongle swaps.
     detected = detect_gps_port()
     if detected:
-        det_label = f"Auto-detect GPS — currently {detected.split('/')[-1]} (recommended)"
+        det_label = f"Auto-detect USB GPS - currently {detected.split('/')[-1]}"
     else:
-        det_label = "Auto-detect GPS — no device found (recommended)"
+        det_label = "Auto-detect USB GPS - no USB dongle found"
     entries.insert(0, {"device": "auto", "label": det_label})
     return entries
 
@@ -198,6 +217,8 @@ def port_present(port: str) -> bool:
         return False
     if port == "auto":
         return bool(detect_gps_port())
+    if port.startswith("/dev/ttyS"):
+        return os.path.exists(port)
     # Resolve symlinks (e.g. /dev/serial/by-id/...) so we compare actual ttys.
     try:
         target = os.path.realpath(port) if os.path.exists(port) else port
@@ -282,7 +303,7 @@ def _ubx(cls, id_, payload=b''):
 
 def _init_device(ser):
     for nmea_id in (0x00, 0x04, 0x03):
-        ser.write(_ubx(0x06, 0x01, bytes([0xF0, nmea_id, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00])))
+        ser.write(_ubx(0x06, 0x01, bytes([0xF0, nmea_id, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00])))
         time.sleep(0.05)
     ser.write(_ubx(0x06, 0x01, bytes([0x01, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])))
     time.sleep(0.05)

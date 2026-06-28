@@ -40,6 +40,16 @@ OPS-TOC has GPS support in two modes:
 - OM proxy: polls OM's GPS endpoint so only OM owns the serial GPS device.
 - Direct serial: opens a local GPS dongle/serial port when running standalone.
 
+On the Cyberdeck, direct serial includes the internal Beitian BN-220/BN-280-style
+GPS on Rock 5B UART3 at `/dev/ttyS3`. In Settings -> GPS/Position, choose
+`Direct serial port` and then `Internal BN-220 / BN-280 GPS - Rock 5B UART3
+(/dev/ttyS3)`. USB GPS dongles remain available through `Auto-detect USB GPS`
+and any stable `/dev/serial/by-id/*` entries.
+
+OPS-TOC also exposes its current GPS state at `GET /api/settings/gps`, using the
+same shape as OM's GPS proxy endpoint. Other CD apps can point their GPS proxy
+base URL at `http://localhost:8090` to consume OPS-TOC's internal GPS fix.
+
 The toolbar `GPS` button jumps to the current fix. The toolbar `Track` button
 records a live dashed gold trace while GPS has a fix. Stopping the recording
 saves it as a first-class track in OPS-TOC's SQLite DB.
@@ -67,6 +77,10 @@ Track API:
 ## API Surface For Future OM Use
 
 - `GET /api/markers` - read custom markers for OM overlay.
+- `GET /api/gps` - read OPS-TOC's live GPS state and config.
+- `POST /api/gps` - update GPS source/config.
+- `GET /api/gps/ports` - list USB GPS and internal UART GPS choices.
+- `GET /api/settings/gps` - OM-compatible GPS proxy endpoint for other apps.
 - `GET /api/tracks` - read saved GPS tracks for TOC/OM integrations.
 - `GET /api/tile-layers` - list local MBTiles and online layers.
 - `GET /tiles/<layer>/<z>/<x>/<y>.png` - OPS-TOC's built-in local tile endpoint.
