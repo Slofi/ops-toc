@@ -16,7 +16,7 @@ updated:: 2026-06-28
 | **Data dir**  | ~/maps/ (DB + MBTiles shared with all CD apps) |
 | **Repo**      | github.com/Slofi/ops-toc |
 | **Git location** | `~/Projects/ops-toc/` (direct — no longer via map-app/) |
-| **Latest pushed app commit** | `417734d` — working tree ahead (chart overhaul + GPS UART3, pending push) |
+| **Latest pushed app commit** | `ac0cf0a` — track chart overhaul |
 
 ## Access
 
