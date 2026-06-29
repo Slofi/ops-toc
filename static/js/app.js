@@ -4360,7 +4360,7 @@ async function populateGpsSettings() {
   const cb = el("gps-enabled");
   if (cb) cb.checked = d.enabled || false;
   const src = el("gps-source-select");
-  if (src) { src.value = (d.om_proxy !== false) ? "proxy" : "direct"; gpsSourceChanged(); }
+  if (src) { src.value = d.om_proxy ? "proxy" : "direct"; gpsSourceChanged(); }
   await gpsScanPorts();
   const sel = el("gps-port-select");
   if (sel && d.port) sel.value = d.port;

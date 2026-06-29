@@ -15,6 +15,7 @@ Settings stored in gps_config.json next to the app.
 from __future__ import annotations
 import json
 import logging
+import os
 import struct
 import threading
 import time
@@ -95,6 +96,18 @@ _INTERNAL_GPS_PORTS = (
 )
 
 
+def _is_internal_uart(port: str) -> bool:
+    return os.path.basename(str(port or "")).startswith("ttyAS")
+
+
+def _baud_for_port(port: str) -> int:
+    cfg = load_config()
+    try:
+        return int(cfg.get("baud") or (115200 if _is_internal_uart(port) else 9600))
+    except (TypeError, ValueError):
+        return 115200 if _is_internal_uart(port) else 9600
+
+
 def _looks_like_gps(device: str) -> bool:
     text = (_product_for_tty(device) + " " + _manufacturer_for_tty(device)).lower()
     return any(k in text for k in _GPS_KEYWORDS)
@@ -117,11 +130,14 @@ def detect_gps_port() -> str:
     or the raw /dev/tty* device, or '' if none found.
 
     Priority:
+      0. Hand-Deck A7A GPIO UART GPS on /dev/ttyAS2 when present.
       1. USB-serial device whose product/manufacturer string matches a known
          GPS/GNSS keyword.
       2. If exactly one USB-serial device is present and no keyword match, use it.
     """
     import glob
+    if os.path.exists("/dev/ttyAS2"):
+        return "/dev/ttyAS2"
     try:
         import serial.tools.list_ports
         ttys = sorted(p.device for p in serial.tools.list_ports.comports()
@@ -146,6 +162,8 @@ def _port_label(device: str) -> str:
     if device.startswith("/dev/ttyS"):
         return f"Internal serial GPS - {device}"
     real = os.path.realpath(device) if device.startswith("/dev/serial/by-id/") else device
+    if _is_internal_uart(real):
+        return f"{device} — GPIO UART GPS (A7A header)"
     m = _re.search(r'ttyACM(\d+)|ttyUSB(\d+)', real)
     if not m:
         return device
@@ -176,6 +194,9 @@ def list_ports() -> list:
     USB GPS dongles are listed with their stable /dev/serial/by-id/* symlink
     when available. The Cyberdeck internal BN-220/BN-280 receiver is exposed
     as the Rock 5B UART3 port (/dev/ttyS3).
+    On the Hand-Deck, the Beitian BE-222Q is wired to the A7A 40-pin header
+    and appears as /dev/ttyAS2, so ttyAS* UARTs are included as explicit
+    direct-port choices.
     """
     import glob, os
     try:
@@ -197,7 +218,8 @@ def list_ports() -> list:
             by_id_links.append(link)
 
     # by-id first so the recommended stable path is the natural first choice.
-    devices = by_id_links + tty_devices
+    internal_uarts = sorted(glob.glob('/dev/ttyAS*'))
+    devices = by_id_links + tty_devices + internal_uarts
     entries = _internal_gps_entries() + [{"device": p, "label": _port_label(p)} for p in devices]
 
     # Synthetic auto-detect entry: scans USB-serial devices for GPS/GNSS
@@ -225,6 +247,8 @@ def port_present(port: str) -> bool:
         target = os.path.realpath(port) if os.path.exists(port) else port
     except Exception:
         target = port
+    if _is_internal_uart(target):
+        return os.path.exists(target)
     try:
         import serial.tools.list_ports
         return any(p.device == target for p in serial.tools.list_ports.comports())
@@ -319,14 +343,15 @@ def _init_device(ser):
 
 def _reader(port, stop_event):
     import serial as _serial
-    log.info(f"GPS: opening {port}")
+    baud = _baud_for_port(port)
+    log.info(f"GPS: opening {port} at {baud}")
     with gps_lock:
         _gps_runtime.update({"port": port, "running": False, "port_present": port_present(port),
-                              "error": "", "source": "direct"})
+                              "error": "", "source": "direct", "baud": baud})
     try:
         ser = _serial.Serial()
         ser.port     = port
-        ser.baudrate = 9600
+        ser.baudrate = baud
         ser.timeout  = 1
         ser.dtr      = False
         ser.open()
@@ -336,10 +361,11 @@ def _reader(port, stop_event):
             _gps_runtime.update({"running": False, "port_present": port_present(port), "error": str(e)})
         return
 
-    try:
-        _init_device(ser)
-    except Exception as e:
-        log.warning(f"GPS: init failed (continuing): {e}")
+    if not _is_internal_uart(port):
+        try:
+            _init_device(ser)
+        except Exception as e:
+            log.warning(f"GPS: init failed (continuing): {e}")
 
     with gps_lock:
         _gps_runtime.update({"running": True, "port_present": True, "error": ""})
