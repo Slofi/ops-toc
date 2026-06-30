@@ -1,45 +1,51 @@
-/* OPS-TOC Lite — HD 5" touch display styles, always applied */
+/* OPS-TOC Lite — HD 5" touch display
+   Loaded ONLY at /lite. Plain selectors are safe here. */
 
-/* Full-viewport background on the root so the topo image covers the entire
-   1920×1080 HDMI output, including the area right of the 1024px body */
+/* ── Background ── */
 html {
-  min-width: 100vw;
-  min-height: 100vh;
   background-color: var(--bg);
   background-image: url('/static/background-topo.png');
   background-size: cover;
   background-position: center;
-  background-attachment: fixed;
 }
 
-/* Constrain the UI to 1024px so all content falls within the visible
-   area of the 5" panel (physical display crops at 1024×600) */
-body.hd-lite {
+body {
+  background: transparent;
+  padding: 4px;
+  gap: 3px;
   width: 1024px;
   max-width: 1024px;
-  background: transparent;
-  padding: 5px;
-  gap: 3px;
+  overflow: hidden;
 }
 
-body.hd-lite #toolbar {
+/* ── Toolbar: frosted glass + compact layout ── */
+#toolbar {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0 8px;
+  border-radius: 8px;
   background: rgba(11, 11, 16, 0.93);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   border-bottom-color: rgba(232, 176, 79, 0.18);
 }
 
-body.hd-lite #main {
-  background: rgba(19, 19, 24, 0.84);
-}
+/* Hide desktop-only toolbar items so the toolbar fits in 1024px */
+.brand-text,
+#gps-btn,
+#track-record-btn { display: none !important; }
 
-body.hd-lite .main-tab {
+#search-form { min-width: 0; }
+#search-input { width: min(140px, 15vw); }
+
+/* ── Main tab: touch targets + amber active indicator ── */
+.main-tab {
   padding: 8px 12px;
   min-height: 40px;
   position: relative;
 }
 
-body.hd-lite .main-tab.active::after {
+.main-tab.active::after {
   content: '';
   position: absolute;
   top: 0; left: 0; right: 0;
@@ -48,46 +54,60 @@ body.hd-lite .main-tab.active::after {
   border-radius: 0 0 2px 2px;
 }
 
-body.hd-lite #settings-btn {
+/* ── Hamburger — bigger tap area ── */
+#settings-btn {
   min-width: 52px;
   min-height: 48px;
   font-size: 20px;
   padding-inline: 13px;
 }
 
-body.hd-lite .menu-item {
-  min-height: 52px;
+/* ── Main content area ── */
+#main { background: rgba(19, 19, 24, 0.84); }
+
+/* ── Map tab: single column so map fills full width ── */
+#tab-map.active { grid-template-columns: 1fr; }
+
+/* Side panel overlays map instead of pushing it */
+#side-panel {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: min(310px, 90vw);
+  z-index: 1500;
+  box-shadow: 4px 0 16px rgba(0,0,0,0.45);
 }
 
-body.hd-lite .list-row {
-  padding: 12px;
-  min-height: 44px;
-}
+/* ── Settings/dialogs ── */
+.settings-grid { grid-template-columns: 1fr; }
 
-body.hd-lite .composer-row select,
-body.hd-lite .composer-row input[type="text"] {
-  min-height: 36px;
+dialog {
+  width: 100vw;
+  max-width: none;
+  max-height: 78vh;
+  margin: auto 0 0;
+  border-radius: 12px 12px 0 0;
+  border-left: 0;
+  border-right: 0;
+  border-bottom: 0;
 }
+#settings-dialog,
+#manual-dialog { width: 100vw; }
 
-body.hd-lite .toc-body-input {
-  min-height: 72px;
-  max-height: 72px;
-}
+.tileset-row,
+.queue-row { flex-direction: column; }
+.tileset-actions { width: 100%; justify-content: flex-start; }
 
-body.hd-lite .sop-section-head {
-  padding: 12px 14px;
-}
+/* ── Touch targets ── */
+.menu-item { min-height: 52px; }
+.list-row { padding: 12px; min-height: 44px; }
 
-body.hd-lite .sop-item {
-  padding: 9px 8px;
-}
+.composer-row select,
+.composer-row input[type="text"] { min-height: 36px; }
 
-body.hd-lite .sop-item input[type="checkbox"] {
-  width: 20px;
-  height: 20px;
-  min-width: 20px;
-}
+.toc-body-input { min-height: 72px; max-height: 72px; }
 
-body.hd-lite .checklist-card-head {
-  padding: 12px 14px;
-}
+.sop-section-head { padding: 12px 14px; }
+.sop-item { padding: 9px 8px; }
+.sop-item input[type="checkbox"] { width: 20px; height: 20px; min-width: 20px; }
+
+.checklist-card-head { padding: 12px 14px; }
