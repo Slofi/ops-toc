@@ -1354,11 +1354,6 @@ def index():
     return render_template("index.html")
 
 
-@app.route("/lite")
-def lite():
-    return render_template("index.html", hd_lite=True)
-
-
 @app.route("/api/health")
 def api_health():
     return jsonify({"ok": True, "service": "ops-toc", "port": PORT, "data_dir": str(DATA_DIR)})
