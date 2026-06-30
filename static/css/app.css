@@ -2405,3 +2405,84 @@ a.menu-item {
   #search-form { min-width: 0; }
 }
 .service-splash[data-mode="shutdown"] .ss-anim{display:none}
+
+/* ════════════════════════════════════════════════════════════
+   HD 5-inch touch display — 1024 × 600 optimisation
+   To activate topo texture: cp ~/overmesh/static/background-topo.png ~/Projects/ops-toc/static/
+   ════════════════════════════════════════════════════════════ */
+@media (max-width: 1024px) {
+
+  /* Topo texture on html; body transparent so it shows through */
+  html {
+    background-color: var(--bg);
+    background-image: url('/static/background-topo.png');
+    background-size: cover;
+    background-position: center;
+  }
+  body {
+    background: transparent;
+    padding: 5px;
+    gap: 3px;
+  }
+
+  /* Frosted glass toolbar — matches OM ecosystem look */
+  #toolbar {
+    background: rgba(11, 11, 16, 0.93);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-bottom-color: rgba(232, 176, 79, 0.18);
+  }
+
+  /* Semi-transparent content area lets topo show in panel gaps */
+  #main { background: rgba(19, 19, 24, 0.84); }
+
+  /* Main tabs — bigger touch targets */
+  .main-tab {
+    padding: 8px 12px;
+    min-height: 40px;
+    position: relative;
+  }
+
+  /* Amber bar at top of active tab — matches OM Lite nav indicator */
+  .main-tab.active::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--accent);
+    border-radius: 0 0 2px 2px;
+  }
+
+  /* Hamburger — bigger tap area */
+  #settings-btn {
+    min-width: 52px;
+    min-height: 48px;
+    font-size: 20px;
+    padding-inline: 13px;
+  }
+
+  /* Dropdown menu items */
+  .menu-item { min-height: 52px; }
+
+  /* Marker / drawing / track list rows */
+  .list-row { padding: 12px; min-height: 44px; }
+
+  /* Composer inputs */
+  .composer-row select,
+  .composer-row input[type="text"] { min-height: 36px; }
+
+  /* Body textarea — slightly shorter so more log entries stay visible */
+  .toc-body-input { min-height: 72px; }
+
+  /* SOP section headers */
+  .sop-section-head { padding: 12px 14px; }
+
+  /* SOP checklist items — larger tap target and checkbox */
+  .sop-item { padding: 9px 8px; }
+  .sop-item input[type="checkbox"] { width: 20px; height: 20px; min-width: 20px; }
+
+  /* Checklist card headers */
+  .checklist-card-head { padding: 12px 14px; }
+}

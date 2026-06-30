@@ -1,7 +1,7 @@
 type:: project
 status:: active
 tags:: #ops-toc #map-app #leaflet #offline-maps #field-log #cyberdeck
-updated:: 2026-06-28
+updated:: 2026-06-30
 
 # OPS-TOC
 
@@ -70,11 +70,11 @@ journalctl --user -u ops-toc -f
 
 ## Pending
 
-- **BUG: Internal GPS (BN-280 on UART3 /dev/ttyS3) INOP** — module powered (cyan LED blinking), port opens, but zero bytes received at all baud rates. UBX init ruled out (same with init disabled). Likely: T wire not making contact at BN-280 pad or Rock 5B pin 35. To diagnose: (1) loopback test — bridge pin 12↔35, send/receive via pyserial; (2) recheck T wire seating at both ends. USB dongle in car is primary GPS in the meantime.
+- **Resolved: Internal GPS (BN-280 on UART3 /dev/ttyS3)** — confirmed working on 2026-06-30 from the balcony. OPS-TOC must be set to explicit `/dev/ttyS3`; `auto` only follows USB GPS dongles and will report no GPS dongle when the internal receiver is the active source. Live sample after restart/re-init: `fix=true`, `lat=46.039179`, `lon=14.497671`, `alt=302`, `sats=8`, `sats_view=13`, `source=direct`.
 
 - **MapTiler Topo offline — Slovenia z9–16:** Subscribe to MT Flex ($25/month), open OPS-TOC on CD, confirm MapTiler API key is set (Settings → Keys), start MT Topo z9–16 download for Slovenia. ~899k tiles, ~$65 total ($25 base + ~$40 extra at $0.10/1000). Should finish in a few hours with 16-worker downloader. Copy `.mbtiles` to HD via rsync when done. Cancel Flex subscription after. File lands at `~/maps/mbtiles/` — works immediately with mbtileserver on both CD and HD.
 
-- **HD responsive UI** — CSS media query adaptation for small screens (≤600px). Compact toolbar, touch-optimized LOG composer, map-first layout with LOG/SOP as slide-up panels. One codebase, adapts automatically. Implement once HD screen arrives and real hardware can be tested.
+- **HD responsive UI** — Done (2026-06-30). `@media (max-width: 1024px)` block added to `app.css`: topo background via `html` bg-image (requires `cp ~/overmesh/static/background-topo.png ~/Projects/ops-toc/static/` on CD), frosted glass toolbar, amber active-tab indicator, larger touch targets for tabs/hamburger/menu-items/list-rows/composer inputs/SOP items/checklist headers, compact body padding. One codebase, adapts for CD (≥1024px = unchanged) vs HD (≤1024px = touch-optimised).
 - Decide whether to support PMTiles in addition to MBTiles
 - Add KML import/export
 - Add marker categories, filters, and styling
@@ -88,6 +88,8 @@ journalctl --user -u ops-toc -f
 
 ## Changelog
 
+**2026-06-30** — HD 5" touch optimisation: `@media (max-width: 1024px)` block in `app.css` — topo background, frosted glass toolbar, amber tab indicator, larger touch targets throughout (tabs, hamburger, menu items, list rows, composer inputs, SOP items, checklist headers). PNG copy required on CD: `cp ~/overmesh/static/background-topo.png ~/Projects/ops-toc/static/`.
+**2026-06-30** — Internal BN-280 GPS confirmed working on Rock 5B UART3 (`/dev/ttyS3`). Earlier "likely dead" diagnosis superseded. Saved config had drifted to `port: "auto"`, which only detects USB dongles; setting direct serial to `/dev/ttyS3` and restarting OPS-TOC produced a real balcony fix with 8 satellites used and 13 in view.
 **2026-06-28** — Track chart overhaul: removed toolbar Discard button (Stop dialog only); fixed SVG text deformation on panel resize (dynamic viewBox re-render); 2-pass median filter eliminates GPS jitter spikes; 20%/10% headroom on speed/altitude; time axis with 5-min ticks (4 styles: hour/half/quarter/5-min); scrub tooltip bubble on both charts simultaneously; red dot + scrub line on both charts; timestamp-based X positioning throughout.
 **2026-06-23** — Internal Cyberdeck GPS (Rock 5B UART3 /dev/ttyS3): `gps.py` lists it as first-class source, `port_present()` handles ttyS* via filesystem check, u-blox NMEA init also enables UART1. README + API docs updated.
 **2026-06-23** — Styled full-page shutdown splash: big "OPS-TOC" in accent, restart command, Dashboard hint. Commit `417734d`
@@ -426,7 +428,7 @@ Caveat:
 
 - A backup from the original live GPS patch remains in the checkout as `gps.py.before-ttyS-gps`.
 
-## Internal GPS Field Diagnosis — 2026-06-28
+## Internal GPS Field Diagnosis — 2026-06-28, superseded 2026-06-30
 
 Cyberdeck was tested outside with the internal BN-280-style GPS on Rock 5B UART3 (`/dev/ttyS3`).
 
@@ -452,10 +454,22 @@ Cyberdeck was tested outside with the internal BN-280-style GPS on Rock 5B UART3
   - SBAS/QZSS enabled.
   - Galileo/BeiDou disabled.
 
-Current conclusion:
+2026-06-28 conclusion, now superseded:
 
 - Rock 5B UART communication is fixed/confirmed.
 - OPS-TOC can configure the receiver for NMEA and read it.
-- Remaining failure is RF/reception-side: `sats_view` stays `0` despite outdoor clear-sky test.
-- User reported the module power wire had previously been connected to `P` for a few minutes instead of `V`. On the `P G T R V B` marking, `P` is PPS, not power. This may have stressed/damaged the receiver even though UART still works.
-- Next isolation test if resumed: remove/raise the BN-280 from the faceplate/case, power only correct `V/G`, connect module `T` to Rock RX, white ceramic patch facing sky, keep it away from deck electronics for 5-10 minutes. If `sats_view` remains `0`, replace the BN-280.
+- The remaining `sats_view=0` failure was suspected to be RF/reception-side, and replacement was considered if isolation testing stayed at zero.
+
+2026-06-30 correction:
+
+- The BN-280 is not dead. On the balcony, after setting OPS-TOC to explicit `/dev/ttyS3` and restarting the reader, OPS-TOC reported a real direct fix:
+  - `fix: true`
+  - `lat: 46.039179`
+  - `lon: 14.497671166666665`
+  - `alt: 302`
+  - `sats: 8`
+  - `sats_view: 13`
+  - `port: /dev/ttyS3`
+  - `source: direct`
+- Important config caveat: `port: "auto"` is USB-dongle auto-detect only. For the internal BN-280, use `/dev/ttyS3`.
+- Likely explanation for the earlier false negative: saved config drifted to `auto`, the receiver needed OPS-TOC/u-blox re-init for NMEA output, and/or the receiver was placement/orientation sensitive during the prior outdoor test.
