@@ -1,11 +1,5 @@
 # OPS-TOC / Map App - Changelog
 
-## 2026-06-30
-
-**[Claude]** - HD 5-inch touch display optimisation (`@media (max-width: 1024px)` block in `app.css`): topo background texture via `html` background-image (copy `~/overmesh/static/background-topo.png` to `~/Projects/ops-toc/static/` on CD to activate); frosted glass toolbar with amber bottom border; amber 2px indicator bar at top of active main tab; enlarged touch targets for main tabs (40px height), hamburger button (52×48px), dropdown menu items (52px), list rows (44px min), composer select/text inputs (36px), SOP items (44px) with 20×20px checkbox, checklist card headers; body textarea reduced to 72px height to leave more room for log entries; body padding/gap tightened (5px/3px) to recover vertical space on 600px screen. CSS degrades gracefully if background PNG is missing.
-
-**[Codex]** - Corrected the internal Cyberdeck GPS diagnosis. The BN-280 on Rock 5B UART3 (`/dev/ttyS3`) is confirmed working after balcony testing: OPS-TOC reported `fix=true`, `lat=46.039179`, `lon=14.497671`, `alt=302`, `sats=8`, and `sats_view=13`. Earlier "likely dead" notes are superseded. The key operational caveat is that OPS-TOC must use explicit `/dev/ttyS3`; `port: "auto"` only follows USB GPS dongles and will not select the internal receiver. A restart/re-init after setting `/dev/ttyS3` produced the fix.
-
 ## 2026-06-18
 
 **[Codex]** - Added the editable OPS-TOC CHECKLIST tab after SOP. Checklists are pure frontend localStorage state under `ops_toc_checklists`, with folders/types, multiple collapsible cards, rename/delete/reset, progress counts/bars, item add/edit/delete/toggle/reorder, text export, JSON export, and import from JSON/TXT/MD including Markdown task boxes like `- [ ]`, `- []`, and `- [x]`. Removed the temporary field-template loader and cleaned out the backend `/api/checklists/seed` route because Import now covers saved/template files. Copied the Desktop checklist test files into repo `TEST/` without removing the Desktop originals. Added the header clock (`HH:MM:SS`, `DD.MM.YY`), enlarged Settings/App Control touch targets, and changed in-app UI Zoom so visible `100%` now includes a 1.15x base scale matching the user's previous `115%` setting, with a one-time migration from saved `115%` to `100%`.
