@@ -1,5 +1,21 @@
 # OPS-TOC / Map App - Changelog
 
+## 2026-07-07
+
+**[Claude]** - Added OPS-TOC Lite, the compact touch UI for the Hand-Deck 5" display. Architecture is OM-Lite-in-concept but WITHOUT the frontend fork: `/lite` route renders the same `index.html` with `hd_lite=True`, which injects `static/css/lite.css` and `window.OPS_TOC_LITE`; `app.js` is shared (only change: `BASE_UI_SCALE` is 1.0 in Lite). Full functionality identical to desktop. Lite skin: topo background + frosted toolbar (OM ecosystem look), brand text/search button/clock date dropped, GPS lock + Track record kept in toolbar (in-car dash-recorder role), amber active-tab indicator, single-column map with the side panel overlaying instead of squeezing, touch-sized menu rows/list rows/composer inputs/SOP checkboxes, hamburger + Tools ▾ menus and all dialogs capped to viewport height and scrollable. Root-cause correction that unblocked this after the reverted 2026-06-30 attempt: the HD panel (EDID name `MPI5005`, native detailed timing 1024×600@50MHz) does NOT crop the 1920×1080 HDMI signal to its top-left — it downscales the whole picture onto the glass. The old "1:1 crop" diagnosis was wrong, which is also why OM Lite always fit and why the earlier pinned-box/media-query approaches were solving a nonexistent problem. Deployment: HD pulls this repo as usual and opens `/lite`; interim ~185% browser page zoom until the panel runs native 1024×600 (custom modeline needed — not in its HDMI mode list; folded into the hand-deck kiosk plan). Verified on CD: `/` byte-identical behavior (zero Lite hooks), JS/Python syntax checks, Filip visually confirmed toolbar fit, dialogs, dropdown scrolling.
+
+## 2026-06-30
+
+**[Codex]** - Corrected and refined the internal Cyberdeck GPS diagnosis. The BN-280 on Rock 5B UART3 (`/dev/ttyS3`) is not dead: morning balcony testing with OPS-TOC set to explicit `/dev/ttyS3` produced a real direct fix (`fix=true`, `lat=46.039179`, `lon=14.497671`, `alt=302`, `sats=8`, `sats_view=13`). Evening same-balcony retest showed `fix=false` and `sats_view=0`; an exclusive serial baud sweep confirmed clean 9600-baud NMEA from the module (`$GNRMC`, `$GNGGA`, `$GPGSV`, `$GLGSV`) but the GPS itself reported zero satellites. Current interpretation: electrical/UART/software path works, OPS-TOC config must remain explicit `/dev/ttyS3`, and remaining behavior is flickery RF/antenna orientation/case/noise/placement sensitivity or intermittent module reception.
+
+## 2026-06-29
+
+**made by Codex — start**
+
+**[Codex]** - Added Hand-Deck GPIO GPS support on the live HD/A7A and local TestBox checkout. OPS-TOC now accepts `/dev/ttyAS*` direct serial ports, labels them as GPIO UART GPS choices, uses `115200` baud automatically for internal UART GPS, and skips USB/u-blox init commands for GPIO UART modules. Configured live HD OPS-TOC as the GPS owner: `/dev/ttyAS2`, `baud=115200`, direct source, port `8090`. Verified `/api/gps` reports `source:"direct"`, `running:true`, `fix:true`, 12 satellites used, and live lat/lon from the BE-222Q. (`gps.py`, `static/js/app.js`, `templates/index.html`, live `gps_config.json`)
+
+**made by Codex — end**
+
 ## 2026-06-18
 
 **[Codex]** - Added the editable OPS-TOC CHECKLIST tab after SOP. Checklists are pure frontend localStorage state under `ops_toc_checklists`, with folders/types, multiple collapsible cards, rename/delete/reset, progress counts/bars, item add/edit/delete/toggle/reorder, text export, JSON export, and import from JSON/TXT/MD including Markdown task boxes like `- [ ]`, `- []`, and `- [x]`. Removed the temporary field-template loader and cleaned out the backend `/api/checklists/seed` route because Import now covers saved/template files. Copied the Desktop checklist test files into repo `TEST/` without removing the Desktop originals. Added the header clock (`HH:MM:SS`, `DD.MM.YY`), enlarged Settings/App Control touch targets, and changed in-app UI Zoom so visible `100%` now includes a 1.15x base scale matching the user's previous `115%` setting, with a one-time migration from saved `115%` to `100%`.

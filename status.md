@@ -1,7 +1,7 @@
 type:: project
 status:: active
 tags:: #ops-toc #map-app #leaflet #offline-maps #field-log #cyberdeck
-updated:: 2026-06-28
+updated:: 2026-07-07
 
 # OPS-TOC
 
@@ -23,6 +23,7 @@ updated:: 2026-06-28
 | Resource | Value |
 |----------|-------|
 | App URL  | http://localhost:8090 (on CD) |
+| Lite URL | http://localhost:8090/lite — compact touch UI for HD 5" screen (same backend/JS, `lite.css` skin) |
 | App path | ~/Projects/ops-toc/ |
 | Service  | systemctl --user start/stop/restart ops-toc |
 
@@ -70,11 +71,11 @@ journalctl --user -u ops-toc -f
 
 ## Pending
 
-- **BUG: Internal GPS (BN-280 on UART3 /dev/ttyS3) INOP** — module powered (cyan LED blinking), port opens, but zero bytes received at all baud rates. UBX init ruled out (same with init disabled). Likely: T wire not making contact at BN-280 pad or Rock 5B pin 35. To diagnose: (1) loopback test — bridge pin 12↔35, send/receive via pyserial; (2) recheck T wire seating at both ends. USB dongle in car is primary GPS in the meantime.
+- **Internal GPS (BN-280 on UART3 /dev/ttyS3) is electrically working but reception is flickery.** Confirmed 2026-06-30: OPS-TOC must use explicit `/dev/ttyS3`; `auto` only follows USB GPS dongles. Morning balcony test produced a real direct fix (`fix=true`, `lat=46.039179`, `lon=14.497671`, `alt=302`, `sats=8`, `sats_view=13`). Evening balcony retest in the same place showed no fix and `sats_view=0`, while an exclusive serial baud sweep confirmed the module was still emitting clean NMEA at 9600 (`$GNRMC`, `$GNGGA`, `$GPGSV`, `$GLGSV`) with fix quality 0 and zero satellites. Current interpretation: not dead and not an OPS-TOC parser/config issue; likely RF/antenna orientation/case/noise/placement sensitivity or intermittent module behavior.
 
 - **MapTiler Topo offline — Slovenia z9–16:** Subscribe to MT Flex ($25/month), open OPS-TOC on CD, confirm MapTiler API key is set (Settings → Keys), start MT Topo z9–16 download for Slovenia. ~899k tiles, ~$65 total ($25 base + ~$40 extra at $0.10/1000). Should finish in a few hours with 16-worker downloader. Copy `.mbtiles` to HD via rsync when done. Cancel Flex subscription after. File lands at `~/maps/mbtiles/` — works immediately with mbtileserver on both CD and HD.
 
-- **HD responsive UI** — CSS media query adaptation for small screens (≤600px). Compact toolbar, touch-optimized LOG composer, map-first layout with LOG/SOP as slide-up panels. One codebase, adapts automatically. Implement once HD screen arrives and real hardware can be tested.
+- **OPS-TOC Lite on HD — deploy steps (do at device):** `git pull` on HD, open `http://localhost:8090/lite` in the fullscreen browser window. Interim (while HD still runs 1920×1080): set ~185% page zoom (Ctrl++, Vivaldi remembers per-site) so the CSS viewport is ~1024×600. Proper fix (fold into the hand-deck openbox kiosk session): drive the panel at native 1024×600 — mode is NOT in its HDMI mode list, needs a custom modeline (`cvt 1024 600` → `xrandr --newmode` + `--addmode HDMI-1`), then crisp 1:1 pixels and no zoom workaround.
 - Decide whether to support PMTiles in addition to MBTiles
 - Add KML import/export
 - Add marker categories, filters, and styling
@@ -88,10 +89,14 @@ journalctl --user -u ops-toc -f
 
 ## Changelog
 
+**2026-07-07** — [Claude] OPS-TOC Lite added: `/lite` route serves the same template with `hd_lite` flag → `lite.css` skin + `window.OPS_TOC_LITE` (BASE_UI_SCALE 1.0). Same backend, same app.js — deliberately NOT a fork (OM/OM-Lite drift lesson). Compact frosted toolbar (GPS + Track kept per Filip), overlay side panel, touch-sized rows/inputs, viewport-capped scrollable dropdowns + dialogs. **HD display myth corrected via EDID:** panel = MPI5005, native 1024×600; it DOWNSCALES 1920×1080 input (everything visible at ~53% size) — it does not crop. June 30 revert post-mortem: built on the wrong crop premise. Deploy steps in Pending.
+**2026-07-06** — [Claude] venv rebuilt on CD (python3.12) after cross-machine Syncthing contamination (HD's python3.9 venv synced over during the paused-folder recovery — flask import broke). venvs now Syncthing-ignored on CD+TestBox; never sync venvs. Service verified: HTTP 200, /api/gps responding.
+**2026-06-30** — Internal BN-280 GPS diagnosis corrected and refined. The receiver is not dead: direct `/dev/ttyS3` balcony test produced a real fix with 8 satellites used / 13 in view. Later same-balcony retest dropped back to `sats_view=0`; raw UART confirmed clean NMEA at 9600 but the GPS itself reported no satellites. Treat as flickery RF/placement/module behavior. Keep OPS-TOC configured to explicit `/dev/ttyS3`; `auto` is USB-only.
 **2026-06-28** — Track chart overhaul: removed toolbar Discard button (Stop dialog only); fixed SVG text deformation on panel resize (dynamic viewBox re-render); 2-pass median filter eliminates GPS jitter spikes; 20%/10% headroom on speed/altitude; time axis with 5-min ticks (4 styles: hour/half/quarter/5-min); scrub tooltip bubble on both charts simultaneously; red dot + scrub line on both charts; timestamp-based X positioning throughout.
 **2026-06-23** — Internal Cyberdeck GPS (Rock 5B UART3 /dev/ttyS3): `gps.py` lists it as first-class source, `port_present()` handles ttyS* via filesystem check, u-blox NMEA init also enables UART1. README + API docs updated.
 **2026-06-23** — Styled full-page shutdown splash: big "OPS-TOC" in accent, restart command, Dashboard hint. Commit `417734d`
 **2026-06-23** — GPS source fix also committed to docs. Commit `312b4df`
+**2026-06-23** — Marker folder/sub-folder support: markers now group by `Parent / Sub` folder hierarchy in the left panel, same UX as tracks. Folder field in Add/Edit dialog with autocomplete datalist. New folders auto-collapse. State persisted separately from track folders. DB migration adds `folder` column to markers table. `a3c38dc`. *(recovered 2026-07-06 from paused-sync TestBox copy)*
 **2026-06-22** — GPS enabled flag bug fixed: `api_gps_set()` defaulting `enabled=False` on absent key — silenced any partial settings save. Commit `abc69a2`.
 
 **2026-06-18** — Touch targets: sub-chips 10→11px font, 2→4px vertical padding; mc-btn (rename/delete) 13px, 28×28px min tap area. Commit `ffd8a6c`.
@@ -104,7 +109,10 @@ journalctl --user -u ops-toc -f
 **2026-06-18** — Checklist import: H1 now sets folder context (no more "Imported" default for MD files), H2+ creates checklist cards, dividers/plain text skipped. Round-trip with OPS-TOC text export preserved. `ad39768`.
 **2026-06-18** — CHECKLIST tab added (Codex): editable CHECKLIST tab after SOP, with localStorage persistence (`ops_toc_checklists`), folders/types, collapsible checklist cards, rename/delete/reset, progress counts/bars, item add/edit/delete/toggle/reorder, text/JSON export, and import from JSON/TXT/MD. Removed the temporary "Load field templates" button and cleaned out the backend `/api/checklists/seed` route, since Import now covers saved/template files. Copied Desktop test checklist files into repo `TEST/` without removing the Desktop originals. Header clock now shows 24h time with seconds and date in `DD.MM.YY`. Settings/App Control UI was enlarged for touch. In-app UI Zoom now has a built-in 1.15x base scale so visible `100%` matches the user's previous `115%`; old saved `115%` is migrated to `100%` once.
 
+**2026-06-16** — Three-state mission chip toggle in LOG tab: click cycles all → include (teal) → exclude (red/strikethrough) → all. Entry badge clicks land in include mode. `a3ac0c4`. *(recovered 2026-07-06 from paused-sync TestBox copy)*
 **2026-06-16** — Fixed GPS port conflict: OPS-TOC's `gps_config.json` had the NRF52840 (MT node) saved as GPS port instead of the u-blox dongle. Root cause of no-fix was port contention: OM and OPS-TOC both trying to read `/dev/ttyACM2` simultaneously. Fix: disabled OM GPS to release port, changed OPS-TOC config to `port: "auto"` (auto-detects u-blox correctly). Also filtered `list_ports()` in `gps.py` to exclude `ttyS*` internal serial ports (not USB, not GPS). Port dropdown in Settings → GPS is already present (visible when "Direct serial" is selected). Running `fix: true`, 12 sats. Not committed yet.
+
+**2026-06-15** — Compact toolbar for 5" screens (≤1024px): Tools ▾ dropdown consolidates Markers/Ruler/Draw/GPS/Track; brand text hidden; GPS moved into dropdown. Layers panel touch-scrollable (`max-height` + `overflow-y: auto` + `-webkit-overflow-scrolling`). Git auth fix in service: explicit SSH key + BatchMode + no prompt. `gps.py` Python 3.9 compat (`from __future__ import annotations`). Parallel tile downloader restored (accidentally reverted, fixed). HD deployment: git HTTPS remote initialized, in-app update working. `cf5b312`, `ecf9ff5`, `b69dceb`, `40edbff`, `78a3be4`. *(recovered 2026-07-06 from paused-sync TestBox copy)*
 
 **2026-06-14** — Parallelized tile downloader (16 workers, 64-tile batches, ~33× speedup: 1.57 → ~52 tiles/s). `af00804`.
 
