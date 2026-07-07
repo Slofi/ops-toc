@@ -1,0 +1,150 @@
+/* ════════════════════════════════════════════════════════════════
+   OPS-TOC Lite — HD (Hand-Deck) 5" touch display
+   Loaded ONLY at /lite, after app.css. Plain selectors are safe here.
+
+   Concept (same as OM Lite): one backend, one app.js, one template —
+   this stylesheet is the compact, touch-first skin. It is a normal
+   responsive page that fills the viewport it is given.
+
+   HD panel truth (EDID-verified 2026-07-07): "MPI5005" 5" HDMI LCD,
+   native 1024×600. It ACCEPTS 1920×1080 and downscales it onto the
+   glass (~53% size, soft) — nothing is cropped. Target setup on HD:
+   drive it at native 1024×600 (kiosk plan) for crisp 1:1; until then
+   run the fullscreen browser at ~185% page zoom so the CSS viewport
+   is ~1024×600. Sizes below are tuned for a 1024×600 viewport.
+   ════════════════════════════════════════════════════════════════ */
+
+/* ── Backdrop: topo texture behind the panels (OM Lite look) ── */
+html {
+  background-color: var(--bg);
+  background-image: url('/static/background-topo.png');
+  background-size: cover;
+  background-position: center;
+}
+body {
+  background: transparent;
+  padding: 4px;
+  gap: 3px;
+}
+
+/* ── Toolbar: frosted glass, compact, touch-first ──
+   NOTE: no overflow rules here — the hamburger / Tools ▾ / Layers
+   dropdowns are absolutely positioned INSIDE the toolbar, and any
+   overflow clipping on it makes them open invisibly. */
+#toolbar {
+  gap: 6px;
+  padding: 0 8px;
+  border-radius: 8px;
+  background: rgba(11, 11, 16, 0.93);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-bottom-color: rgba(232, 176, 79, 0.18);
+}
+
+/* Drop the wordmark, keep the icon */
+.brand-text { display: none !important; }
+
+/* Main tabs — big tap targets + amber active indicator (OM Lite look) */
+.main-tabs { gap: 3px; margin-left: 2px; }
+.main-tab {
+  padding: 8px 10px;
+  min-height: 42px;
+  font-size: 0.72rem;
+  position: relative;
+}
+.main-tab.active::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 0 0 2px 2px;
+}
+
+/* Toolbar buttons — taller for touch */
+#toolbar .btn { min-height: 42px; }
+
+/* GPS lock + Track record STAY in the toolbar on Lite (in-car role).
+   app.css hides them at ≤1024px viewport — re-force them visible. */
+#gps-btn,
+#track-record-btn { display: inline-block !important; }
+
+/* Search: narrow input, Enter/Go submits — button dropped */
+#search-form { min-width: 0; }
+#search-input { width: 104px; min-height: 38px; }
+#search-btn { display: none !important; }
+
+/* Clock: time only, date dropped */
+.header-clock { min-width: 50px; }
+.header-clock-date { display: none; }
+
+/* Hamburger — bigger tap area */
+#settings-btn {
+  min-width: 52px;
+  min-height: 46px;
+  font-size: 20px;
+  padding-inline: 13px;
+}
+
+/* Dropdown menus (hamburger + Tools ▾) — finger-sized rows */
+.menu-item { min-height: 50px; font-size: 13px; }
+
+/* 14 finger-sized entries ≈ 750px — cap to viewport and scroll */
+#hamburger-menu,
+#tools-compact-menu {
+  max-height: calc(100vh - 76px);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ── Main content area ── */
+#main {
+  background: rgba(19, 19, 24, 0.84);
+  position: relative;   /* anchor for the overlay side panel */
+}
+
+/* ── MAP tab: map gets full width, side panel overlays it ── */
+#tab-map.active { grid-template-columns: 1fr; }
+#side-panel {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 320px;
+  z-index: 1500;
+  background: rgba(15, 15, 21, 0.96);
+  border-right: 1px solid var(--accent-mid);
+  box-shadow: 4px 0 16px rgba(0, 0, 0, 0.45);
+}
+
+/* Layers panel — cap height to viewport, touch-scrollable */
+#layers-panel {
+  max-height: calc(100vh - 90px);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Track chart panel — fit the ~530px-tall map area */
+#track-chart-panel { height: 280px; }
+
+/* ── Marker / drawing / track list rows ── */
+.list-row { padding: 12px; min-height: 46px; }
+.mc-btn { min-width: 36px; min-height: 36px; }
+.sub-chip { font-size: 12px !important; padding: 6px 10px 6px 12px !important; }
+
+/* ── LOG composer — touch-sized inputs ── */
+.composer-row select,
+.composer-row input[type="text"] { min-height: 40px; }
+.toc-body-input { min-height: 64px; }
+
+/* ── SOP tab ── */
+.sop-section-head { padding: 12px 14px; }
+.sop-item { padding: 10px 8px; }
+.sop-item input[type="checkbox"] { width: 22px; height: 22px; min-width: 22px; }
+
+/* ── CHECKLIST tab ── */
+.checklist-card-head { padding: 12px 14px; }
+
+/* ── Dialogs — never taller than the 600px viewport ── */
+dialog {
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+}

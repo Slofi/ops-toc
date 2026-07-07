@@ -1354,6 +1354,12 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/lite")
+def lite():
+    # OPS-TOC Lite — same template/backend, compact HD 5" (1024x600) frontend
+    return render_template("index.html", hd_lite=True)
+
+
 @app.route("/api/health")
 def api_health():
     return jsonify({"ok": True, "service": "ops-toc", "port": PORT, "data_dir": str(DATA_DIR)})

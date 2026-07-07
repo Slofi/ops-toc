@@ -3,11 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>OPS-TOC</title>
+  <title>OPS-TOC{% if hd_lite %} LITE{% endif %}</title>
   <link rel="stylesheet" href="/static/leaflet/leaflet.css">
   <link rel="stylesheet" href="/static/css/app.css">
+  {% if hd_lite %}<link rel="stylesheet" href="/static/css/lite.css">{% endif %}
 </head>
-<body>
+<body{% if hd_lite %} class="hd-lite"{% endif %}>
   <div id="service-splash" class="service-splash" hidden data-mode="restart">
     <div class="ss-panel">
       <div class="ss-reticle"><span class="ss-rc"></span>
@@ -1009,6 +1010,7 @@
   </dialog>
 
   <script src="/static/leaflet/leaflet.js"></script>
+  {% if hd_lite %}<script>window.OPS_TOC_LITE = true;</script>{% endif %}
   <script src="/static/js/app.js"></script>
   <script src="/static/js/toc.js"></script>
 </body>

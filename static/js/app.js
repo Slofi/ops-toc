@@ -33,7 +33,8 @@ const state = {
 
 const el = (id) => document.getElementById(id);
 const DEFAULT_ACCENT = "#e8b04f";
-const BASE_UI_SCALE = 1.09;
+// Lite (/lite, HD 5" 1024x600) runs unscaled — sizes are hand-tuned in lite.css
+const BASE_UI_SCALE = window.OPS_TOC_LITE ? 1.0 : 1.09;
 const DEFAULT_UI_ZOOM = 100;
 const UI_ZOOM_BASE_MIGRATION_KEY = "opsTocUIZoomBaseScale115";
 const TRACK_COLOR = "#e8b04f";
