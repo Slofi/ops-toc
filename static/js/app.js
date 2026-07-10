@@ -1731,6 +1731,27 @@ function trackStats(track) {
   const avgKmh = duration > 0 ? dist / duration * 3.6 : 0;
   const rawSpeeds = segmentSpeeds(pts);
   const maxKmh = speedPercentile(rawSpeeds, 0.95);
+
+  // Moving vs stopped breakdown (after-action). "Stopped" means actually at
+  // rest (~0 km/h) — STOP_KMH is 1, not a literal 0, because a parked GPS still
+  // blips <1 km/h of Doppler noise and a hard 0 would fragment real stops. A
+  // contiguous stopped run only counts as a discrete stop once it lasts
+  // MIN_STOP_S; all stopped seconds still add to stoppedTime regardless.
+  const STOP_KMH = 1, MIN_STOP_S = 60;
+  let movingTime = 0, stoppedTime = 0, stops = 0, longestStop = 0, curStop = 0;
+  for (let k = 0; k < rawSpeeds.length; k++) {
+    const dt = Math.max((pts[k + 1].ts || 0) - (pts[k].ts || 0), 0);
+    if (rawSpeeds[k] < STOP_KMH) {
+      stoppedTime += dt; curStop += dt;
+    } else {
+      movingTime += dt;
+      if (curStop >= MIN_STOP_S) { stops++; longestStop = Math.max(longestStop, curStop); }
+      curStop = 0;
+    }
+  }
+  if (curStop >= MIN_STOP_S) { stops++; longestStop = Math.max(longestStop, curStop); }
+  const movingAvgKmh = movingTime > 0 ? dist / movingTime * 3.6 : 0;
+
   const alts = pts.map(p => p.alt != null ? Number(p.alt) : null).filter(a => a !== null);
   let elevGain = 0, elevLoss = 0;
   for (let i = 1; i < alts.length; i++) {
@@ -1740,7 +1761,8 @@ function trackStats(track) {
   }
   const minAlt = alts.length ? Math.min(...alts) : null;
   const maxAlt = alts.length ? Math.max(...alts) : null;
-  return { dist, duration, avgKmh, maxKmh, elevGain, elevLoss, hasAlt: alts.length > 0, minAlt, maxAlt, startTs: pts[0].ts || null, endTs: pts.at(-1).ts || null };
+  return { dist, duration, avgKmh, maxKmh, movingTime, stoppedTime, stops, longestStop, movingAvgKmh,
+           elevGain, elevLoss, hasAlt: alts.length > 0, minAlt, maxAlt, startTs: pts[0].ts || null, endTs: pts.at(-1).ts || null };
 }
 
 function trackSegmentColor(ratio) {
@@ -2295,8 +2317,11 @@ function trackPopup(track) {
   const statsHtml = stats ? `
     <table style="width:100%;font-size:11px;margin:6px 0 4px;border-collapse:collapse">
       <tr><td style="color:var(--muted);padding:1px 6px 1px 0">Distance</td><td>${fmtDistance(stats.dist)}</td></tr>
-      ${stats.duration > 0 ? `<tr><td style="color:var(--muted);padding:1px 6px 1px 0">Duration</td><td>${fmtDuration(stats.duration)}</td></tr>` : ""}
+      ${stats.duration > 0 ? `<tr><td style="color:var(--muted);padding:1px 6px 1px 0">Total time</td><td>${fmtDuration(stats.duration)}</td></tr>` : ""}
+      ${stats.movingTime > 0 ? `<tr><td style="color:var(--muted);padding:1px 6px 1px 0">Moving</td><td>${fmtDuration(stats.movingTime)}</td></tr>` : ""}
+      ${stats.stoppedTime > 0 ? `<tr><td style="color:var(--muted);padding:1px 6px 1px 0">Stopped</td><td>${fmtDuration(stats.stoppedTime)}${stats.stops > 0 ? ` · ${stats.stops} stop${stats.stops !== 1 ? "s" : ""}` : ""}</td></tr>` : ""}
       ${stats.avgKmh > 0 ? `<tr><td style="color:var(--muted);padding:1px 6px 1px 0">Avg speed</td><td>${stats.avgKmh.toFixed(1)} km/h</td></tr>` : ""}
+      ${stats.movingAvgKmh > 0 ? `<tr><td style="color:var(--muted);padding:1px 6px 1px 0">Moving avg</td><td>${stats.movingAvgKmh.toFixed(1)} km/h</td></tr>` : ""}
       ${stats.maxKmh > 0 ? `<tr><td style="color:var(--muted);padding:1px 6px 1px 0">Max speed</td><td>${stats.maxKmh.toFixed(1)} km/h</td></tr>` : ""}
       ${stats.hasAlt ? `<tr><td style="color:var(--muted);padding:1px 6px 1px 0">Alt range</td><td>${Math.round(stats.minAlt)}–${Math.round(stats.maxAlt)} m</td></tr>
       <tr><td style="color:var(--muted);padding:1px 6px 1px 0">Elev ↑↓</td><td>+${Math.round(stats.elevGain)} / −${Math.round(stats.elevLoss)} m</td></tr>` : ""}
