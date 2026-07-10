@@ -3709,6 +3709,7 @@ function initMap() {
     if (state.magnifierMap && state.magnifierLatLng) {
       state.magnifierMap.setView(state.magnifierLatLng, state.map.getZoom(), { animate: false });
     }
+    if (_ringsEnabled && _ringsDynamic) _drawRangeRings();
   });
   state.map.on("dragstart", () => { _gpsFollowMode = 0; _updateGpsBtn(); });
 }
@@ -4571,6 +4572,12 @@ let _ringsStep      = (() => { try { return parseFloat(localStorage.getItem("ops
 let _ringsColor     = (() => { try { return localStorage.getItem("opsTocRingsColor")              || _RINGS_DEFAULT_COLOR;    } catch(e) { return _RINGS_DEFAULT_COLOR;    } })();
 let _ringsHardness  = (() => { try { return parseFloat(localStorage.getItem("opsTocRingsHardness")) || _RINGS_DEFAULT_HARDNESS; } catch(e) { return _RINGS_DEFAULT_HARDNESS; } })();
 let _ringsCardinals = (() => { try { const v = localStorage.getItem("opsTocRingsCardinals"); return v !== null ? parseInt(v) : 4; } catch(e) { return 4; } })();
+let _ringsDynamic  = (() => { try { return localStorage.getItem("opsTocRingsDynamic") === "1"; } catch(e) { return false; } })();
+// Close-range radii (metres) for dynamic rings — a "nice" sequence. Each shows
+// only once its on-screen radius exceeds _RINGS_DYN_MIN_PX px, so they fade in
+// as you zoom closer and disappear when you zoom out.
+const _RINGS_DYNAMIC_RADII = [500, 250, 100, 50, 25, 10];
+const _RINGS_DYN_MIN_PX = 45;
 let _ringsLayer    = null;
 let _ringsDrawKey  = "";  // tracks last drawn state to skip redundant redraws
 
@@ -4583,7 +4590,8 @@ function _drawRangeRings() {
   const pos = _activePosition();
   if (!pos) { _clearRangeRings(); _ringsDrawKey = ""; return; }
   // Skip redraw if nothing relevant changed (prevents 3s-poll flicker)
-  const key = `${pos.lat.toFixed(6)},${pos.lon.toFixed(6)}|${_ringsCount}|${_ringsStep}|${_ringsColor}|${_ringsHardness}|${_ringsCardinals}`;
+  const zoomKey = _ringsDynamic && state.map ? state.map.getZoom() : "-";
+  const key = `${pos.lat.toFixed(6)},${pos.lon.toFixed(6)}|${_ringsCount}|${_ringsStep}|${_ringsColor}|${_ringsHardness}|${_ringsCardinals}|dyn${_ringsDynamic ? 1 : 0}:${zoomKey}`;
   if (key === _ringsDrawKey && _ringsLayer) return;
   _ringsDrawKey = key;
   _clearRangeRings();
@@ -4607,6 +4615,32 @@ function _drawRangeRings() {
       }),
       interactive: false,
     }).addTo(_ringsLayer);
+  }
+  // Dynamic close-range rings: fade in finer rings (500/250/100/50 m …) as the
+  // map zooms in, and drop them again when zoomed out. Drawn dashed/thinner so
+  // they read as secondary to the configured base rings.
+  if (_ringsDynamic && state.map) {
+    const z = state.map.getZoom();
+    const mpp = 156543.03392 * Math.cos(pos.lat * Math.PI / 180) / Math.pow(2, z); // metres/pixel
+    const baseInnerM = _ringsStep * 1000;
+    const gcFine    = _hexToRgba(tinted, 0.30 + h * 0.30);
+    const gcFineLbl = _hexToRgba(tinted, 0.65 + h * 0.25);
+    const wFine     = Math.max(0.5, wRing - 0.4);
+    for (const rM of _RINGS_DYNAMIC_RADII) {
+      if (rM >= baseInnerM) continue;              // only rings finer than the base step
+      if (rM / mpp < _RINGS_DYN_MIN_PX) continue;  // too small on screen at this zoom → hide
+      L.circle([pos.lat, pos.lon], {
+        radius: rM, color: gcFine, weight: wFine, dashArray: "4,5", fillOpacity: 0, interactive: false,
+      }).addTo(_ringsLayer);
+      const lPt = _offsetByKm(pos.lat, pos.lon, rM / 1000, 0);
+      L.marker(lPt, {
+        icon: L.divIcon({
+          html: `<div style="font-size:10px;color:${gcFineLbl};white-space:nowrap;font-weight:700;text-shadow:0 0 3px #000,0 0 6px #000">${rM}m</div>`,
+          iconAnchor: [-2, 8], className: "",
+        }),
+        interactive: false,
+      }).addTo(_ringsLayer);
+    }
   }
   // Cardinal/intercardinal direction spokes + labels
   if (_ringsCardinals > 0) {
@@ -4670,6 +4704,12 @@ function setRingsCardinals(n) {
   if (_ringsEnabled) { _ringsDrawKey = ""; _drawRangeRings(); }
 }
 
+function setRingsDynamic(on) {
+  _ringsDynamic = !!on;
+  try { localStorage.setItem("opsTocRingsDynamic", _ringsDynamic ? "1" : "0"); } catch(e) {}
+  if (_ringsEnabled) { _ringsDrawKey = ""; _drawRangeRings(); }
+}
+
 function applyRingsSettings() {
   const count = parseInt((el("rings-count") || {}).value  || "") || _RINGS_DEFAULT_COUNT;
   const step  = parseFloat((el("rings-step") || {}).value || "") || _RINGS_DEFAULT_STEP;
@@ -4685,6 +4725,8 @@ function applyRingsSettings() {
 function _populateRingsPanel() {
   const cb = el("rings-enabled");
   if (cb) cb.checked = _ringsEnabled;
+  const dyn = el("rings-dynamic");
+  if (dyn) dyn.checked = _ringsDynamic;
   const countEl = el("rings-count");
   if (countEl) countEl.value = _ringsCount;
   const stepEl = el("rings-step");
@@ -4702,6 +4744,8 @@ function initRangeRings() {
     try { localStorage.setItem("opsTocRingsEnabled", cb.checked ? "1" : "0"); } catch(e) {}
     _drawRangeRings();
   };
+  const dyn = el("rings-dynamic");
+  if (dyn) dyn.onchange = () => setRingsDynamic(dyn.checked);
   const applyBtn = el("rings-apply-btn");
   if (applyBtn) applyBtn.onclick = applyRingsSettings;
   const countEl = el("rings-count");
