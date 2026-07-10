@@ -1703,18 +1703,33 @@ function _makeTimeLabels(tRange) {
   return ticks;
 }
 
+// Per-segment speed (km/h) for a points array. Prefers each point's own GPS
+// speed-over-ground (recorded from RMC/VTG) — accurate and jitter-free; falls
+// back to the position-delta estimate for older tracks with no stored speed.
+function segmentSpeeds(pts) {
+  const out = [];
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i];
+    const sa = typeof a.speed === "number" ? a.speed : null;
+    const sb = typeof b.speed === "number" ? b.speed : null;
+    if (sa != null && sb != null)      out.push((sa + sb) / 2);
+    else if (sb != null)               out.push(sb);
+    else {
+      const d = distanceBetween(a, b);
+      const dt = Math.max((b.ts || 0) - (a.ts || 0), 1);
+      out.push(d / dt * 3.6);
+    }
+  }
+  return out;
+}
+
 function trackStats(track) {
   const pts = track.points;
   if (!pts || pts.length < 2) return null;
   const duration = (pts.at(-1).ts || 0) - (pts[0].ts || 0);
   const dist = track.distance_m || trackDistance(pts);
   const avgKmh = duration > 0 ? dist / duration * 3.6 : 0;
-  const rawSpeeds = [];
-  for (let i = 1; i < pts.length; i++) {
-    const d = distanceBetween(pts[i - 1], pts[i]);
-    const dt = Math.max((pts[i].ts || 0) - (pts[i - 1].ts || 0), 1);
-    rawSpeeds.push(d / dt * 3.6);
-  }
+  const rawSpeeds = segmentSpeeds(pts);
   const maxKmh = speedPercentile(rawSpeeds, 0.95);
   const alts = pts.map(p => p.alt != null ? Number(p.alt) : null).filter(a => a !== null);
   let elevGain = 0, elevLoss = 0;
@@ -2186,13 +2201,9 @@ function showTrackChart(track) {
   const titleEl = el('track-chart-title');
   if (titleEl) titleEl.textContent = track.name;
 
-  // Build speed data array with midpoint lat/lon per segment
-  const rawSpeeds = [];
-  for (let i = 1; i < pts.length; i++) {
-    const d = distanceBetween(pts[i - 1], pts[i]);
-    const dt = Math.max((pts[i].ts || 0) - (pts[i - 1].ts || 0), 1);
-    rawSpeeds.push(d / dt * 3.6);
-  }
+  // Build speed data array with midpoint lat/lon per segment.
+  // Prefers recorded GPS speed-over-ground; falls back to position delta.
+  const rawSpeeds = segmentSpeeds(pts);
   const smoothedSpeeds = _medianFilter3(_medianFilter3(rawSpeeds));
   const speedCap = speedPercentile(smoothedSpeeds, 0.95) || 1;
   const speedData = smoothedSpeeds.map((v, i) => ({
@@ -2714,11 +2725,13 @@ function showTrackRecordDialog() {
 function captureGpsPoint() {
   if (!state.recording || !_gpsEnabled || !_gpsState.fix || _gpsState.lat === null || _gpsState.lon === null) return;
   if ((_gpsState.sats || 0) < 4) return;
+  const spd = (typeof _gpsState.speed === "number" && _gpsState.speed >= 0) ? _gpsState.speed : null; // km/h, GPS SOG
   const point = {
     lat: Number(_gpsState.lat),
     lon: Number(_gpsState.lon),
     alt: _gpsState.alt,
     sats: _gpsState.sats || 0,
+    speed: spd,
     ts: Math.floor(Date.now() / 1000),
     time: new Date().toISOString(),
   };
@@ -2726,8 +2739,29 @@ function captureGpsPoint() {
   if (last) {
     const dist = distanceBetween(last, point);
     const dt = point.ts - (last.ts || 0);
+
+    // Interval throttle: don't oversample while barely moving.
     if (dist < 3 && dt < _recMinInterval) return;
+
+    // Multipath rejection: receiver reports stopped/crawling but the position
+    // jumped far → GPS glitch. Catches the parked multipath jumps the old
+    // dist/dt>100 test missed (a large dt hid the jump).
+    if (spd != null && spd < 5 && dist > 50) return;
+    // Absolute sanity cap regardless of dt (>100 m/s = 360 km/h).
     if (dt > 0 && dist / dt > 100) return;
+
+    // Minimum-movement gate: a parked car must not accumulate GPS-jitter
+    // distance. When stationary (GPS speed near zero, or — speed unknown —
+    // sub-3 m move), refresh the last point's timestamp so the track stays
+    // alive and duration keeps counting, without adding fake distance.
+    const stationary = spd != null ? spd < 3 : dist < 3;
+    if (stationary && dist < 5) {
+      last.ts = point.ts;
+      last.time = point.time;
+      state.recording.ended_at = point.ts;
+      try { localStorage.setItem('ops_toc_active_track', JSON.stringify({...state.recording, recMinInterval: _recMinInterval})); } catch (_) {}
+      return;
+    }
   }
   state.recording.points.push(point);
   state.recording.ended_at = point.ts;
@@ -4246,22 +4280,38 @@ async function _gpsPoll() {
     const d = await api("/api/gps");
     _gpsEnabled = d.enabled || false;
     _gpsSource  = d.source || "";
-    _gpsState   = { fix: d.fix, lat: d.lat, lon: d.lon, alt: d.alt, sats: d.sats, sats_view: d.sats_view };
+    _gpsState   = { fix: d.fix, lat: d.lat, lon: d.lon, alt: d.alt, sats: d.sats, sats_view: d.sats_view, speed: d.speed };
 
-    // Speed from position delta
+    // Speed for the HUD badge.
     if (_gpsEnabled && d.fix && d.lat != null && d.lon != null) {
       const now = Date.now() / 1000;
-      if (_gpsPrevPos) {
+      if (typeof d.speed === "number" && d.speed >= 0) {
+        // Preferred: the receiver's own Doppler speed-over-ground (RMC/VTG).
+        // Accurate and immune to poll/fix-rate aliasing — use it directly.
+        _gpsCurrentSpeed = d.speed;
+        _gpsPrevPos = { lat: d.lat, lon: d.lon, ts: now };
+      } else if (_gpsPrevPos) {
+        // Fallback only if the GPS reports no speed: derive from position
+        // delta, but ONLY when the fix actually moved. Holding _gpsPrevPos
+        // until the position changes makes dt span the real elapsed time,
+        // which is what prevents the halve/double aliasing jumps.
         const dt = now - _gpsPrevPos.ts;
-        if (dt >= 1 && dt <= 12) {
-          const dist = distanceBetween(_gpsPrevPos, { lat: d.lat, lon: d.lon });
+        const dist = distanceBetween(_gpsPrevPos, { lat: d.lat, lon: d.lon });
+        if (dist > 0.5 && dt >= 1 && dt <= 30) {
           const raw = (dist / dt) * 3.6;
-          _gpsCurrentSpeed = _gpsCurrentSpeed * 0.35 + raw * 0.65;
+          _gpsCurrentSpeed = _gpsCurrentSpeed * 0.5 + raw * 0.5;
+          _gpsPrevPos = { lat: d.lat, lon: d.lon, ts: now };
+        } else if (dist <= 0.5 && dt > 3) {
+          // Sat still: fix hasn't moved for >3s → treat as stopped.
+          _gpsCurrentSpeed = 0;
+          _gpsPrevPos = { lat: d.lat, lon: d.lon, ts: now };
         }
+      } else {
+        _gpsPrevPos = { lat: d.lat, lon: d.lon, ts: now };
       }
-      _gpsPrevPos = { lat: d.lat, lon: d.lon, ts: now };
     } else {
       _gpsCurrentSpeed = 0;
+      _gpsPrevPos = null;
     }
 
     _gpsUpdateDot();
@@ -4694,3 +4744,29 @@ document.addEventListener("DOMContentLoaded", () => {
   // initMap is already called — hook GPS after a short delay to let map init settle
   setTimeout(() => { initGps(); initFixedPos(); initRangeRings(); }, 500);
 });
+
+// ── HD Lite only: dock the speed gauge + GPS follow button into one on-map
+//    "position-instruments" pod (styled as #pos-cluster in lite.css). Elements
+//    stay wired by id (gpsGoTo / _updateGpsBtn / _updateSpeedHud), so moving
+//    them in the DOM changes nothing functional — CD (`/`) is untouched. ──
+if (window.OPS_TOC_LITE) {
+  const dockPosCluster = () => {
+    const mapWrap = document.getElementById("map-wrap");
+    const gps = document.getElementById("gps-btn");
+    if (!mapWrap || !gps) return;
+    let cluster = document.getElementById("pos-cluster");
+    if (!cluster) {
+      cluster = document.createElement("div");
+      cluster.id = "pos-cluster";
+      mapWrap.appendChild(cluster);
+    }
+    const speed = document.getElementById("speed-hud");
+    if (speed) cluster.appendChild(speed);   // gauge on top
+    cluster.appendChild(gps);                // follow button below
+  };
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", dockPosCluster);
+  } else {
+    dockPosCluster();
+  }
+}

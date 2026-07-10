@@ -64,9 +64,9 @@ body {
 /* Toolbar buttons — taller for touch */
 #toolbar .btn { min-height: 42px; }
 
-/* GPS lock + Track record STAY in the toolbar on Lite (in-car role).
-   app.css hides them at ≤1024px viewport — re-force them visible. */
-#gps-btn,
+/* Track record STAYS in the toolbar on Lite (in-car role).
+   app.css hides it at ≤1024px viewport — re-force it visible.
+   (GPS button is relocated to the on-map position-instruments pod — see bottom.) */
 #track-record-btn { display: inline-block !important; }
 
 /* Search: narrow input, Enter/Go submits — button dropped */
@@ -147,4 +147,65 @@ body {
 dialog {
   max-height: calc(100vh - 24px);
   overflow-y: auto;
+}
+
+/* ── Position-instruments pod (Lite) ──────────────────────────────────
+   The speed gauge + the GPS follow button, docked as ONE instrument
+   cluster top-right of the map. app.js (OPS_TOC_LITE) moves #speed-hud
+   and #gps-btn into #pos-cluster inside #map-wrap. Shared amber-ring
+   language; the GPS ring brightens with follow-mode (glanceable in-car). */
+.hd-lite #pos-cluster {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 1200;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 42px;
+  background: rgba(11, 11, 16, 0.55);
+  box-shadow: 0 2px 14px rgba(0, 0, 0, 0.45);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+/* Speed gauge: sits statically inside the pod now (override app.css absolute) */
+.hd-lite #pos-cluster #speed-hud {
+  position: static;
+  top: auto;
+  right: auto;
+  width: 62px;
+  height: 62px;
+  box-shadow: none;
+}
+/* GPS follow button → a matching instrument disc */
+.hd-lite #pos-cluster #gps-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 62px;
+  height: 62px;
+  min-height: 62px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  background: rgba(11, 11, 16, 0.92);
+  border: 2px solid rgba(232, 176, 79, 0.38);   /* dim ring = follow OFF */
+  color: var(--accent);
+  pointer-events: auto;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+/* center-once (btn-soft): solid ring */
+.hd-lite #pos-cluster #gps-btn.btn-soft {
+  border-color: var(--accent);
+}
+/* follow-active: filled amber disc + glow = "locked on you" */
+.hd-lite #pos-cluster #gps-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0b0b10;
+  box-shadow: 0 0 14px rgba(232, 176, 79, 0.55);
 }

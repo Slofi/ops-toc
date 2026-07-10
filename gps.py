@@ -27,6 +27,7 @@ log = logging.getLogger(__name__)
 gps_state = {
     "lat": None, "lon": None, "alt": None,
     "sats": 0, "sats_view": 0, "fix": False,
+    "speed": None,   # speed over ground, km/h, from RMC/VTG (Doppler) — None if unknown
 }
 gps_lock      = threading.Lock()
 _stop_event   = threading.Event()
@@ -303,6 +304,45 @@ def _parse_gga(line):
         log.debug(f"GPS GGA: {e}")
 
 
+def _parse_rmc(line):
+    """$--RMC,time,status,lat,NS,lon,EW,sog_knots,cog,date,...
+    Field 7 = speed over ground in knots. Only trusted when status == 'A' (valid fix).
+    This is the receiver's Doppler-derived speed — far more accurate than
+    differentiating position, and immune to poll/fix-rate aliasing."""
+    try:
+        if "*" in line:
+            line = line[:line.index("*")]
+        p = line.split(",")
+        if len(p) < 8:
+            return
+        status = p[2]
+        sog    = p[7]
+        with gps_lock:
+            if status == "A" and sog not in ("", None):
+                gps_state["speed"] = round(float(sog) * 1.852, 1)  # knots -> km/h
+            elif status == "V":
+                gps_state["speed"] = None
+    except Exception as e:
+        log.debug(f"GPS RMC: {e}")
+
+
+def _parse_vtg(line):
+    """$--VTG,cogt,T,cogm,M,sog_knots,N,sog_kmh,K,mode
+    Field 7 = speed over ground already in km/h. Preferred when present."""
+    try:
+        if "*" in line:
+            line = line[:line.index("*")]
+        p = line.split(",")
+        if len(p) < 8:
+            return
+        kmh = p[7]
+        with gps_lock:
+            if kmh not in ("", None):
+                gps_state["speed"] = round(float(kmh), 1)
+    except Exception as e:
+        log.debug(f"GPS VTG: {e}")
+
+
 def _parse_gsv(line):
     try:
         if "*" in line:
@@ -331,7 +371,9 @@ def _init_device(ser):
     # accept UBX/NMEA commands but emit NMEA, which is what this reader parses.
     ser.write(_ubx(0x06, 0x00, struct.pack("<BBHIIHHHH", 1, 0, 0, 0x08D0, 9600, 0x0003, 0x0002, 0, 0)))
     time.sleep(0.1)
-    for nmea_id in (0x00, 0x04, 0x03):
+    # Enable GGA(0x00), RMC(0x04), GSV(0x03), VTG(0x05). RMC/VTG carry
+    # speed-over-ground, which the HUD now reads instead of deriving it.
+    for nmea_id in (0x00, 0x04, 0x03, 0x05):
         ser.write(_ubx(0x06, 0x01, bytes([0xF0, nmea_id, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00])))
         time.sleep(0.05)
     ser.write(_ubx(0x06, 0x01, bytes([0x01, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])))
@@ -375,6 +417,10 @@ def _reader(port, stop_event):
             line = ser.readline().decode("ascii", errors="ignore").strip()
             if line.startswith(("$GPGGA", "$GNGGA")):
                 _parse_gga(line)
+            elif line.startswith(("$GPRMC", "$GNRMC")):
+                _parse_rmc(line)
+            elif line.startswith(("$GPVTG", "$GNVTG")):
+                _parse_vtg(line)
             elif line.startswith(("$GPGSV", "$GNGSV")):
                 _parse_gsv(line)
         except Exception as e:
@@ -410,6 +456,7 @@ def _proxy_reader(om_url, fallback_port, stop_event):
                 gps_state["alt"]       = d.get("alt")
                 gps_state["sats"]      = d.get("sats", 0)
                 gps_state["sats_view"] = d.get("sats_view", 0)
+                gps_state["speed"]     = d.get("speed")
                 _gps_runtime["error"]  = ""
             fails = 0
         except Exception as e:
@@ -470,7 +517,7 @@ def gps_stop():
     global _gps_thread
     _stop_event.set()
     with gps_lock:
-        gps_state.update({"lat": None, "lon": None, "alt": None, "sats": 0, "sats_view": 0, "fix": False})
+        gps_state.update({"lat": None, "lon": None, "alt": None, "sats": 0, "sats_view": 0, "fix": False, "speed": None})
         _gps_runtime.update({"port": "", "running": False, "port_present": False, "error": "", "source": ""})
     _gps_thread = None
 
@@ -478,7 +525,7 @@ def gps_stop():
 def gps_set_manual(lat: float, lon: float):
     """Set a fixed manual position — no serial port or OM proxy needed."""
     with gps_lock:
-        gps_state.update({"fix": True, "lat": lat, "lon": lon, "alt": None, "sats": 0, "sats_view": 0})
+        gps_state.update({"fix": True, "lat": lat, "lon": lon, "alt": None, "sats": 0, "sats_view": 0, "speed": None})
         _gps_runtime.update({"port": "manual", "running": True, "port_present": True, "error": "", "source": "manual"})
 
 
