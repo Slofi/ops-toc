@@ -71,6 +71,16 @@
           <div id="layers-panel-list"></div>
         </div>
       </div>
+      <div id="overlay-wrap">
+        <button class="btn" id="overlays-btn" onclick="toggleOverlaysPanel(event)">Overlays</button>
+        <div id="overlays-panel" hidden>
+          <div class="overlay-panel-title">Operational overlays</div>
+          <div id="overlays-panel-list">
+            <div class="overlay-loading">Checking apps…</div>
+          </div>
+          <div class="overlay-panel-foot">Specialist apps remain the data and radio owners.</div>
+        </div>
+      </div>
       <button class="btn icon-btn" id="gps-btn" title="GPS position" onclick="gpsGoTo()">
         ⊙ GPS
       </button>

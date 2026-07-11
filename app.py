@@ -15,6 +15,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 import urllib.parse
 import urllib.request
+import urllib.error
 import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -34,6 +35,17 @@ TILE_DOWNLOAD_RETRIES = int(os.environ.get("MAP_APP_TILE_DOWNLOAD_RETRIES", "2")
 TILE_FETCH_WORKERS = int(os.environ.get("OPS_TOC_TILE_WORKERS", "16"))
 TILE_FETCH_BATCH = 64
 DEFAULT_TILE_ESTIMATE_BYTES = int(os.environ.get("MAP_APP_TILE_ESTIMATE_BYTES", "12000"))
+
+# Read-only live-map providers. OPS-TOC presents their data but the specialist
+# apps remain the owners of decoding, radio state, and transmissions.
+OVERLAY_URLS = {
+    "om": os.environ.get("OPS_TOC_OM_URL", "http://localhost:8082").rstrip("/"),
+    "adsb": os.environ.get("OPS_TOC_ADSB_URL", "http://localhost:5400").rstrip("/"),
+    "ais": os.environ.get("OPS_TOC_AIS_URL", "http://localhost:5410").rstrip("/"),
+    "sonde": os.environ.get("OPS_TOC_SONDE_URL", "http://localhost:5100").rstrip("/"),
+    "autorx": os.environ.get("OPS_TOC_AUTORX_URL", "http://localhost:5000").rstrip("/"),
+}
+OVERLAY_TIMEOUT = float(os.environ.get("OPS_TOC_OVERLAY_TIMEOUT", "1.5"))
 
 # TOC log — shared with OM via overmesh_prefs.db
 OM_PREFS_DB = os.environ.get("TOC_LOG_DB", os.path.expanduser("~/overmesh/overmesh_prefs.db"))
@@ -65,6 +77,43 @@ def add_cors_headers(resp):
 
 def now_ts() -> int:
     return int(time.time())
+
+
+def _overlay_request_json(url: str, method: str = "GET", payload: dict[str, Any] | None = None,
+                          timeout: float | None = None) -> Any:
+    body = json.dumps(payload).encode("utf-8") if payload is not None else None
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method=method,
+        headers={"Content-Type": "application/json", "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout or OVERLAY_TIMEOUT) as resp:
+            raw = resp.read()
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = json.loads(exc.read().decode("utf-8", errors="replace"))
+            message = detail.get("error") or detail.get("message") or f"HTTP {exc.code}"
+        except Exception:
+            message = f"HTTP {exc.code}"
+        raise RuntimeError(message) from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise RuntimeError(str(getattr(exc, "reason", exc))) from exc
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError("Provider returned invalid JSON") from exc
+
+
+def _overlay_probe(url: str) -> bool:
+    try:
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=0.8) as resp:
+            resp.read(64)
+        return True
+    except Exception:
+        return False
 
 
 def ensure_dirs() -> None:
@@ -2673,6 +2722,145 @@ def api_repair_all_tile_layers():
             continue
         jobs.append(enqueue_download_job(job, payload))
     return jsonify({"ok": True, "jobs": jobs, "errors": errors})
+
+
+# ── Live operational overlays ────────────────────────────────────────────────
+
+@app.route("/api/overlays/status")
+def api_overlay_status():
+    status: dict[str, Any] = {}
+
+    try:
+        data = _overlay_request_json(f'{OVERLAY_URLS["om"]}/api/mc/status')
+        status["om"] = {
+            "online": True,
+            "detail": "online",
+            "radios": len(data.get("mc_nodes", [])) if isinstance(data, dict) else 0,
+        }
+    except RuntimeError as exc:
+        status["om"] = {"online": False, "detail": "app offline", "error": str(exc)}
+
+    try:
+        data = _overlay_request_json(f'{OVERLAY_URLS["adsb"]}/api/aircraft')
+        active = data.get("active", []) if isinstance(data, dict) else []
+        running = bool(data.get("dump1090_running")) if isinstance(data, dict) else False
+        status["adsb"] = {
+            "online": True, "receiver_online": running, "count": len(active),
+            "detail": f'{len(active)} live' if running else "decoder stopped",
+        }
+    except RuntimeError as exc:
+        status["adsb"] = {"online": False, "detail": "app offline", "error": str(exc)}
+
+    try:
+        data = _overlay_request_json(f'{OVERLAY_URLS["ais"]}/api/vessels')
+        active = data.get("active", []) if isinstance(data, dict) else []
+        running = bool(data.get("ais_running")) if isinstance(data, dict) else False
+        status["ais"] = {
+            "online": True, "receiver_online": running, "count": len(active),
+            "detail": f'{len(active)} live' if running else "decoder stopped",
+        }
+    except RuntimeError as exc:
+        status["ais"] = {"online": False, "detail": "app offline", "error": str(exc)}
+
+    sonde_online = _overlay_probe(f'{OVERLAY_URLS["sonde"]}/api/version')
+    autorx_online = sonde_online and _overlay_probe(
+        f'{OVERLAY_URLS["autorx"]}/socket.io/?EIO=4&transport=polling'
+    )
+    status["sonde"] = {
+        "online": sonde_online,
+        "receiver_online": autorx_online,
+        "detail": "stream online" if autorx_online else ("auto_rx offline" if sonde_online else "app offline"),
+        "stream_url": OVERLAY_URLS["autorx"] if sonde_online else None,
+    }
+    return jsonify({"sources": status, "timestamp": time.time()})
+
+
+@app.route("/api/overlays/<source>")
+def api_overlay_data(source: str):
+    try:
+        if source == "adsb":
+            return jsonify(_overlay_request_json(f'{OVERLAY_URLS["adsb"]}/api/aircraft'))
+        if source == "ais":
+            return jsonify(_overlay_request_json(f'{OVERLAY_URLS["ais"]}/api/vessels'))
+        if source == "om":
+            mt_nodes = _overlay_request_json(f'{OVERLAY_URLS["om"]}/api/nodes')
+            mc_status = _overlay_request_json(f'{OVERLAY_URLS["om"]}/api/mc/status')
+            radios = [radio for radio in mc_status.get("mc_nodes", []) if radio.get("id")]
+
+            def fetch_radio_contacts(radio: dict[str, Any]) -> list[dict[str, Any]]:
+                radio_id = str(radio.get("id") or "")
+                try:
+                    payload = _overlay_request_json(
+                        f'{OVERLAY_URLS["om"]}/api/mc/{urllib.parse.quote(radio_id, safe="")}/contacts'
+                    )
+                except RuntimeError:
+                    return []
+                items = []
+                for contact in payload.get("contacts", []):
+                    item = dict(contact)
+                    item["radio_id"] = radio_id
+                    item["radio_name"] = radio.get("name") or radio_id
+                    item["radio_status"] = radio.get("status")
+                    items.append(item)
+                return items
+
+            fetched: list[dict[str, Any]] = []
+            with ThreadPoolExecutor(max_workers=max(1, min(4, len(radios)))) as pool:
+                for items in pool.map(fetch_radio_contacts, radios):
+                    fetched.extend(items)
+
+            # A contact learned by several MC radios is one map object. Prefer a
+            # live copy, then the newest advert, while retaining its hearing radio.
+            by_contact: dict[str, dict[str, Any]] = {}
+            for item in fetched:
+                key = str(item.get("full_key") or item.get("id") or "")
+                if not key:
+                    continue
+                old = by_contact.get(key)
+                rank = (not bool(item.get("archived_only")), int(item.get("last_seen_ts") or 0))
+                old_rank = (not bool(old.get("archived_only")), int(old.get("last_seen_ts") or 0)) if old else (False, 0)
+                if old is None or rank > old_rank:
+                    by_contact[key] = item
+            mc_contacts = list(by_contact.values())
+            return jsonify({"mt_nodes": mt_nodes, "mc_contacts": mc_contacts, "mc_radios": mc_status.get("mc_nodes", [])})
+        return jsonify({"error": "Unknown overlay source"}), 404
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc), "source": source, "offline": True}), 503
+
+
+@app.route("/api/overlays/om/action", methods=["POST"])
+def api_overlay_om_action():
+    data = request.get_json(silent=True) or {}
+    network = str(data.get("network") or "").lower()
+    action = str(data.get("action") or "").lower()
+    radio_id = str(data.get("radio_id") or "")
+    target = str(data.get("target") or "")
+    if network not in {"mt", "mc"} or action not in {"dm", "refresh"}:
+        return jsonify({"error": "Unsupported OM action"}), 400
+    if not target:
+        return jsonify({"error": "Target is required"}), 400
+
+    if network == "mt" and action == "dm":
+        path = f'/api/node/{urllib.parse.quote(target, safe="")}/dm'
+        payload = {"message": str(data.get("text") or ""), "radio_id": radio_id or None}
+    elif network == "mt":
+        path = f'/api/node/{urllib.parse.quote(target, safe="")}/position'
+        payload = {"radio_id": radio_id or None}
+    elif action == "dm":
+        if not radio_id:
+            return jsonify({"error": "MC radio is required"}), 400
+        path = f'/api/mc/{urllib.parse.quote(radio_id, safe="")}/send_dm'
+        payload = {"text": str(data.get("text") or ""), "target": target}
+    else:
+        if not radio_id:
+            return jsonify({"error": "MC radio is required"}), 400
+        path = f'/api/mc/{urllib.parse.quote(radio_id, safe="")}/statusreq/{urllib.parse.quote(target, safe="")}'
+        payload = {}
+    try:
+        result = _overlay_request_json(f'{OVERLAY_URLS["om"]}{path}', method="POST", payload=payload, timeout=35)
+        return jsonify(result)
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 502
 
 
 # ── GPS ───────────────────────────────────────────────────────────────────────

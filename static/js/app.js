@@ -25,6 +25,15 @@ const state = {
   queuePoll: 0,
   offlineBounds: null,
   offlineJobId: null,
+  overlayStatus: {},
+  overlayGroups: new Map(),
+  overlayMarkers: new Map(),
+  overlayEnabled: (function() { try { return new Set(JSON.parse(localStorage.getItem("ops_toc_live_overlays") || "[]")); } catch(e) { return new Set(); } })(),
+  overlayPoll: 0,
+  overlayPollBusy: false,
+  overlayLastLoad: new Map(),
+  sondeSocket: null,
+  sondeObjects: new Map(),
   collapsedFolders: (function() { try { return new Set(JSON.parse(localStorage.getItem("ops_toc_collapsed_folders") || "[]")); } catch(e) { return new Set(); } })(),
   seenFolders:      (function() { try { return new Set(JSON.parse(localStorage.getItem("ops_toc_seen_folders")     || "[]")); } catch(e) { return new Set(); } })(),
   collapsedMarkerFolders: (function() { try { return new Set(JSON.parse(localStorage.getItem("ops_toc_collapsed_marker_folders") || "[]")); } catch(e) { return new Set(); } })(),
@@ -3643,6 +3652,368 @@ async function runSearch(event) {
   }
 }
 
+// ===== LIVE OPERATIONAL OVERLAYS =====
+const OVERLAY_META = {
+  om:    { name: "OverMesh nodes" },
+  adsb:  { name: "ADS-B aircraft" },
+  ais:   { name: "AIS vessels" },
+  sonde: { name: "Radiosondes" },
+};
+
+function _overlaySaveEnabled() {
+  localStorage.setItem("ops_toc_live_overlays", JSON.stringify([...state.overlayEnabled]));
+}
+
+function setOverlaysPanelOpen(open) {
+  const panel = el("overlays-panel");
+  if (!panel) return;
+  panel.hidden = !open;
+  el("overlays-btn")?.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+function toggleOverlaysPanel(event) {
+  event?.stopPropagation();
+  setLayersPanelOpen(false);
+  setOverlaysPanelOpen(el("overlays-panel")?.hidden ?? true);
+}
+
+function _overlayGroup(source) {
+  if (!state.overlayGroups.has(source)) state.overlayGroups.set(source, L.layerGroup());
+  return state.overlayGroups.get(source);
+}
+
+function _overlayMarkerMap(source) {
+  if (!state.overlayMarkers.has(source)) state.overlayMarkers.set(source, new Map());
+  return state.overlayMarkers.get(source);
+}
+
+function _clearOverlaySource(source) {
+  state.overlayGroups.get(source)?.clearLayers();
+  state.overlayMarkers.get(source)?.clear();
+}
+
+function _overlayStatusClass(info) {
+  if (!info?.online) return "offline";
+  if (info.receiver_online === false) return "degraded";
+  return "online";
+}
+
+function renderOverlayControls() {
+  const box = el("overlays-panel-list");
+  if (!box) return;
+  box.innerHTML = Object.entries(OVERLAY_META).map(([source, meta]) => {
+    const info = state.overlayStatus[source] || { online: false, detail: "checking…" };
+    const checked = info.online && state.overlayEnabled.has(source);
+    return `<label class="overlay-source ${_overlayStatusClass(info)}">
+      <span class="overlay-source-dot"></span>
+      <span class="overlay-source-copy"><span class="overlay-source-name">${esc(meta.name)}</span><span class="overlay-source-detail">${esc(info.detail || (info.online ? "online" : "app offline"))}</span></span>
+      <span class="overlay-toggle"><input type="checkbox" data-overlay-source="${source}" ${checked ? "checked" : ""} ${info.online ? "" : "disabled"}><span></span></span>
+    </label>`;
+  }).join("");
+  box.querySelectorAll("[data-overlay-source]").forEach((input) => {
+    input.onchange = () => setOverlayEnabled(input.dataset.overlaySource, input.checked);
+  });
+}
+
+async function loadOverlayStatus() {
+  if (!state.map) return;
+  try {
+    const data = await api("/api/overlays/status");
+    state.overlayStatus = data.sources || {};
+    for (const source of Object.keys(OVERLAY_META)) {
+      if (!state.overlayStatus[source]?.online) _clearOverlaySource(source);
+    }
+    renderOverlayControls();
+    if (state.overlayEnabled.has("sonde") && state.overlayStatus.sonde?.online) initSondeOverlayStream();
+  } catch (_) { renderOverlayControls(); }
+}
+
+async function setOverlayEnabled(source, enabled) {
+  if (!OVERLAY_META[source] || !state.overlayStatus[source]?.online) return;
+  const group = _overlayGroup(source);
+  if (enabled) {
+    state.overlayEnabled.add(source);
+    group.addTo(state.map);
+    if (source === "sonde") initSondeOverlayStream();
+    else await loadOverlaySource(source);
+  } else {
+    state.overlayEnabled.delete(source);
+    _clearOverlaySource(source);
+    if (state.map.hasLayer(group)) state.map.removeLayer(group);
+  }
+  _overlaySaveEnabled();
+  renderOverlayControls();
+}
+
+function _liveIcon(kind, glyph, heading = null, stale = false) {
+  const rotation = heading == null ? "" : `transform:rotate(${Number(heading) || 0}deg)`;
+  return L.divIcon({ className: "live-map-icon", html: `<div class="live-map-glyph ${kind}${stale ? " stale" : ""}" style="${rotation}">${glyph}</div>`, iconSize: [27, 27], iconAnchor: [13, 13], popupAnchor: [0, -12] });
+}
+
+// Keep OM overlay markers visually identical to OM's own map.
+function _omMtIcon(node) {
+  let color = "#6e7681";
+  if (node.is_local) color = "#3b82f6";
+  else if (node.last_heard_ts) {
+    const age = Date.now() / 1000 - Number(node.last_heard_ts);
+    color = age < 1800 ? "#86efac" : age < 7200 ? "#e07b30" : "#f85149";
+  }
+  const outer = node.is_local ? 10 : 7;
+  const inner = node.is_local ? 7 : 4;
+  const sz = (outer + 5) * 2, c = sz / 2;
+  const pulse = node.is_local ? `<circle cx="${c}" cy="${c}" r="${outer + 4}" fill="none" stroke="${color}" stroke-width="1.5" class="map-node-pulse"/>` : "";
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${sz}" height="${sz}" viewBox="0 0 ${sz} ${sz}" style="filter:drop-shadow(0 1px 4px rgba(0,0,0,0.8));overflow:visible">${pulse}<circle cx="${c}" cy="${c}" r="${outer}" fill="white"/><circle cx="${c}" cy="${c}" r="${inner}" fill="${color}"/></svg>`;
+  return L.divIcon({ html: svg, className: "", iconSize: [sz, sz], iconAnchor: [c, c], popupAnchor: [0, -(c + 2)] });
+}
+
+function _omMcIcon(type) {
+  const outer = 7, inner = 4;
+  const isRptr = Number(type) === 2, isRoom = Number(type) === 3;
+  const color = isRptr ? "#3b82f6" : isRoom ? "#fb923c" : "#60a5fa";
+  const sz = (outer + 5) * 2, c = sz / 2, o = c - outer, i = c - inner;
+  const body = isRptr || isRoom
+    ? `<rect x="${o}" y="${o}" width="${outer * 2}" height="${outer * 2}" fill="white" rx="2"/><rect x="${i}" y="${i}" width="${inner * 2}" height="${inner * 2}" fill="${color}" rx="1"/>`
+    : `<circle cx="${c}" cy="${c}" r="${outer}" fill="white"/><circle cx="${c}" cy="${c}" r="${inner}" fill="${color}"/>`;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${sz}" height="${sz}" viewBox="0 0 ${sz} ${sz}" style="filter:drop-shadow(0 1px 4px rgba(0,0,0,0.8));overflow:visible">${body}</svg>`;
+  return L.divIcon({ html: svg, className: "", iconSize: [sz, sz], iconAnchor: [c, c], popupAnchor: [0, -(c + 2)] });
+}
+
+function _omMcRadioIcon() {
+  const glow = "drop-shadow(0 0 5px #10b981) drop-shadow(0 1px 4px rgba(0,0,0,0.8))";
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30" style="filter:${glow};overflow:visible"><rect x="7" y="7" width="16" height="16" fill="white" transform="rotate(45,15,15)" rx="1.5"/><rect x="10" y="10" width="10" height="10" fill="#10b981" transform="rotate(45,15,15)" rx="1"/></svg>`;
+  return L.divIcon({ html: svg, className: "", iconSize: [30, 30], iconAnchor: [15, 15], popupAnchor: [0, -17] });
+}
+
+const _ADSB_ICON_DEFS = {
+  jet: { path: "m 32,1 2,1 2,3 0,18 4,1 0,-4 3,0 0,5 17,6 0,3 -15,-2 -9,0 0,12 -2,6 7,3 0,2 -8,-1 -1,2 -1,-2 -8,1 0,-2 7,-3 -2,-6 0,-12 -9,0 -15,2 0,-3 17,-6 0,-5 3,0 0,4 4,-1 0,-18 2,-3 2,-1z", vb: "0 0 64 64", w: 32, h: 32, anchor: [16, 14] },
+  heavy: { path: "m 32,1 2,1 1,2 0,20 4,4 0,-4 3,0 0,4 -1,2 17,12 0,2 -16,-5 -7,0 0,13 -1,5 7,5 0,2 -8,-2 -1,2 -1,-2 -8,2 0,-2 7,-5 -1,-5 0,-13 -7,0 -16,5 0,-2 17,-12 -1,-2 0,-4 3,0 0,4 4,-4 0,-20 1,-2 2,-1z", vb: "0 0 64 64", w: 38, h: 38, anchor: [19, 19] },
+  prop: { path: "m 32,1 2,1 2,3 0,18 4,1 0,-4 3,0 0,5 17,6 0,3 -15,-2 -9,0 0,12 -2,6 7,3 0,2 -8,-1 -1,2 -1,-2 -8,1 0,-2 7,-3 -2,-6 0,-12 -9,0 -15,2 0,-3 17,-6 0,-5 3,0 0,4 4,-1 0,-18 2,-3 2,-1z", vb: "0 0 64 64", w: 26, h: 26, anchor: [13, 13] },
+  helicopter: { path: "M 43.89309,0.4301 c -0.60546,-0.60546 -1.62623,-0.56506 -2.2813,0.0897 L 25.82444,16.3061 C 24.95171,-1.27473 21.64491,1.24212 21.64491,1.24212 c 0,0 -3.20153,-2.80873 -4.13518,14.07519 L 2.71103,0.51862 C 2.05636,-0.13606 1.03533,-0.17646 0.43,0.42902 c -0.60546,0.6052 -0.56506,1.6261 0.0896,2.28104 l 16.81957,16.81931 c -0.0454,1.63425 -0.072,3.41089 -0.0796,5.34281 l -0.90497,0.90496 h -1.94113 v 1.94113 L 0.51882,41.61319 c -0.6548,0.65454 -0.69533,1.67531 -0.09,2.28077 0.60533,0.60546 1.62636,0.5648 2.28104,-0.0896 L 14.41335,32.10074 v 1.94073 h 3.09928 c 0,0 1.25961,6.97312 2.03417,8.65159 0.77495,1.67913 0.032,17.17487 2.09799,17.17487 0.38346,0 0.66928,-0.53374 0.88615,-1.41331 l 6.34515,-2.71897 v -1.03314 h -5.85155 c 0.34017,-4.67077 0.24161,-10.97316 0.71942,-12.00945 0.77416,-1.67847 2.03285,-8.65159 2.03285,-8.65159 h 3.09928 v -2.974 l 12.73545,12.73689 c 0.65507,0.65442 1.67584,0.69495 2.2813,0.0896 0.60546,-0.60533 0.56479,-1.62623 -0.0901,-2.28077 L 28.876,26.68527 v -0.90813 h -0.90799 l -1.94284,-1.9431 c -0.009,-1.15407 -0.0263,-2.25524 -0.0496,-3.29693 l 17.82849,-17.826 c 0.65389,-0.65494 0.69442,-1.67702 0.0891,-2.28103 z", vb: "0 0 44 64", w: 26, h: 38, anchor: [13, 19] },
+  generic: { path: "m 32,1 2,1 2,3 0,18 4,1 0,-4 3,0 0,5 17,6 0,3 -15,-2 -9,0 0,12 -2,6 7,3 0,2 -8,-1 -1,2 -1,-2 -8,1 0,-2 7,-3 -2,-6 0,-12 -9,0 -15,2 0,-3 17,-6 0,-5 3,0 0,4 4,-1 0,-18 2,-3 2,-1z", vb: "0 0 64 64", w: 28, h: 28, anchor: [14, 12] },
+};
+
+function _adsbColor(ac) {
+  if (ac.emergency) return "#ff2222";
+  if (ac.is_military) return "#38bdf8";
+  if (ac.altitude == null) return "#7a8aaa";
+  if (ac.altitude < 0) return "#ff5533";
+  if (ac.altitude < 5000) return "#ff6633";
+  if (ac.altitude < 18000) return "#f0c040";
+  if (ac.altitude < 30000) return "#9fda50";
+  return "#3ddc84";
+}
+
+function _adsbIcon(ac) {
+  const def = _ADSB_ICON_DEFS[ac.icon_type] || _ADSB_ICON_DEFS.generic;
+  const scale = ({ L: .75, M: 1, H: 1.3, "": 1 })[ac.size || ""] || 1;
+  const w = Math.round(def.w * scale), h = Math.round(def.h * scale), track = ac.track ?? 0;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${def.vb}" width="${w}" height="${h}"><path d="${def.path}" fill="${_adsbColor(ac)}" stroke="rgba(0,0,0,0.55)" stroke-width="1.5"/></svg>`;
+  return L.divIcon({ className: "aircraft-div-icon", html: `<div class="${ac.emergency ? "emerg-icon" : ""}" style="width:${w}px;height:${h}px;transform:rotate(${track}deg);transform-origin:center">${svg}</div>`, iconSize: [w, h], iconAnchor: [Math.round(def.anchor[0] * scale), Math.round(def.anchor[1] * scale)] });
+}
+
+function _aisColor(v) {
+  if (v.approaching && v.cpa_distance_nm != null && v.cpa_distance_nm <= 2) return "#ff5050";
+  if (v.gone) return "#6f7f94";
+  if (v.ship_type >= 80 && v.ship_type < 90) return "#f0c040";
+  if (v.ship_type >= 60 && v.ship_type < 70) return "#38bdf8";
+  if (v.ship_type === 35 || v.ship_type === 55) return "#ff8080";
+  if ((v.speed || 0) > 20) return "#3ddc84";
+  return "#e8b04f";
+}
+
+function _aisIcon(v) {
+  const rot = v.heading ?? v.course ?? 0, color = _aisColor(v);
+  const html = `<div class="vessel-symbol" style="transform:rotate(${rot}deg);color:${color}"><svg viewBox="0 0 48 48" width="30" height="30"><path d="M24 3 37 41 24 34 11 41Z" fill="currentColor" stroke="rgba(0,0,0,.55)" stroke-width="2"/><path d="M24 11 28 31 24 29 20 31Z" fill="rgba(255,255,255,.28)"/></svg></div>`;
+  return L.divIcon({ className: "vessel-div-icon", html, iconSize: [30, 30], iconAnchor: [15, 15] });
+}
+
+const _SONDE_COLORS = ["#deaf4a", "#56b6c2", "#c678dd", "#98c379", "#e06c75", "#61afef", "#d19a66", "#e5c07b"];
+function _sondeIcon(id) {
+  let hash = 0; for (const c of String(id)) hash = (hash * 31 + c.charCodeAt(0)) & 0xffffffff;
+  const color = _SONDE_COLORS[Math.abs(hash) % _SONDE_COLORS.length];
+  const html = `<svg width="26" height="34" viewBox="0 0 26 34"><circle cx="13" cy="13" r="10" fill="${color}" opacity="0.92" stroke="#0a0a12" stroke-width="2"/><line x1="13" y1="23" x2="13" y2="34" stroke="${color}" stroke-width="2" opacity="0.6"/><text x="13" y="17" text-anchor="middle" font-size="10" fill="#0a0a12" font-weight="700">↑</text></svg>`;
+  return L.divIcon({ className: "sonde-marker-icon", html, iconSize: [26, 34], iconAnchor: [13, 34], popupAnchor: [0, -36] });
+}
+
+function _fmtOverlayAge(ts) {
+  if (!ts) return "unknown";
+  const sec = Math.max(0, Math.round(Date.now() / 1000 - Number(ts)));
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m`;
+  if (sec < 86400) return `${Math.floor(sec / 3600)}h`;
+  return `${Math.floor(sec / 86400)}d`;
+}
+
+function _popupGrid(rows) {
+  return `<div class="live-popup-grid">${rows.filter(([, value]) => value !== null && value !== undefined && value !== "").map(([label, value]) => `<span>${esc(label)}</span><span>${esc(value)}</span>`).join("")}</div>`;
+}
+
+function _genericLivePopup(kind, name, rows, logData = null) {
+  const encoded = logData ? encodeURIComponent(JSON.stringify(logData)) : "";
+  return `<div class="live-popup"><div class="live-popup-head"><span class="live-popup-name">${esc(name)}</span><span class="live-popup-kind">${esc(kind)}</span></div>${_popupGrid(rows)}<div class="live-popup-actions">${logData ? `<button class="btn small" onclick="logOverlayObject('${encoded}')">Log</button>` : ""}</div></div>`;
+}
+
+function renderAdsbOverlay(data) {
+  const group = _overlayGroup("adsb");
+  const markers = _overlayMarkerMap("adsb");
+  const seen = new Set();
+  for (const ac of data.active || []) {
+    if (ac.lat == null || ac.lon == null) continue;
+    const id = String(ac.hex || ac.flight || ac.registration || "");
+    if (!id) continue;
+    seen.add(id);
+    const name = ac.flight || ac.registration || ac.hex || "Aircraft";
+    const popup = _genericLivePopup("ADS-B aircraft", name, [
+      ["Registration", ac.registration], ["Type", ac.type_name || ac.type_code], ["Altitude", ac.altitude != null ? `${Math.round(ac.altitude)} ft` : null], ["Speed", ac.speed != null ? `${Math.round(ac.speed)} kt` : null], ["Heading", ac.track != null ? `${Math.round(ac.track)}°` : null], ["Distance", ac.distance != null ? `${ac.distance} km` : null], ["Squawk", ac.squawk], ["Updated", `${_fmtOverlayAge(ac.last_seen)} ago`],
+    ], { kind: "ADS-B aircraft", name, lat: ac.lat, lon: ac.lon, details: `Altitude: ${ac.altitude ?? "—"} ft\nSpeed: ${ac.speed ?? "—"} kt\nSquawk: ${ac.squawk || "—"}` });
+    let marker = markers.get(id);
+    if (marker) {
+      marker.setLatLng([ac.lat, ac.lon]);
+      marker.setIcon(_adsbIcon(ac));
+      marker.setPopupContent(popup);
+      if (!group.hasLayer(marker)) marker.addTo(group);
+    } else {
+      marker = L.marker([ac.lat, ac.lon], { icon: _adsbIcon(ac), zIndexOffset: 300 }).bindPopup(popup).addTo(group);
+      markers.set(id, marker);
+    }
+  }
+  for (const [id, marker] of markers.entries()) {
+    if (seen.has(id)) continue;
+    group.removeLayer(marker);
+    markers.delete(id);
+  }
+}
+
+function renderAisOverlay(data) {
+  const group = _overlayGroup("ais"); group.clearLayers();
+  for (const ship of data.active || []) {
+    if (ship.lat == null || ship.lon == null) continue;
+    const name = ship.name || ship.callsign || ship.mmsi || "Vessel";
+    L.marker([ship.lat, ship.lon], { icon: _aisIcon(ship), zIndexOffset: 250 }).bindPopup(_genericLivePopup("AIS vessel", name, [
+      ["MMSI", ship.mmsi], ["Callsign", ship.callsign], ["Type", ship.ship_type_text || ship.station_type], ["Speed", ship.speed != null ? `${ship.speed} kn` : null], ["Course", ship.course != null ? `${ship.course}°` : null], ["Distance", ship.distance != null ? `${ship.distance} km` : null], ["Destination", ship.destination], ["Updated", `${_fmtOverlayAge(ship.last_seen)} ago`],
+    ], { kind: "AIS vessel", name, lat: ship.lat, lon: ship.lon, details: `MMSI: ${ship.mmsi || "—"}\nSpeed/course: ${ship.speed ?? "—"} kn / ${ship.course ?? "—"}°` })).addTo(group);
+  }
+}
+
+function _omPopup(node, network) {
+  const isMc = network === "mc";
+  const target = isMc ? (node.full_key || node.id) : node.id;
+  const key = `${network}-${String(target).replace(/[^a-zA-Z0-9_-]/g, "")}-${String(node.radio_id || "").replace(/[^a-zA-Z0-9_-]/g, "")}`;
+  const name = node.long_name || node.short_name || target || "Node";
+  const rows = isMc ? [["Network", "MeshCore"], ["Radio", node.radio_name || node.radio_id], ["State", node.archived_only ? "archived" : node.source_state || node.radio_status], ["Last heard", node.last_seen || (_fmtOverlayAge(node.last_seen_ts) + " ago")], ["Path", node.out_path_len >= 0 ? `${node.out_path_len} hop${node.out_path_len === 1 ? "" : "s"}` : "unknown"]] : [["Network", "Meshtastic"], ["Radio", node.radio_name || node.radio_id], ["State", node.radio_status], ["Last heard", node.last_heard || (_fmtOverlayAge(node.last_heard_ts) + " ago")], ["Battery", node.battery != null ? `${node.battery}%` : null], ["Signal", [node.rssi != null ? `${node.rssi} dBm` : "", node.snr != null ? `SNR ${node.snr}` : ""].filter(Boolean).join(" · ")], ["Hops", node.hops_away]];
+  const payload = encodeURIComponent(JSON.stringify({ kind: isMc ? "MeshCore node" : "Meshtastic node", name, lat: node.latitude, lon: node.longitude, details: rows.map(r => `${r[0]}: ${r[1] ?? "—"}`).join("\n") }));
+  return `<div class="live-popup"><div class="live-popup-head"><span class="live-popup-name">${esc(name)}</span><span class="live-popup-kind">${isMc ? "MeshCore" : "Meshtastic"}</span></div>${_popupGrid(rows)}<div class="live-popup-actions">
+    ${!node.is_local && !node.archived_only ? `<button class="btn small primary" onclick="toggleOverlayDm('${key}')">Send DM</button>` : ""}
+    ${!node.archived_only ? `<button class="btn small" onclick="runOmOverlayAction('${network}','refresh','${encodeURIComponent(node.radio_id || "")}','${encodeURIComponent(target)}','${key}')">${isMc ? "Request status" : "Request position"}</button>` : ""}
+    <button class="btn small" onclick="logOverlayObject('${payload}')">Log</button></div>
+    ${!node.is_local && !node.archived_only ? `<div class="live-dm-box" id="live-dm-${key}" hidden><textarea id="live-dm-text-${key}" maxlength="200" placeholder="Direct message to ${esc(name)}"></textarea><button class="btn small primary" onclick="sendOmOverlayDm('${network}','${encodeURIComponent(node.radio_id || "")}','${encodeURIComponent(target)}','${key}')">Send</button></div>` : ""}
+    <div class="live-action-status" id="live-status-${key}"></div></div>`;
+}
+
+function renderOmOverlay(data) {
+  const group = _overlayGroup("om"); group.clearLayers();
+  for (const node of data.mt_nodes || []) {
+    if (node.latitude == null || node.longitude == null || node.is_ignored) continue;
+    L.marker([node.latitude, node.longitude], { icon: _omMtIcon(node), zIndexOffset: 400 }).bindPopup(_omPopup(node, "mt"), { maxWidth: 340 }).addTo(group);
+  }
+  for (const node of data.mc_contacts || []) {
+    if (node.latitude == null || node.longitude == null) continue;
+    L.marker([node.latitude, node.longitude], { icon: _omMcIcon(node.type ?? 0), zIndexOffset: 390 }).bindPopup(_omPopup(node, "mc"), { maxWidth: 340 }).addTo(group);
+  }
+  for (const radio of data.mc_radios || []) {
+    if (radio.status !== "connected" || radio.lat == null || radio.lon == null) continue;
+    const name = radio.name || radio.node_name || radio.id || "MC Radio";
+    L.marker([radio.lat, radio.lon], { icon: _omMcRadioIcon(), zIndexOffset: 410 }).bindPopup(_genericLivePopup("MC radio", name, [["State", radio.status], ["Frequency", radio.freq], ["TX power", radio.tx_power != null ? `${radio.tx_power} dBm` : null]], { kind: "MeshCore radio", name, lat: radio.lat, lon: radio.lon, details: `Radio: ${radio.id || "—"}\nState: ${radio.status}` })).addTo(group);
+  }
+}
+
+async function loadOverlaySource(source) {
+  if (!state.map || !state.overlayEnabled.has(source) || !state.overlayStatus[source]?.online || source === "sonde") return;
+  if (state.map._popup) return; // preserve an operator's open popup and typed DM
+  const now = Date.now();
+  const minAge = source === "om" ? 15000 : 4000;
+  if (now - Number(state.overlayLastLoad.get(source) || 0) < minAge) return;
+  state.overlayLastLoad.set(source, now);
+  try {
+    const data = await api(`/api/overlays/${source}`);
+    if (source === "adsb") renderAdsbOverlay(data); else if (source === "ais") renderAisOverlay(data); else if (source === "om") renderOmOverlay(data);
+  } catch (_) { if (state.overlayStatus[source]) state.overlayStatus[source].detail = "feed unavailable"; renderOverlayControls(); }
+}
+
+async function pollEnabledOverlays() {
+  if (state.overlayPollBusy) return;
+  state.overlayPollBusy = true;
+  try { await Promise.all([...state.overlayEnabled].map(loadOverlaySource)); }
+  finally { state.overlayPollBusy = false; }
+}
+
+function toggleOverlayDm(key) { const box = el(`live-dm-${key}`); if (box) { box.hidden = !box.hidden; if (!box.hidden) el(`live-dm-text-${key}`)?.focus(); } }
+
+async function runOmOverlayAction(network, action, radioEncoded, targetEncoded, key) {
+  const status = el(`live-status-${key}`); if (status) status.textContent = "Requesting…";
+  try {
+    await api("/api/overlays/om/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ network, action, radio_id: decodeURIComponent(radioEncoded), target: decodeURIComponent(targetEncoded) }) });
+    if (status) status.textContent = network === "mc" ? "Status response received." : "Position requested.";
+    setTimeout(() => loadOverlaySource("om"), 1200);
+  } catch (err) { if (status) status.textContent = `Failed: ${err.message}`; }
+}
+
+async function sendOmOverlayDm(network, radioEncoded, targetEncoded, key) {
+  const textBox = el(`live-dm-text-${key}`), status = el(`live-status-${key}`), text = textBox?.value.trim();
+  if (!text) { if (status) status.textContent = "Enter a message first."; return; }
+  if (status) status.textContent = "Sending…";
+  try {
+    await api("/api/overlays/om/action", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ network, action: "dm", radio_id: decodeURIComponent(radioEncoded), target: decodeURIComponent(targetEncoded), text }) });
+    textBox.value = ""; if (status) status.textContent = "DM sent.";
+  } catch (err) { if (status) status.textContent = `Failed: ${err.message}`; }
+}
+
+function logOverlayObject(encoded) {
+  let item; try { item = JSON.parse(decodeURIComponent(encoded)); } catch (_) { return; }
+  if (typeof showTab !== "function" || typeof renderFields !== "function") return;
+  showTab("log"); const cat = el("cat-select"); if (cat) cat.value = "CONTACT";
+  renderFields("CONTACT", {
+    "Time": new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    "Node / Station": item.name,
+    "Network / Channel": item.kind,
+    "Position": `${Number(item.lat).toFixed(6)}, ${Number(item.lon).toFixed(6)}`,
+    "Notes": item.details || "",
+  });
+  el("composer-panel")?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function _renderSondeObject(data) {
+  const id = data.id || data.callsign; if (!id || data.lat == null || data.lon == null) return;
+  state.sondeObjects.set(id, { ...data, _updated_at: Date.now() / 1000 });
+  const group = _overlayGroup("sonde"); group.clearLayers();
+  for (const [sondeId, s] of state.sondeObjects.entries()) {
+    L.marker([s.lat, s.lon], { icon: _sondeIcon(sondeId), zIndexOffset: 350 }).bindPopup(_genericLivePopup("Radiosonde", sondeId, [["Type", s.type], ["Frequency", s.freq != null ? `${s.freq} MHz` : null], ["Altitude", s.alt != null ? `${Math.round(s.alt)} m` : null], ["Climb", s.vel_v != null ? `${Number(s.vel_v).toFixed(1)} m/s` : null], ["Speed", s.vel_h != null ? `${(Number(s.vel_h) * 3.6).toFixed(1)} km/h` : null], ["Temperature", s.temp != null ? `${Number(s.temp).toFixed(1)} °C` : null], ["Updated", `${_fmtOverlayAge(s._updated_at)} ago`]], { kind: "Radiosonde", name: sondeId, lat: s.lat, lon: s.lon, details: `Type: ${s.type || "—"}\nAltitude: ${s.alt ?? "—"} m\nFrequency: ${s.freq ?? "—"} MHz` })).addTo(group);
+  }
+}
+
+function _loadSocketIo(url) {
+  return new Promise((resolve, reject) => {
+    if (window.io) { resolve(); return; }
+    const script = document.createElement("script"); script.src = `${url}/socket.io/socket.io.js`; script.onload = resolve; script.onerror = () => reject(new Error("auto_rx client unavailable")); document.head.appendChild(script);
+  });
+}
+
+async function initSondeOverlayStream() {
+  if (state.sondeSocket || !state.overlayEnabled.has("sonde")) return;
+  const url = state.overlayStatus.sonde?.stream_url || "http://localhost:5000";
+  try {
+    await _loadSocketIo(url); state.sondeSocket = window.io(`${url}/update_status`, { transports: ["websocket"], reconnectionDelay: 3000 }); state.sondeSocket.on("telemetry_event", _renderSondeObject);
+    state.sondeSocket.on("connect", () => { if (state.overlayStatus.sonde) { state.overlayStatus.sonde.detail = `${state.sondeObjects.size} live`; renderOverlayControls(); } });
+    state.sondeSocket.on("disconnect", () => { if (state.overlayStatus.sonde) { state.overlayStatus.sonde.detail = "auto_rx offline"; renderOverlayControls(); } });
+  } catch (_) { if (state.overlayStatus.sonde) state.overlayStatus.sonde.detail = "stream unavailable"; renderOverlayControls(); }
+}
+
+async function initLiveOverlays() {
+  await loadOverlayStatus();
+  for (const source of [...state.overlayEnabled]) if (state.overlayStatus[source]?.online) _overlayGroup(source).addTo(state.map);
+  await pollEnabledOverlays(); clearInterval(state.overlayPoll); state.overlayPoll = setInterval(pollEnabledOverlays, 4000); setInterval(loadOverlayStatus, 12000);
+}
+
 function initMap() {
   const saved = JSON.parse(localStorage.getItem("mapAppView") || "null");
   state.map = L.map("map", { zoomSnap: 0.5, zoomDelta: 0.5 })
@@ -3796,6 +4167,7 @@ function bindUi() {
   document.addEventListener("click", (event) => {
     if (!el("menu-wrap")?.contains(event.target)) setHamburgerOpen(false);
     if (!el("layer-wrap")?.contains(event.target)) setLayersPanelOpen(false);
+    if (!el("overlay-wrap")?.contains(event.target)) setOverlaysPanelOpen(false);
     if (!el("markers-wrap")?.contains(event.target)) setMarkersMenuOpen(false);
     if (!el("tools-compact-wrap")?.contains(event.target)) closeToolsCompact();
   });
@@ -3835,6 +4207,7 @@ async function initMapAndData() {
   await Promise.all([loadMarkers(), loadDrawings(), loadTracks()]);
   _mapDataLoaded = true;
   _recoverActiveTrack();
+  await initLiveOverlays();
 }
 
 async function boot() {
