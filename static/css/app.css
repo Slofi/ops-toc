@@ -316,6 +316,8 @@ body {
 .overlay-source-copy { min-width: 0; }
 .overlay-source-name { color: var(--text); font-size: 12px; font-weight: 650; }
 .overlay-source-detail { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.overlay-subrow { display: flex; flex-direction: column; gap: 2px; padding: 3px 6px 7px 20px; }
+.overlay-sub { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 32px; font-size: 11px; color: var(--text); cursor: pointer; }
 .overlay-toggle { position: relative; width: 32px; height: 18px; }
 .overlay-toggle input { position: absolute; opacity: 0; pointer-events: none; }
 .overlay-toggle span {

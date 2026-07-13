@@ -29,6 +29,8 @@ const state = {
   overlayGroups: new Map(),
   overlayMarkers: new Map(),
   overlayEnabled: (function() { try { return new Set(JSON.parse(localStorage.getItem("ops_toc_live_overlays") || "[]")); } catch(e) { return new Set(); } })(),
+  omNets: (function() { try { const s = JSON.parse(localStorage.getItem("ops_toc_om_nets") || "{}"); return { mt: s.mt !== false, mc: s.mc !== false }; } catch(e) { return { mt: true, mc: true }; } })(),
+  omLastData: null,
   overlayPoll: 0,
   overlayPollBusy: false,
   overlayLastLoad: new Map(),
@@ -3719,14 +3721,25 @@ function renderOverlayControls() {
   box.innerHTML = Object.entries(OVERLAY_META).map(([source, meta]) => {
     const info = state.overlayStatus[source] || { online: false, detail: "checking…" };
     const checked = info.online && state.overlayEnabled.has(source);
-    return `<label class="overlay-source ${_overlayStatusClass(info)}">
+    let row = `<label class="overlay-source ${_overlayStatusClass(info)}">
       <span class="overlay-source-dot"></span>
       <span class="overlay-source-copy"><span class="overlay-source-name">${esc(meta.name)}</span><span class="overlay-source-detail">${esc(info.detail || (info.online ? "online" : "app offline"))}</span></span>
       <span class="overlay-toggle"><input type="checkbox" data-overlay-source="${source}" ${checked ? "checked" : ""} ${info.online ? "" : "disabled"}><span></span></span>
     </label>`;
+    // When OM is on, offer per-network (Meshtastic / MeshCore) sub-toggles.
+    if (source === "om" && checked) {
+      row += `<div class="overlay-subrow">
+        <label class="overlay-sub"><span>Meshtastic</span><span class="overlay-toggle"><input type="checkbox" data-om-net="mt" ${state.omNets.mt ? "checked" : ""}><span></span></span></label>
+        <label class="overlay-sub"><span>MeshCore</span><span class="overlay-toggle"><input type="checkbox" data-om-net="mc" ${state.omNets.mc ? "checked" : ""}><span></span></span></label>
+      </div>`;
+    }
+    return row;
   }).join("");
   box.querySelectorAll("[data-overlay-source]").forEach((input) => {
     input.onchange = () => setOverlayEnabled(input.dataset.overlaySource, input.checked);
+  });
+  box.querySelectorAll("[data-om-net]").forEach((input) => {
+    input.onchange = () => setOmNet(input.dataset.omNet, input.checked);
   });
 }
 
@@ -3978,21 +3991,31 @@ function _omPopup(node, network) {
 }
 
 function renderOmOverlay(data) {
+  state.omLastData = data; // cache so per-network sub-toggles can re-render without a fetch
   const items = [];
-  for (const node of data.mt_nodes || []) {
+  if (state.omNets.mt) for (const node of data.mt_nodes || []) {
     if (node.latitude == null || node.longitude == null || node.is_ignored) continue;
     items.push({ id: `mt-${node.id}`, lat: node.latitude, lon: node.longitude, icon: _omMtIcon(node), popup: _omPopup(node, "mt"), popupOpts: { maxWidth: 340 }, zIndexOffset: 400 });
   }
-  for (const node of data.mc_contacts || []) {
-    if (node.latitude == null || node.longitude == null) continue;
-    items.push({ id: `mc-${node.full_key || node.id}`, lat: node.latitude, lon: node.longitude, icon: _omMcIcon(node.type ?? 0), popup: _omPopup(node, "mc"), popupOpts: { maxWidth: 340 }, zIndexOffset: 390 });
-  }
-  for (const radio of data.mc_radios || []) {
-    if (radio.status !== "connected" || radio.lat == null || radio.lon == null) continue;
-    const name = radio.name || radio.node_name || radio.id || "MC Radio";
-    items.push({ id: `radio-${radio.id}`, lat: radio.lat, lon: radio.lon, icon: _omMcRadioIcon(), zIndexOffset: 410, popup: _genericLivePopup("MC radio", name, [["State", radio.status], ["Frequency", radio.freq], ["TX power", radio.tx_power != null ? `${radio.tx_power} dBm` : null]], { kind: "MeshCore radio", name, lat: radio.lat, lon: radio.lon, details: `Radio: ${radio.id || "—"}\nState: ${radio.status}` }) });
+  if (state.omNets.mc) {
+    for (const node of data.mc_contacts || []) {
+      if (node.latitude == null || node.longitude == null) continue;
+      items.push({ id: `mc-${node.full_key || node.id}`, lat: node.latitude, lon: node.longitude, icon: _omMcIcon(node.type ?? 0), popup: _omPopup(node, "mc"), popupOpts: { maxWidth: 340 }, zIndexOffset: 390 });
+    }
+    for (const radio of data.mc_radios || []) {
+      if (radio.status !== "connected" || radio.lat == null || radio.lon == null) continue;
+      const name = radio.name || radio.node_name || radio.id || "MC Radio";
+      items.push({ id: `radio-${radio.id}`, lat: radio.lat, lon: radio.lon, icon: _omMcRadioIcon(), zIndexOffset: 410, popup: _genericLivePopup("MC radio", name, [["State", radio.status], ["Frequency", radio.freq], ["TX power", radio.tx_power != null ? `${radio.tx_power} dBm` : null]], { kind: "MeshCore radio", name, lat: radio.lat, lon: radio.lon, details: `Radio: ${radio.id || "—"}\nState: ${radio.status}` }) });
+    }
   }
   _syncOverlayMarkers("om", items);
+}
+
+// Per-network sub-toggle (Meshtastic / MeshCore) under the OM overlay.
+function setOmNet(net, enabled) {
+  state.omNets[net] = enabled;
+  try { localStorage.setItem("ops_toc_om_nets", JSON.stringify(state.omNets)); } catch (_) {}
+  if (state.omLastData) renderOmOverlay(state.omLastData); // instant re-filter from cache
 }
 
 async function loadOverlaySource(source) {
