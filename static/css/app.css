@@ -619,6 +619,40 @@ select {
 .row-actions { display: flex; gap: 4px; }
 .empty { color: var(--muted); font-size: 12px; padding: 16px 12px; }
 
+/* ── Comms panel (read-only mesh channels + DMs, overlays the map's right edge) ── */
+#comms-panel {
+  position: absolute; top: 0; right: 0; bottom: 0; z-index: 1200;
+  width: 344px; max-width: 86vw;
+  display: flex; flex-direction: column;
+  background: var(--bg2); border-left: 1px solid var(--border);
+  box-shadow: -8px 0 30px rgba(0,0,0,0.5);
+}
+#comms-panel[hidden] { display: none; }
+#comms-body { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+#comms-btn.active { background: var(--accent-bg); border-color: var(--accent-mid); color: var(--accent); }
+.comms-group-label { padding: 13px 14px 3px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.comms-thread-net { color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+.comms-row-badge { margin-left: auto; min-width: 20px; height: 18px; padding: 0 6px; border-radius: 999px; background: var(--accent); color: var(--bg); font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.comms-row-time { margin-left: auto; color: var(--muted); font-size: 10px; flex-shrink: 0; }
+.comms-thread-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--bg2); z-index: 1; }
+.comms-thread-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--accent); font-weight: 700; font-size: 13px; }
+.comms-msg { padding: 3px 12px; }
+.comms-msg.sent { display: flex; justify-content: flex-end; }
+.comms-bubble { max-width: 85%; padding: 6px 9px; border-radius: 10px; background: var(--bg3); border: 1px solid var(--border); }
+.comms-msg.sent .comms-bubble { background: var(--accent-bg); border-color: var(--accent-mid); }
+.comms-msg-meta { display: flex; gap: 8px; align-items: baseline; margin-bottom: 2px; }
+.comms-msg-from { color: var(--accent); font-size: 10px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.comms-msg-time { color: var(--muted); font-size: 9px; flex-shrink: 0; margin-left: auto; }
+.comms-msg-text { color: var(--text); font-size: 12px; line-height: 1.35; white-space: pre-wrap; overflow-wrap: anywhere; }
+.comms-offline { padding: 20px 14px; color: var(--muted); font-size: 12px; }
+#comms-composer { flex-shrink: 0; border-top: 1px solid var(--border); padding: 8px 10px; background: var(--bg2); }
+#comms-composer[hidden] { display: none; }
+.comms-composer-row { display: flex; gap: 8px; align-items: flex-end; }
+#comms-input { flex: 1; min-width: 0; resize: none; max-height: 96px; padding: 7px 9px; font: inherit; font-size: 12px; color: var(--text); background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; }
+#comms-input:disabled { opacity: .55; cursor: not-allowed; }
+#comms-send-status { padding: 1px 2px 6px; font-size: 11px; color: var(--muted); }
+#comms-send-btn { flex-shrink: 0; }
+
 #map-wrap { position: relative; min-width: 0; min-height: 0; }
 #map { position: absolute; inset: 0; background: var(--bg); }
 #map.tool-crosshair, #map.tool-crosshair * { cursor: crosshair !important; }

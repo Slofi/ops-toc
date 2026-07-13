@@ -34,6 +34,7 @@ const state = {
   overlayLastLoad: new Map(),
   sondeSocket: null,
   sondeObjects: new Map(),
+  openPopupMarker: null,
   collapsedFolders: (function() { try { return new Set(JSON.parse(localStorage.getItem("ops_toc_collapsed_folders") || "[]")); } catch(e) { return new Set(); } })(),
   seenFolders:      (function() { try { return new Set(JSON.parse(localStorage.getItem("ops_toc_seen_folders")     || "[]")); } catch(e) { return new Set(); } })(),
   collapsedMarkerFolders: (function() { try { return new Set(JSON.parse(localStorage.getItem("ops_toc_collapsed_marker_folders") || "[]")); } catch(e) { return new Set(); } })(),
@@ -3660,6 +3661,14 @@ const OVERLAY_META = {
   sonde: { name: "Radiosondes" },
 };
 
+// Live-overlay tuning. Culling keeps only markers near the viewport on the map;
+// the in-memory registry still retains every marker, so panning re-reveals them
+// with no network fetch. Generous pad = nothing near the screen edge vanishes.
+// Flip OVERLAY_CULL to false to render every marker regardless of view.
+const OVERLAY_CULL = true;
+const OVERLAY_CULL_PAD = 0.6;
+const SONDE_TTL_SEC = 1800; // drop radiosondes with no telemetry for 30 min (landed/dead)
+
 function _overlaySaveEnabled() {
   localStorage.setItem("ops_toc_live_overlays", JSON.stringify([...state.overlayEnabled]));
 }
@@ -3690,6 +3699,12 @@ function _overlayMarkerMap(source) {
 function _clearOverlaySource(source) {
   state.overlayGroups.get(source)?.clearLayers();
   state.overlayMarkers.get(source)?.clear();
+  // Reset the poll throttle so a re-enable fetches immediately — otherwise
+  // toggling a source off then on inside its min-age window (15s for OM) left
+  // the just-cleared layer empty until the next natural poll. Sonde data
+  // (state.sondeObjects) is intentionally retained: disabling is a view action,
+  // its TTL sweep owns the data lifecycle, and re-enabling redraws it at once.
+  state.overlayLastLoad.delete(source);
 }
 
 function _overlayStatusClass(info) {
@@ -3734,7 +3749,7 @@ async function setOverlayEnabled(source, enabled) {
   if (enabled) {
     state.overlayEnabled.add(source);
     group.addTo(state.map);
-    if (source === "sonde") initSondeOverlayStream();
+    if (source === "sonde") { initSondeOverlayStream(); renderSondeOverlay(); } // redraw retained sondes at once on re-enable
     else await loadOverlaySource(source);
   } else {
     state.overlayEnabled.delete(source);
@@ -3853,46 +3868,97 @@ function _genericLivePopup(kind, name, rows, logData = null) {
   return `<div class="live-popup"><div class="live-popup-head"><span class="live-popup-name">${esc(name)}</span><span class="live-popup-kind">${esc(kind)}</span></div>${_popupGrid(rows)}<div class="live-popup-actions">${logData ? `<button class="btn small" onclick="logOverlayObject('${encoded}')">Log</button>` : ""}</div></div>`;
 }
 
-function renderAdsbOverlay(data) {
-  const group = _overlayGroup("adsb");
-  const markers = _overlayMarkerMap("adsb");
+function _overlayInView(lat, lon) {
+  if (!OVERLAY_CULL || !state.map) return true;
+  try { return state.map.getBounds().pad(OVERLAY_CULL_PAD).contains([lat, lon]); }
+  catch (_) { return true; }
+}
+
+// In-place marker sync for one overlay source: update existing markers rather
+// than destroying/recreating the whole group each poll (was the ADS-B lag cause;
+// now shared by every source). `items`: [{id, lat, lon, icon, popup, popupOpts?,
+// zIndexOffset?}]. The marker whose popup is currently open is left completely
+// untouched (no restyle, no removal) so an operator reading it or typing a DM is
+// never interrupted — this replaces the old global "freeze all overlays while any
+// popup is open" workaround. Off-view markers stay in the registry but out of the
+// map layer (viewport culling); _reflowOverlayCulling re-adds them on pan/zoom.
+function _syncOverlayMarkers(source, items) {
+  const group = _overlayGroup(source);
+  const markers = _overlayMarkerMap(source);
+  const open = state.openPopupMarker;
   const seen = new Set();
-  for (const ac of data.active || []) {
-    if (ac.lat == null || ac.lon == null) continue;
-    const id = String(ac.hex || ac.flight || ac.registration || "");
-    if (!id) continue;
-    seen.add(id);
-    const name = ac.flight || ac.registration || ac.hex || "Aircraft";
-    const popup = _genericLivePopup("ADS-B aircraft", name, [
-      ["Registration", ac.registration], ["Type", ac.type_name || ac.type_code], ["Altitude", ac.altitude != null ? `${Math.round(ac.altitude)} ft` : null], ["Speed", ac.speed != null ? `${Math.round(ac.speed)} kt` : null], ["Heading", ac.track != null ? `${Math.round(ac.track)}°` : null], ["Distance", ac.distance != null ? `${ac.distance} km` : null], ["Squawk", ac.squawk], ["Updated", `${_fmtOverlayAge(ac.last_seen)} ago`],
-    ], { kind: "ADS-B aircraft", name, lat: ac.lat, lon: ac.lon, details: `Altitude: ${ac.altitude ?? "—"} ft\nSpeed: ${ac.speed ?? "—"} kt\nSquawk: ${ac.squawk || "—"}` });
-    let marker = markers.get(id);
+  for (const it of items) {
+    if (it.lat == null || it.lon == null || !it.id) continue;
+    seen.add(it.id);
+    const inView = _overlayInView(it.lat, it.lon);
+    let marker = markers.get(it.id);
     if (marker) {
-      marker.setLatLng([ac.lat, ac.lon]);
-      marker.setIcon(_adsbIcon(ac));
-      marker.setPopupContent(popup);
-      if (!group.hasLayer(marker)) marker.addTo(group);
+      if (marker === open) continue; // leave an open popup fully untouched
+      marker.setLatLng([it.lat, it.lon]);
+      if (it.icon) marker.setIcon(it.icon);
+      marker.setPopupContent(it.popup);
+      if (inView && !group.hasLayer(marker)) marker.addTo(group);
+      else if (!inView && group.hasLayer(marker)) group.removeLayer(marker);
     } else {
-      marker = L.marker([ac.lat, ac.lon], { icon: _adsbIcon(ac), zIndexOffset: 300 }).bindPopup(popup).addTo(group);
-      markers.set(id, marker);
+      marker = L.marker([it.lat, it.lon], { icon: it.icon, zIndexOffset: it.zIndexOffset || 0 });
+      marker.bindPopup(it.popup, it.popupOpts || {});
+      markers.set(it.id, marker);
+      if (inView) marker.addTo(group);
     }
   }
   for (const [id, marker] of markers.entries()) {
-    if (seen.has(id)) continue;
+    if (seen.has(id) || marker === open) continue; // keep an open popup even if it left the feed
     group.removeLayer(marker);
     markers.delete(id);
   }
 }
 
+// Re-evaluate which registry markers are within the padded viewport (on pan/zoom).
+// Registry-only — no network fetch, so revealing off-screen markers is instant.
+function _reflowOverlayCulling() {
+  if (!OVERLAY_CULL || !state.map) return;
+  const open = state.openPopupMarker;
+  for (const [source, markers] of state.overlayMarkers.entries()) {
+    const group = _overlayGroup(source);
+    for (const marker of markers.values()) {
+      if (marker === open) continue;
+      const ll = marker.getLatLng();
+      const inView = _overlayInView(ll.lat, ll.lng);
+      const has = group.hasLayer(marker);
+      if (inView && !has) marker.addTo(group);
+      else if (!inView && has) group.removeLayer(marker);
+    }
+  }
+}
+
+function renderAdsbOverlay(data) {
+  const items = [];
+  for (const ac of data.active || []) {
+    if (ac.lat == null || ac.lon == null) continue;
+    const id = String(ac.hex || ac.flight || ac.registration || "");
+    if (!id) continue;
+    const name = ac.flight || ac.registration || ac.hex || "Aircraft";
+    const popup = _genericLivePopup("ADS-B aircraft", name, [
+      ["Registration", ac.registration], ["Type", ac.type_name || ac.type_code], ["Altitude", ac.altitude != null ? `${Math.round(ac.altitude)} ft` : null], ["Speed", ac.speed != null ? `${Math.round(ac.speed)} kt` : null], ["Heading", ac.track != null ? `${Math.round(ac.track)}°` : null], ["Distance", ac.distance != null ? `${ac.distance} km` : null], ["Squawk", ac.squawk], ["Updated", `${_fmtOverlayAge(ac.last_seen)} ago`],
+    ], { kind: "ADS-B aircraft", name, lat: ac.lat, lon: ac.lon, details: `Altitude: ${ac.altitude ?? "—"} ft\nSpeed: ${ac.speed ?? "—"} kt\nSquawk: ${ac.squawk || "—"}` });
+    items.push({ id, lat: ac.lat, lon: ac.lon, icon: _adsbIcon(ac), popup, zIndexOffset: 300 });
+  }
+  _syncOverlayMarkers("adsb", items);
+}
+
 function renderAisOverlay(data) {
-  const group = _overlayGroup("ais"); group.clearLayers();
+  const items = [];
   for (const ship of data.active || []) {
     if (ship.lat == null || ship.lon == null) continue;
+    const id = String(ship.mmsi || ship.callsign || ship.name || "");
+    if (!id) continue;
     const name = ship.name || ship.callsign || ship.mmsi || "Vessel";
-    L.marker([ship.lat, ship.lon], { icon: _aisIcon(ship), zIndexOffset: 250 }).bindPopup(_genericLivePopup("AIS vessel", name, [
+    const popup = _genericLivePopup("AIS vessel", name, [
       ["MMSI", ship.mmsi], ["Callsign", ship.callsign], ["Type", ship.ship_type_text || ship.station_type], ["Speed", ship.speed != null ? `${ship.speed} kn` : null], ["Course", ship.course != null ? `${ship.course}°` : null], ["Distance", ship.distance != null ? `${ship.distance} km` : null], ["Destination", ship.destination], ["Updated", `${_fmtOverlayAge(ship.last_seen)} ago`],
-    ], { kind: "AIS vessel", name, lat: ship.lat, lon: ship.lon, details: `MMSI: ${ship.mmsi || "—"}\nSpeed/course: ${ship.speed ?? "—"} kn / ${ship.course ?? "—"}°` })).addTo(group);
+    ], { kind: "AIS vessel", name, lat: ship.lat, lon: ship.lon, details: `MMSI: ${ship.mmsi || "—"}\nSpeed/course: ${ship.speed ?? "—"} kn / ${ship.course ?? "—"}°` });
+    items.push({ id, lat: ship.lat, lon: ship.lon, icon: _aisIcon(ship), popup, zIndexOffset: 250 });
   }
+  _syncOverlayMarkers("ais", items);
 }
 
 function _omPopup(node, network) {
@@ -3904,6 +3970,7 @@ function _omPopup(node, network) {
   const payload = encodeURIComponent(JSON.stringify({ kind: isMc ? "MeshCore node" : "Meshtastic node", name, lat: node.latitude, lon: node.longitude, details: rows.map(r => `${r[0]}: ${r[1] ?? "—"}`).join("\n") }));
   return `<div class="live-popup"><div class="live-popup-head"><span class="live-popup-name">${esc(name)}</span><span class="live-popup-kind">${isMc ? "MeshCore" : "Meshtastic"}</span></div>${_popupGrid(rows)}<div class="live-popup-actions">
     ${!node.is_local && !node.archived_only ? `<button class="btn small primary" onclick="toggleOverlayDm('${key}')">Send DM</button>` : ""}
+    ${!node.is_local ? `<button class="btn small" onclick="openCommsForNode('${network}','${encodeURIComponent(node.radio_id || "")}','${encodeURIComponent(target)}','${encodeURIComponent(name)}')">💬 Comms</button>` : ""}
     ${!node.archived_only ? `<button class="btn small" onclick="runOmOverlayAction('${network}','refresh','${encodeURIComponent(node.radio_id || "")}','${encodeURIComponent(target)}','${key}')">${isMc ? "Request status" : "Request position"}</button>` : ""}
     <button class="btn small" onclick="logOverlayObject('${payload}')">Log</button></div>
     ${!node.is_local && !node.archived_only ? `<div class="live-dm-box" id="live-dm-${key}" hidden><textarea id="live-dm-text-${key}" maxlength="200" placeholder="Direct message to ${esc(name)}"></textarea><button class="btn small primary" onclick="sendOmOverlayDm('${network}','${encodeURIComponent(node.radio_id || "")}','${encodeURIComponent(target)}','${key}')">Send</button></div>` : ""}
@@ -3911,25 +3978,26 @@ function _omPopup(node, network) {
 }
 
 function renderOmOverlay(data) {
-  const group = _overlayGroup("om"); group.clearLayers();
+  const items = [];
   for (const node of data.mt_nodes || []) {
     if (node.latitude == null || node.longitude == null || node.is_ignored) continue;
-    L.marker([node.latitude, node.longitude], { icon: _omMtIcon(node), zIndexOffset: 400 }).bindPopup(_omPopup(node, "mt"), { maxWidth: 340 }).addTo(group);
+    items.push({ id: `mt-${node.id}`, lat: node.latitude, lon: node.longitude, icon: _omMtIcon(node), popup: _omPopup(node, "mt"), popupOpts: { maxWidth: 340 }, zIndexOffset: 400 });
   }
   for (const node of data.mc_contacts || []) {
     if (node.latitude == null || node.longitude == null) continue;
-    L.marker([node.latitude, node.longitude], { icon: _omMcIcon(node.type ?? 0), zIndexOffset: 390 }).bindPopup(_omPopup(node, "mc"), { maxWidth: 340 }).addTo(group);
+    items.push({ id: `mc-${node.full_key || node.id}`, lat: node.latitude, lon: node.longitude, icon: _omMcIcon(node.type ?? 0), popup: _omPopup(node, "mc"), popupOpts: { maxWidth: 340 }, zIndexOffset: 390 });
   }
   for (const radio of data.mc_radios || []) {
     if (radio.status !== "connected" || radio.lat == null || radio.lon == null) continue;
     const name = radio.name || radio.node_name || radio.id || "MC Radio";
-    L.marker([radio.lat, radio.lon], { icon: _omMcRadioIcon(), zIndexOffset: 410 }).bindPopup(_genericLivePopup("MC radio", name, [["State", radio.status], ["Frequency", radio.freq], ["TX power", radio.tx_power != null ? `${radio.tx_power} dBm` : null]], { kind: "MeshCore radio", name, lat: radio.lat, lon: radio.lon, details: `Radio: ${radio.id || "—"}\nState: ${radio.status}` })).addTo(group);
+    items.push({ id: `radio-${radio.id}`, lat: radio.lat, lon: radio.lon, icon: _omMcRadioIcon(), zIndexOffset: 410, popup: _genericLivePopup("MC radio", name, [["State", radio.status], ["Frequency", radio.freq], ["TX power", radio.tx_power != null ? `${radio.tx_power} dBm` : null]], { kind: "MeshCore radio", name, lat: radio.lat, lon: radio.lon, details: `Radio: ${radio.id || "—"}\nState: ${radio.status}` }) });
   }
+  _syncOverlayMarkers("om", items);
 }
 
 async function loadOverlaySource(source) {
   if (!state.map || !state.overlayEnabled.has(source) || !state.overlayStatus[source]?.online || source === "sonde") return;
-  if (state.map._popup) return; // preserve an operator's open popup and typed DM
+  // No global freeze needed: _syncOverlayMarkers leaves the open-popup marker untouched.
   const now = Date.now();
   const minAge = source === "om" ? 15000 : 4000;
   if (now - Number(state.overlayLastLoad.get(source) || 0) < minAge) return;
@@ -3985,10 +4053,29 @@ function logOverlayObject(encoded) {
 function _renderSondeObject(data) {
   const id = data.id || data.callsign; if (!id || data.lat == null || data.lon == null) return;
   state.sondeObjects.set(id, { ...data, _updated_at: Date.now() / 1000 });
-  const group = _overlayGroup("sonde"); group.clearLayers();
-  for (const [sondeId, s] of state.sondeObjects.entries()) {
-    L.marker([s.lat, s.lon], { icon: _sondeIcon(sondeId), zIndexOffset: 350 }).bindPopup(_genericLivePopup("Radiosonde", sondeId, [["Type", s.type], ["Frequency", s.freq != null ? `${s.freq} MHz` : null], ["Altitude", s.alt != null ? `${Math.round(s.alt)} m` : null], ["Climb", s.vel_v != null ? `${Number(s.vel_v).toFixed(1)} m/s` : null], ["Speed", s.vel_h != null ? `${(Number(s.vel_h) * 3.6).toFixed(1)} km/h` : null], ["Temperature", s.temp != null ? `${Number(s.temp).toFixed(1)} °C` : null], ["Updated", `${_fmtOverlayAge(s._updated_at)} ago`]], { kind: "Radiosonde", name: sondeId, lat: s.lat, lon: s.lon, details: `Type: ${s.type || "—"}\nAltitude: ${s.alt ?? "—"} m\nFrequency: ${s.freq ?? "—"} MHz` })).addTo(group);
+  renderSondeOverlay();
+}
+
+// Sondes arrive as an accumulating telemetry stream (unlike the poll-based feeds,
+// which self-expire), so drop objects with no update inside the TTL — otherwise a
+// landed/dead sonde lingers on the map forever.
+function _sweepSondeObjects() {
+  const cutoff = Date.now() / 1000 - SONDE_TTL_SEC;
+  for (const [id, s] of state.sondeObjects.entries()) {
+    if ((s._updated_at || 0) < cutoff) state.sondeObjects.delete(id);
   }
+}
+
+function renderSondeOverlay() {
+  if (!state.overlayEnabled.has("sonde")) return; // don't draw while toggled off (telemetry still accumulates, just hidden)
+  _sweepSondeObjects();
+  const items = [];
+  for (const [sondeId, s] of state.sondeObjects.entries()) {
+    if (s.lat == null || s.lon == null) continue;
+    items.push({ id: sondeId, lat: s.lat, lon: s.lon, icon: _sondeIcon(sondeId), zIndexOffset: 350,
+      popup: _genericLivePopup("Radiosonde", sondeId, [["Type", s.type], ["Frequency", s.freq != null ? `${s.freq} MHz` : null], ["Altitude", s.alt != null ? `${Math.round(s.alt)} m` : null], ["Climb", s.vel_v != null ? `${Number(s.vel_v).toFixed(1)} m/s` : null], ["Speed", s.vel_h != null ? `${(Number(s.vel_h) * 3.6).toFixed(1)} km/h` : null], ["Temperature", s.temp != null ? `${Number(s.temp).toFixed(1)} °C` : null], ["Updated", `${_fmtOverlayAge(s._updated_at)} ago`]], { kind: "Radiosonde", name: sondeId, lat: s.lat, lon: s.lon, details: `Type: ${s.type || "—"}\nAltitude: ${s.alt ?? "—"} m\nFrequency: ${s.freq ?? "—"} MHz` }) });
+  }
+  _syncOverlayMarkers("sonde", items);
 }
 
 function _loadSocketIo(url) {
@@ -4009,9 +4096,249 @@ async function initSondeOverlayStream() {
 }
 
 async function initLiveOverlays() {
+  // Track the open popup's marker (public events) so renders never disturb it,
+  // and re-cull the registry against the viewport on pan/zoom.
+  state.map.on("popupopen", (e) => { state.openPopupMarker = e.popup?._source || null; });
+  state.map.on("popupclose", () => { state.openPopupMarker = null; });
+  state.map.on("moveend", _reflowOverlayCulling);
+  state.map.on("zoomend", _reflowOverlayCulling);
   await loadOverlayStatus();
   for (const source of [...state.overlayEnabled]) if (state.overlayStatus[source]?.online) _overlayGroup(source).addTo(state.map);
   await pollEnabledOverlays(); clearInterval(state.overlayPoll); state.overlayPoll = setInterval(pollEnabledOverlays, 4000); setInterval(loadOverlayStatus, 12000);
+  // Sondes stream in; sweep TTL + refresh ages even when no new telemetry arrives.
+  setInterval(() => { if (state.overlayEnabled.has("sonde")) renderSondeOverlay(); }, 30000);
+}
+
+// ===== MESH COMMS (read-only channels + DMs from OverMesh) =====
+let _commsOpen = false;
+let _commsPoll = 0;
+let _commsThreads = new Map();     // key -> {key,network,radio_id,kind,channel,peer_id,title,messages,last_ts}
+let _commsActive = null;           // open thread key, or null for the list
+let _commsOnline = false;
+let _commsSilent = false;
+let _commsForceScroll = false;
+let _commsPinned = null;           // a DM thread opened from a map node before it has messages
+let _commsSSE = null;
+let _commsSSEDebounce = 0;
+let _commsSeen = (function () { try { return JSON.parse(localStorage.getItem("ops_toc_comms_seen") || "{}"); } catch (_) { return {}; } })();
+function _commsSaveSeen() { try { localStorage.setItem("ops_toc_comms_seen", JSON.stringify(_commsSeen)); } catch (_) {} }
+
+function toggleCommsPanel(open) {
+  const panel = el("comms-panel"); if (!panel) return;
+  const next = (open === undefined) ? panel.hidden : open; // clicking the button opens when hidden
+  panel.hidden = !next;
+  _commsOpen = next;
+  el("comms-btn")?.classList.toggle("active", next);
+  clearInterval(_commsPoll); _commsPoll = 0;
+  if (next) { loadComms(); _commsPoll = setInterval(loadComms, 4000); _commsOpenStream(); }
+  else { _commsPinned = null; _commsCloseStream(); }
+}
+
+// Live push: proxy OM's SSE through OPS-TOC (same-origin) and use it purely as a
+// "refresh now" trigger — the normalized 4s poll stays the source of truth, so if
+// SSE drops, nothing breaks. Filters to actual message events (skips keepalives +
+// status/heartbeat events); debounced so a burst = one refresh.
+function _commsOpenStream() {
+  if (_commsSSE || !_commsOpen || typeof EventSource === "undefined") return;
+  try {
+    _commsSSE = new EventSource("/api/comms/stream");
+    _commsSSE.onmessage = (e) => {
+      let d; try { d = JSON.parse(e.data); } catch (_) { return; }
+      if (d.is_history) return;
+      const isMsg = d.text !== undefined && d.ts !== undefined && (d.type === undefined || d.type === "mc_message");
+      if (!isMsg) return;
+      clearTimeout(_commsSSEDebounce);
+      _commsSSEDebounce = setTimeout(() => { if (_commsOpen) loadComms(); }, 300);
+    };
+    _commsSSE.onerror = () => {}; // EventSource auto-reconnects; the poll covers any gap
+  } catch (_) { _commsSSE = null; }
+}
+
+function _commsCloseStream() {
+  if (_commsSSE) { try { _commsSSE.close(); } catch (_) {} _commsSSE = null; }
+  clearTimeout(_commsSSEDebounce);
+}
+
+function _commsThreadKey(m) {
+  return m.is_dm ? `${m.network}:${m.radio_id || ""}:dm:${m.peer_id || ""}`
+                 : `${m.network}:${m.radio_id || ""}:ch:${m.channel}`;
+}
+
+async function loadComms() {
+  if (!_commsOpen) return;
+  let data;
+  try { data = await api("/api/comms/messages"); }
+  catch (_) { _commsOnline = false; renderComms(); return; }
+  _commsOnline = !!data.online;
+  _commsSilent = !!data.silent;
+  const threads = new Map();
+  for (const m of data.messages || []) {
+    const key = _commsThreadKey(m);
+    let t = threads.get(key);
+    if (!t) {
+      t = { key, network: m.network, radio_id: m.radio_id, kind: m.is_dm ? "dm" : "channel",
+            channel: m.channel, peer_id: m.peer_id,
+            title: m.is_dm ? (m.peer_name || m.peer_id || "Unknown node")
+                           : (m.channel_name || (m.channel === 0 ? "Primary" : `CH${m.channel}`)),
+            messages: [], last_ts: 0 };
+      threads.set(key, t);
+    }
+    t.messages.push(m);
+    const _o = m.order || m.ts || 0;
+    if (_o > t.last_ts) t.last_ts = _o;
+    if (m.is_dm && m.peer_name) t.title = m.peer_name; // prefer a resolved name if it arrives later
+  }
+  _commsThreads = threads;
+  _commsEnsurePinned();
+  renderComms();
+}
+
+// Keep a map-opened DM thread alive across polls until it has real messages, so
+// you can start a DM to a node you've never messaged. Clears itself once the
+// real thread (with messages) exists.
+function _commsEnsurePinned() {
+  if (!_commsPinned) return;
+  if (_commsThreads.has(_commsPinned.key)) { _commsPinned = null; return; }
+  _commsThreads.set(_commsPinned.key, {
+    key: _commsPinned.key, network: _commsPinned.network, radio_id: _commsPinned.radio_id,
+    kind: "dm", channel: 0, peer_id: _commsPinned.peer_id, title: _commsPinned.title, messages: [], last_ts: 0,
+  });
+}
+
+function _commsUnread(t) {
+  const seen = _commsSeen[t.key] || 0;
+  return t.messages.reduce((n, m) => n + ((!m.sent && (m.order || m.ts || 0) > seen) ? 1 : 0), 0);
+}
+
+function renderComms() {
+  const sub = el("comms-subtitle");
+  if (sub) sub.textContent = _commsOnline ? "Read-only — OverMesh owns the radios." : "OverMesh offline.";
+  if (_commsActive && _commsThreads.has(_commsActive)) renderCommsMessages();
+  else renderCommsThreadList();
+}
+
+function _commsRow(t) {
+  const last = t.messages[t.messages.length - 1];
+  const preview = last ? `${last.sent ? "You: " : (last.from_name ? esc(last.from_name) + ": " : "")}${esc((last.text || "").slice(0, 46))}` : "";
+  const unread = _commsUnread(t);
+  return `<div class="list-row" data-thread="${esc(t.key)}">
+    <div class="row-icon">${t.kind === "channel" ? "#" : "@"}</div>
+    <div class="row-main"><div class="row-title">${esc(t.title)}</div><div class="row-sub">${preview}</div></div>
+    ${unread ? `<div class="comms-row-badge">${unread}</div>` : `<div class="comms-row-time">${_fmtOverlayAge(t.last_ts)}</div>`}
+  </div>`;
+}
+
+function renderCommsThreadList() {
+  el("comms-thread-view").hidden = true;
+  const comp = el("comms-composer"); if (comp) comp.hidden = true; // composer only in a thread
+  const box = el("comms-threads"); if (!box) return;
+  box.hidden = false;
+  if (!_commsOnline) { box.innerHTML = `<div class="comms-offline">OverMesh is offline — no comms to show.</div>`; return; }
+  const threads = [..._commsThreads.values()].sort((a, b) => b.last_ts - a.last_ts);
+  if (!threads.length) { box.innerHTML = `<div class="empty">No messages yet.</div>`; return; }
+  const pick = (net, kind) => threads.filter(t => t.network === net && t.kind === kind);
+  const section = (label, list) => list.length ? `<div class="comms-group-label">${label}</div>` + list.map(_commsRow).join("") : "";
+  box.innerHTML = section("Meshtastic · Channels", pick("mt", "channel"))
+                + section("Meshtastic · Direct", pick("mt", "dm"))
+                + section("MeshCore · Channels", pick("mc", "channel"))
+                + section("MeshCore · Direct", pick("mc", "dm"));
+  box.querySelectorAll("[data-thread]").forEach(r => { r.onclick = () => openCommsThread(r.dataset.thread); });
+}
+
+function openCommsThread(key) {
+  _commsActive = key; _commsForceScroll = true;
+  const t = _commsThreads.get(key);
+  if (t) { _commsSeen[key] = Math.max(_commsSeen[key] || 0, t.last_ts); _commsSaveSeen(); }
+  renderCommsMessages();
+}
+
+function commsCloseThread() { _commsActive = null; _commsPinned = null; renderCommsThreadList(); }
+
+// Map → comms: open a mesh node's DM thread in the Comms panel (called from an
+// OM overlay popup). Synthesizes an empty thread if none exists yet so you can
+// start the first DM to that node right from the map.
+function openCommsForNode(network, radioIdEnc, peerIdEnc, nameEnc) {
+  const radioId = decodeURIComponent(radioIdEnc || "");
+  const peerId = decodeURIComponent(peerIdEnc || "");
+  const name = decodeURIComponent(nameEnc || "");
+  if (!peerId) return;
+  const key = `${network}:${radioId}:dm:${peerId}`;
+  _commsPinned = { key, network, radio_id: radioId, peer_id: peerId, title: name || peerId };
+  toggleCommsPanel(true);
+  _commsActive = key;
+  _commsForceScroll = true;
+  _commsEnsurePinned();
+  renderComms();
+}
+
+function renderCommsMessages() {
+  const t = _commsThreads.get(_commsActive);
+  el("comms-threads").hidden = true;
+  el("comms-thread-view").hidden = false;
+  el("comms-thread-title").innerHTML = t
+    ? `${esc(t.title)} <span class="comms-thread-net">${t.network === "mt" ? "MT" : "MC"} · ${t.kind === "dm" ? "DM" : "channel"}</span>`
+    : "Thread";
+  const msgBox = el("comms-messages"); if (!msgBox) return;
+  if (!t) { msgBox.innerHTML = `<div class="empty">Thread no longer available.</div>`; const c = el("comms-composer"); if (c) c.hidden = true; return; }
+  _commsSeen[t.key] = Math.max(_commsSeen[t.key] || 0, t.last_ts); _commsSaveSeen();
+  const scroller = el("comms-body");
+  const wasAtBottom = scroller ? (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 60) : true;
+  msgBox.innerHTML = t.messages.map(m => {
+    const time = new Date((m.ts || 0) * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const showFrom = !m.sent && t.kind === "channel";
+    return `<div class="comms-msg ${m.sent ? "sent" : ""}"><div class="comms-bubble">
+      <div class="comms-msg-meta">${showFrom ? `<span class="comms-msg-from">${esc(m.from_name || m.from_id || "?")}</span>` : ""}<span class="comms-msg-time">${time}${m.sent ? ({ delivered: " ✓", acked: " ✓", read: " ✓✓", failed: " ✗", error: " ✗" }[m.status] || " ✓") : ""}</span></div>
+      <div class="comms-msg-text">${esc(m.text || "")}</div></div></div>`;
+  }).join("") || `<div class="empty">No messages in this thread.</div>`;
+  _commsUpdateComposer(t);
+  if (scroller && (_commsForceScroll || wasAtBottom)) scroller.scrollTop = scroller.scrollHeight;
+  _commsForceScroll = false;
+}
+
+function _commsSetStatus(msg) {
+  const s = el("comms-send-status"); if (!s) return;
+  s.textContent = msg || ""; s.hidden = !msg;
+}
+
+function _commsUpdateComposer(t) {
+  const comp = el("comms-composer"); if (!comp) return;
+  comp.hidden = false;
+  const input = el("comms-input"), btn = el("comms-send-btn");
+  if (_commsSilent) {
+    if (input) { input.disabled = true; input.placeholder = "Silent Running active — TX blocked"; }
+    if (btn) btn.disabled = true;
+    _commsSetStatus("🔇 Silent Running active — transmissions blocked.");
+  } else {
+    if (input) { input.disabled = false; input.placeholder = t.kind === "dm" ? `Message ${t.title}…` : `Message #${t.title}…`; }
+    if (btn) btn.disabled = false;
+    if ((el("comms-send-status")?.textContent || "").startsWith("🔇")) _commsSetStatus("");
+  }
+}
+
+function commsInputKey(e) {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); commsSend(); } // Enter sends, Shift+Enter = newline
+}
+
+async function commsSend() {
+  const t = _commsThreads.get(_commsActive); if (!t) return;
+  const input = el("comms-input"); const text = (input?.value || "").trim();
+  if (!text) return;
+  const btn = el("comms-send-btn"); if (btn) btn.disabled = true;
+  _commsSetStatus("Sending…");
+  try {
+    await api("/api/comms/send", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ network: t.network, kind: t.kind, radio_id: t.radio_id, channel: t.channel, peer_id: t.peer_id, text }),
+    });
+    if (input) input.value = "";
+    _commsSetStatus("Sent.");
+    setTimeout(() => { if ((el("comms-send-status")?.textContent || "") === "Sent.") _commsSetStatus(""); }, 2500);
+    loadComms();
+  } catch (err) {
+    _commsSetStatus(`Failed: ${err.message || err}`);
+  } finally {
+    if (btn && !_commsSilent) btn.disabled = false;
+  }
 }
 
 function initMap() {

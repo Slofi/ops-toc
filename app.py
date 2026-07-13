@@ -21,7 +21,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
-from flask import Flask, Response, jsonify, render_template, request, send_file
+from flask import Flask, Response, jsonify, render_template, request, send_file, stream_with_context
 
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -2861,6 +2861,204 @@ def api_overlay_om_action():
         return jsonify(result)
     except RuntimeError as exc:
         return jsonify({"error": str(exc)}), 502
+
+
+# ── Comms (read-only mesh messages: MT + MC channels & DMs) ────────────────────
+# OPS-TOC displays OverMesh's messages; OM stays the owner of the radios and of
+# Silent Running. Read-only — no send here. NOTE: MC's /channels endpoint queries
+# the device live (~30s), so it is deliberately NOT called on this poll path; MC
+# channel threads are derived from each message's channel index instead.
+
+def _comms_norm(m, network, radio_id, radio_name, channel_names=None):
+    is_dm = bool(m.get("is_dm")) if network == "mt" else (m.get("subtype") == "dm")
+    sent = bool(m.get("sent"))
+    ch = int(m.get("channel") or 0)
+    if is_dm:
+        peer_id, peer_name = (m.get("to_id"), m.get("to_name")) if sent else (m.get("from_id"), m.get("from_name"))
+    else:
+        peer_id = peer_name = None
+    ch_name = (channel_names or {}).get(ch)
+    if not ch_name:
+        ch_name = "Primary" if (network == "mt" and ch == 0) else f"CH{ch}"
+    # Order by arrival, not the message's own ts: relayed/received MT messages can
+    # carry a much older embedded ts that would bury them out of order. The id is
+    # assigned on arrival ("<epoch>-<seq>" for MT), so its epoch prefix is the true
+    # local order. MC ids aren't time-based → fall back to ts.
+    order = int(m.get("ts") or 0)
+    head = str(m.get("id") or "").split("-", 1)[0]
+    if network == "mt" and head.isdigit():
+        order = int(head)
+    return {
+        "network": network, "radio_id": radio_id or m.get("radio_id"), "radio_name": radio_name,
+        "is_dm": is_dm, "channel": ch, "channel_name": ch_name,
+        "from_id": m.get("from_id"), "from_name": m.get("from_name"),
+        "to_id": m.get("to_id"), "to_name": m.get("to_name"),
+        "peer_id": peer_id, "peer_name": peer_name,
+        "text": m.get("text") or "", "ts": int(m.get("ts") or 0), "order": order,
+        "sent": sent, "status": m.get("status"),
+    }
+
+
+# MC channel names require a live device query (~seconds, up to ~30s) — so fetch
+# them lazily in a background thread and cache, never on the hot poll path. First
+# view of an MC radio shows CHn; names fill in within a poll cycle once cached.
+_mc_chan_cache: dict[str, dict[str, Any]] = {}   # radio_id -> {"names": {idx: name}, "ts": epoch}
+_mc_chan_inflight: set[str] = set()
+_mc_chan_lock = threading.Lock()
+_MC_CHAN_TTL = 1800  # channels rarely change — refresh at most every 30 min
+
+
+def _mc_channel_names_fetch(radio_id: str) -> None:
+    try:
+        data = _overlay_request_json(
+            f'{OVERLAY_URLS["om"]}/api/mc/{urllib.parse.quote(radio_id, safe="")}/channels', timeout=35
+        )
+        names = {ch.get("idx"): ch.get("name") for ch in (data.get("channels") or [])
+                 if ch.get("idx") is not None and ch.get("name")}
+    except Exception:
+        names = {}
+    with _mc_chan_lock:
+        _mc_chan_cache[radio_id] = {"names": names, "ts": time.time()}
+        _mc_chan_inflight.discard(radio_id)
+
+
+def _mc_channel_names(radio_id: str) -> dict:
+    with _mc_chan_lock:
+        entry = _mc_chan_cache.get(radio_id)
+        if entry and (time.time() - entry["ts"] < _MC_CHAN_TTL):
+            return entry["names"]
+        stale = entry["names"] if entry else {}
+        if radio_id in _mc_chan_inflight:
+            return stale
+        _mc_chan_inflight.add(radio_id)
+    threading.Thread(target=_mc_channel_names_fetch, args=(radio_id,), daemon=True).start()
+    return stale
+
+
+@app.route("/api/comms/messages")
+def api_comms_messages():
+    messages: list[dict[str, Any]] = []
+    mt_channels: list[dict[str, Any]] = []
+    radios: list[dict[str, Any]] = []
+    online = False
+
+    # Meshtastic — one call returns channel messages + DMs
+    try:
+        mt = _overlay_request_json(f'{OVERLAY_URLS["om"]}/api/chat/messages?limit=300')
+        online = True
+        try:
+            chans = _overlay_request_json(f'{OVERLAY_URLS["om"]}/api/chat/channels')
+        except RuntimeError:
+            chans = []
+        ch_names = {c.get("index"): c.get("name") for c in chans if isinstance(c, dict)}
+        mt_channels = [{"index": c.get("index"), "name": c.get("name")} for c in chans if isinstance(c, dict)]
+        for m in (mt.get("messages") or []):
+            messages.append(_comms_norm(m, "mt", m.get("radio_id"), None, ch_names))
+    except RuntimeError:
+        pass
+
+    # MeshCore — per connected radio (concurrent), messages only
+    try:
+        mc_status = _overlay_request_json(f'{OVERLAY_URLS["om"]}/api/mc/status')
+        online = True
+        mc_radios = [r for r in mc_status.get("mc_nodes", []) if r.get("id")]
+        radios = [{"id": r.get("id"), "name": r.get("name") or r.get("id"), "status": r.get("status")} for r in mc_radios]
+        connected = [r for r in mc_radios if r.get("status") == "connected"]
+
+        def fetch_mc(radio):
+            rid = str(radio.get("id"))
+            rname = radio.get("name") or rid
+            try:
+                data = _overlay_request_json(f'{OVERLAY_URLS["om"]}/api/mc/{urllib.parse.quote(rid, safe="")}/messages?limit=300')
+            except RuntimeError:
+                return []
+            names = _mc_channel_names(rid)
+            return [_comms_norm(m, "mc", rid, rname, names) for m in (data.get("messages") or [])]
+
+        if connected:
+            with ThreadPoolExecutor(max_workers=max(1, min(4, len(connected)))) as pool:
+                for items in pool.map(fetch_mc, connected):
+                    messages.extend(items)
+    except RuntimeError:
+        pass
+
+    silent = False
+    try:
+        s = _overlay_request_json(f'{OVERLAY_URLS["om"]}/api/silent_mode')
+        silent = bool(s.get("silent_mode")) if isinstance(s, dict) else False
+    except RuntimeError:
+        pass
+
+    messages.sort(key=lambda m: m.get("order") or 0)
+    return jsonify({"online": online, "silent": silent, "messages": messages, "mt_channels": mt_channels, "radios": radios, "generated": time.time()})
+
+
+@app.route("/api/comms/send", methods=["POST"])
+def api_comms_send():
+    # The read-only presenter turns writer here: proxy a message send to OM, which
+    # stays the owner of the radios and of Silent Running (OM returns 409 if active).
+    data = request.get_json(silent=True) or {}
+    network = str(data.get("network") or "").lower()
+    kind = str(data.get("kind") or "").lower()      # "channel" | "dm"
+    text = str(data.get("text") or "").strip()
+    if not text:
+        return jsonify({"error": "Message is empty"}), 400
+    radio_id = str(data.get("radio_id") or "")
+    peer_id = str(data.get("peer_id") or "")
+    try:
+        channel = int(data.get("channel") or 0)
+    except (TypeError, ValueError):
+        channel = 0
+
+    if network == "mt":
+        payload = {"text": text, "channel": channel}
+        if kind == "dm":
+            if not peer_id:
+                return jsonify({"error": "DM target required"}), 400
+            payload["dest_id"] = peer_id
+        path = "/api/chat/send"
+    elif network == "mc":
+        if not radio_id:
+            return jsonify({"error": "MC radio required"}), 400
+        if kind == "dm":
+            if not peer_id:
+                return jsonify({"error": "DM target required"}), 400
+            path = f'/api/mc/{urllib.parse.quote(radio_id, safe="")}/send_dm'
+            payload = {"text": text, "target": peer_id}
+        else:
+            path = f'/api/mc/{urllib.parse.quote(radio_id, safe="")}/send_chan'
+            payload = {"text": text, "channel": channel}
+    else:
+        return jsonify({"error": "Unknown network"}), 400
+
+    try:
+        result = _overlay_request_json(f'{OVERLAY_URLS["om"]}{path}', method="POST", payload=payload, timeout=20)
+        return jsonify({"ok": True, "result": result})
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 502
+
+
+@app.route("/api/comms/stream")
+def api_comms_stream():
+    # SSE proxy: relay OM's /api/chat/stream (MT messages + push_to_sse'd MC
+    # messages + status events) to the OPS-TOC browser same-origin — OM sets no
+    # CORS, so a direct EventSource can't reach it. Read-only. The frontend uses
+    # this only as a "something changed" trigger to re-poll /api/comms/messages
+    # instantly; the 4 s poll stays the reliable baseline if this drops.
+    def relay():
+        try:
+            req = urllib.request.Request(
+                f'{OVERLAY_URLS["om"]}/api/chat/stream', headers={"Accept": "text/event-stream"}
+            )
+            with urllib.request.urlopen(req, timeout=None) as up:
+                for chunk in up:
+                    yield chunk
+        except Exception:
+            yield b": upstream unavailable\n\n"
+    resp = Response(stream_with_context(relay()), mimetype="text/event-stream")
+    resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["X-Accel-Buffering"] = "no"
+    return resp
 
 
 # ── GPS ───────────────────────────────────────────────────────────────────────

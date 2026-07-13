@@ -81,6 +81,7 @@
           <div class="overlay-panel-foot">Specialist apps remain the data and radio owners.</div>
         </div>
       </div>
+      <button class="btn" id="comms-btn" title="Mesh comms — channels &amp; DMs (read-only)" onclick="toggleCommsPanel()">Comms</button>
       <button class="btn icon-btn" id="gps-btn" title="GPS position" onclick="gpsGoTo()">
         ⊙ GPS
       </button>
@@ -258,6 +259,32 @@
           <div id="magnifier-map"></div>
         </div>
         <div id="map"></div>
+        <aside id="comms-panel" hidden aria-label="Mesh comms">
+          <div class="panel-head">
+            <div>
+              <div class="panel-title">Comms</div>
+              <div class="panel-subtitle" id="comms-subtitle">Read-only — OverMesh owns the radios.</div>
+            </div>
+            <button class="btn small" onclick="toggleCommsPanel(false)">Close</button>
+          </div>
+          <div id="comms-body">
+            <div id="comms-threads"></div>
+            <div id="comms-thread-view" hidden>
+              <div class="comms-thread-head">
+                <button class="btn small" onclick="commsCloseThread()">‹ Threads</button>
+                <div class="comms-thread-title" id="comms-thread-title"></div>
+              </div>
+              <div id="comms-messages"></div>
+            </div>
+          </div>
+          <div id="comms-composer" hidden>
+            <div id="comms-send-status" hidden></div>
+            <div class="comms-composer-row">
+              <textarea id="comms-input" rows="1" maxlength="220" placeholder="Message…" aria-label="Message" onkeydown="commsInputKey(event)"></textarea>
+              <button class="btn small primary" id="comms-send-btn" onclick="commsSend()">Send</button>
+            </div>
+          </div>
+        </aside>
       </section>
     </div><!-- end tab-map -->
 

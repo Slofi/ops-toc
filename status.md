@@ -1,22 +1,15 @@
 type:: project
 status:: active
 tags:: #ops-toc #map-app #leaflet #offline-maps #field-log #cyberdeck
-updated:: 2026-07-07
+updated:: 2026-07-11
 
 # OPS-TOC
 
 > OPS-TOC is the Cyberdeck's main map-management and field-operations app. It owns markers, drawings, GPS tracks, offline tile downloads, LOG, MISSIONS, SOP, and CHECKLIST. Shared tile DB feeds Sonde App, OM, and future apps.
 
-## State
-
-| **Status**    | Active — started via Dashboard tile, not enabled at boot |
-| **Port**      | 8090 |
-| **Host**      | Cyberdeck (rock-5b, 100.97.104.107) |
-| **Service**   | ops-toc.service (user systemd, NOT enabled) |
-| **Data dir**  | ~/maps/ (DB + MBTiles shared with all CD apps) |
-| **Repo**      | github.com/Slofi/ops-toc |
-| **Git location** | `~/Projects/ops-toc/` (direct — no longer via map-app/) |
-| **Latest pushed app commit** | `ee2001e` — moving/stopped after-action breakdown |
+> **📇 Quick-reference card → [[ops-toc-overview]]** (`ops-toc-overview.md`)
+> Crucial info / Quick Commands / Troubleshooting-Recovery live in the card (for Filip + Haskill).
+> This file = full context, decisions & changelog (for Claude).
 
 ## Access
 
@@ -26,20 +19,6 @@ updated:: 2026-07-07
 | Lite URL | http://localhost:8090/lite — compact touch UI for HD 5" screen (same backend/JS, `lite.css` skin) |
 | App path | ~/Projects/ops-toc/ |
 | Service  | systemctl --user start/stop/restart ops-toc |
-
-## Quick Commands
-
-**Start/stop:**
-```bash
-systemctl --user start ops-toc
-systemctl --user stop ops-toc
-systemctl --user restart ops-toc
-```
-
-**Logs:**
-```bash
-journalctl --user -u ops-toc -f
-```
 
 ## Key Paths
 
@@ -69,7 +48,38 @@ journalctl --user -u ops-toc -f
 - 2026-06-09 field boot issue: `gpsd` auto-claimed `/dev/ttyACM0`, making OPS-TOC show "Device or resource busy". Persistent fix applied: `gpsd.service` and `gpsd.socket` are now masked to `/dev/null` on the CD.
 - GPS port selection defaults to `auto`: OPS-TOC scans USB-serial devices, matches USB product/manufacturer strings against a GPS/GNSS keyword list (u-blox, GNSS, GPS, Beitian, Garmin, …), and resolves the match to its `/dev/serial/by-id/*` symlink. Works on either CD USB-A socket and across dongle swaps without reconfiguration. Manual override (a specific by-id or raw device) still available in GPS settings.
 
+**made by Codex — start**
+
+- The MAP toolbar now includes a `Live` operational-overlay panel for OverMesh nodes, ADS-B aircraft, AIS vessels, and radiosondes. Offline specialist apps are shown grey with disabled toggles; running apps expose persisted display toggles and source/decoder status.
+- OPS-TOC consumes specialist-app data read-only through local adapters. OM still owns all MT/MC state and transmissions; OPS-TOC's node popups proxy DM and position/status requests back through OM so Silent Running and radio-specific behavior remain authoritative there.
+- Live-object popups include source details and a structured `Log` action. MC contacts heard by multiple radios are deduplicated for the map, and stale/archived mesh positions are faded.
+- ADS-B markers update in place through a keyed Leaflet marker registry rather than being destroyed/recreated each poll; overlay polling is guarded against overlapping cycles. This fixed the intermittent lag/display-loss behavior and was confirmed by Filip on the Cyberdeck on 2026-07-11.
+- Operational-overlay implementation and changelog were pushed to OPS-TOC `master` as commit `4d2b267` (`Add operational map overlays`) on 2026-07-11.
+
+**made by Codex — end**
+
+**[Claude] 2026-07-13 — overlay performance & robustness pass (frontend only, backend proxy untouched):**
+- The in-place keyed-marker registry (ADS-B only until now) is **shared by all sources**. AIS, OverMesh (MT/MC contacts/radios), and Sonde previously cleared and rebuilt their whole marker group every cycle (OM rebuilt ~283 positioned markers every 15 s); all now update markers in place and remove only what left the feed.
+- Removed the global "freeze all overlays while any popup is open" workaround (it also leaned on Leaflet's private `map._popup`). The open popup's marker is tracked via public `popupopen`/`popupclose` events and left untouched during refresh, so one open popup no longer pauses the other sources.
+- **Viewport culling:** every marker stays in the in-memory registry, but only those within a padded viewport are added to the map layer; pan/zoom re-flows membership with no network fetch. Disable via `OVERLAY_CULL` in `app.js` (`OVERLAY_CULL_PAD` = margin).
+- **Sonde TTL:** the accumulating radiosonde stream drops objects with no telemetry for 30 min (`SONDE_TTL_SEC`) via a per-update sweep + 30 s timer, so landed/dead sondes stop lingering. Poll feeds (OM/AIS/ADS-B) already self-expire via their `active` lists.
+
+**[Claude] 2026-07-13 — Comms panel (Phase 1, read-only):**
+- New toolbar `Comms` button opens a **right-side drawer** over the map showing OverMesh messages as threads: MT + MC **channels and DMs**, master-detail (thread list → message view), unread badges, chat bubbles, polled every 4 s only while open.
+- Backend proxy `GET /api/comms/messages` fans out to OM (MT `/api/chat/messages` + `/api/chat/channels`; each connected MC radio's `/api/mc/<id>/messages`), normalized + threaded client-side. **Read-only — OM owns the radios & Silent Running.** MC's live `/channels` query (~30 s device call) is intentionally not used; MC channels are labelled `CHn` from the message index.
+- Verified live: 345 messages correctly threaded (MT channel names resolve; MC channels CH0–2; MT+MC DMs). Frontend rendering pending an on-CD browser check.
+- MC channel names now resolve to real names (lazy background-cached device query, 30-min TTL — shows `CHn` only until the first fetch completes). Thread list is split by network (Meshtastic/MeshCore × Channels/Direct). Remaining minor gap: MC DM peers with no stored name still show their hex key.
+- **Phase 2 (reply composer) DONE:** in-thread composer proxies sends via `POST /api/comms/send` (MT `/api/chat/send`; MC `/send_chan` / `/send_dm`). OM owns TX + Silent Running — composer greys proactively via the `silent` flag (`/api/silent_mode`) and surfaces OM's 409. First live send confirmed by Filip (MC channel). **Phase 3a (map↔comms link) DONE:** OM node popups → "💬 Comms" button opens that node's DM thread (synthesizes + pins an empty thread if none yet, so you can start a DM from the map). **Also fixed OM** so MC sends broadcast to OM's own UI live (`push_to_sse` in `routes/mc.py`; OM restarted on CD). **Phase 3b (live SSE) DONE → Phase 3 COMPLETE:** same-origin SSE proxy `GET /api/comms/stream` relays OM's `/api/chat/stream`; frontend EventSource uses it as a "refresh now" trigger (debounced `loadComms()`) so the 4s poll stays source-of-truth and a dropped SSE degrades to the poll. Proven non-blocking (Flask threaded; concurrent reqs ~0.08s while SSE held). New MT/MC messages now appear ~sub-second.
+
 ## Pending
+
+**made by Codex — start**
+
+- **Live-overlay remaining field check:** Filip confirmed the OverMesh and ADS-B overlays working in the live Cyberdeck browser on 2026-07-11. AIS and Sonde still need validation while their source apps are active. Actual OM DM/position/status transmission buttons were intentionally not test-fired during development.
+
+**made by Codex — end**
+
+- **[Claude] Overlay performance pass (2026-07-13) needs a live browser check on the CD** — especially viewport culling (markers appear/disappear correctly on pan/zoom, nothing important hidden) and the in-place updates for AIS/OM/Sonde. Escape hatch if culling ever hides something it shouldn't: set `OVERLAY_CULL = false` in `app.js` (one line, reload the tab). Folds into the still-open AIS/Sonde source validation above.
 
 - **Internal GPS (BN-280 on UART3 /dev/ttyS3) is electrically working but reception is flickery.** Confirmed 2026-06-30: OPS-TOC must use explicit `/dev/ttyS3`; `auto` only follows USB GPS dongles. Morning balcony test produced a real direct fix (`fix=true`, `lat=46.039179`, `lon=14.497671`, `alt=302`, `sats=8`, `sats_view=13`). Evening balcony retest in the same place showed no fix and `sats_view=0`, while an exclusive serial baud sweep confirmed the module was still emitting clean NMEA at 9600 (`$GNRMC`, `$GNGGA`, `$GPGSV`, `$GLGSV`) with fix quality 0 and zero satellites. Current interpretation: not dead and not an OPS-TOC parser/config issue; likely RF/antenna orientation/case/noise/placement sensitivity or intermittent module behavior.
 
@@ -92,7 +102,7 @@ journalctl --user -u ops-toc -f
 
 ## Changelog
 
-**2026-07-11** — [Claude] **Dynamic zoom rings.** New "Dynamic zoom rings" toggle in Range Rings settings (`opsTocRingsDynamic`, default off). When on, finer close-range rings (from the sequence 500/250/100/50/25/10 m) fade in as you zoom closer and disappear when you zoom out, on top of the configured base rings. A fine ring shows only once its on-screen radius exceeds `_RINGS_DYN_MIN_PX` (45 px) and only if it's finer than the base `_ringsStep`; drawn dashed/thinner as secondary. `_drawRangeRings()` now redraws on `zoomend` when dynamic is active (draw-key includes zoom so the 3s poll still skips redundant redraws). At 46°N/5 km base step: 500m ≈ z13.5, +250m z14.5, +100m z16, +50m z17. Toggle is in the shared template so it appears on Lite too. `node --check` OK. NOT yet committed/pushed.
+**2026-07-11** — [Claude] **Dynamic zoom rings.** New "Dynamic zoom rings" toggle in Range Rings settings (`opsTocRingsDynamic`, default off). When on, finer close-range rings (from the sequence 500/250/100/50/25/10 m) fade in as you zoom closer and disappear when you zoom out, on top of the configured base rings. A fine ring shows only once its on-screen radius exceeds `_RINGS_DYN_MIN_PX` (45 px) and only if it's finer than the base `_ringsStep`; drawn dashed/thinner as secondary. `_drawRangeRings()` now redraws on `zoomend` when dynamic is active (draw-key includes zoom so the 3s poll still skips redundant redraws). At 46°N/5 km base step: 500m ≈ z13.5, +250m z14.5, +100m z16, +50m z17. Toggle is in the shared template so it appears on Lite too. `node --check` OK. Committed & pushed (`cbe1c99`).
 **2026-07-11** — [Claude] **After-action moving/stopped breakdown.** Track summary popup (`trackStats` + `renderTrackPopup`) now shows Total time / Moving / Stopped (+ discrete-stop count) / Moving avg alongside distance & max. Segments classified stopped at `<1 km/h` (≈ at rest / zero — 1 not a literal 0 because a parked GPS blips <1 km/h Doppler noise); a contiguous stopped run counts as a discrete stop only at `≥60s` (all stopped seconds still sum into Stopped regardless). Uses real per-point GPS speed (`segmentSpeeds()`), so accuracy is sharp on new recordings; older tracks fall back to jittery derived speed and under-report discrete stops. Filip's design: NO auto-stop/auto-save — recording stays continuous, stops are just *reported*. `node --check` OK; math verified against tracks 47/48. Committed & pushed (`ee2001e`).
 **2026-07-11** — [Claude] **Real GPS speed everywhere (root-cause fix for the jumping speed badge + recording filters).**
 - *The bug:* upper-right speed badge jumped (cruise at 60 → drop to ~20 → spike to ~82) even with clean GPS on the roof dongle. Cause: `gps.py` only parsed GGA/GSV and **threw away RMC/VTG**, so `app.js` faked speed as Δposition ÷ Δt using the *browser* capture clock — decoupled from the GPS fix epochs. That aliases: a poll window catching one GPS epoch halves the speed, one catching two doubles it (why 2s→1s didn't help). Proven against tracks 48/49 ("from work I/II"): positions clean, but derived speed swung 20↔100 at steady cruise.
