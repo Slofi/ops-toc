@@ -16,7 +16,7 @@ updated:: 2026-08-10
 | **Device / Host** | Cyberdeck (rock-5b)<br>Tailscale 100.97.104.107 |
 | **Ports** | 8090 |
 | **Access** | `http://localhost:8090`<br>`/lite` — compact HD 5" touch UI |
-| **Repo** | github.com/Slofi/ops-toc<br>checkout `~/Projects/ops-toc/`<br>latest **pushed** `061847a` (stable — that one really is on GitHub)<br>⚠️ **1 unpushed local commit** (Track Debrief, 2026-08-10) — **no hash here on purpose**: a hash in prose is stale the moment you amend or commit again. Ask the repo: `git -C ~/Projects/ops-toc log --oneline -1`<br>⚠️ `.git` is inside the Syncthing `Projects/` folder, so TestBox and CD share git state — don't run git on both at once |
+| **Repo** | github.com/Slofi/ops-toc<br>checkout `~/Projects/ops-toc/`<br>branch **master** (not main)<br>latest **pushed** `061847a` (stable — that one really is on GitHub)<br>⚠️ **unpushed local commits exist** (Track Debrief + server-side recorder) — **no hashes or counts here on purpose**: both go stale the moment you commit again. Ask the repo: `git -C ~/Projects/ops-toc log --oneline @{u}..HEAD`<br>⚠️ `.git` is inside the Syncthing `Projects/` folder, so TestBox and CD share git state — don't run git on both at once |
 | **Service** | ops-toc.service (user systemd, **not** boot-enabled) |
 | **Key paths** | App `~/Projects/ops-toc/app.py`<br>DB `~/maps/map_app.db`<br>Tiles `~/maps/mbtiles/`<br>Log DB `~/overmesh/overmesh_prefs.db` (toc_log)<br>Live recording buffer `~/maps/active_track.json` (exists only while a track is being recorded or is stopped-but-unsaved) |
 | **GPS** | u-blox USB dongle (`auto`) or internal BN-280 (`/dev/ttyS3`)<br>gpsd masked so OPS-TOC owns the port |
@@ -34,7 +34,7 @@ updated:: 2026-08-10
 | `curl -s localhost:8090/api/recording` | is a track being recorded right now? (`active`, `count`, `distance_m`) |
 | `curl -s -X POST localhost:8090/api/recording/start -H 'Content-Type: application/json' -d '{"min_interval":10}'` | start recording without a browser |
 | `curl -s -X POST localhost:8090/api/recording/stop` | halt capture, keep the buffer for saving |
-| `git -C ~/Projects/ops-toc log --oneline origin/main..HEAD` | what is committed locally but not pushed |
+| `git -C ~/Projects/ops-toc log --oneline @{u}..HEAD` | what is committed locally but not pushed (branch is **master**, not main — `origin/main..HEAD` silently returns nothing) |
 
 ## Troubleshooting / Recovery
 
