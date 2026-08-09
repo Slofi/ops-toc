@@ -16,7 +16,7 @@ updated:: 2026-08-10
 | **Device / Host** | Cyberdeck (rock-5b)<br>Tailscale 100.97.104.107 |
 | **Ports** | 8090 |
 | **Access** | `http://localhost:8090`<br>`/lite` — compact HD 5" touch UI |
-| **Repo** | github.com/Slofi/ops-toc<br>checkout `~/Projects/ops-toc/`<br>branch **master** (not main)<br>latest **pushed** `061847a` (stable — that one really is on GitHub)<br>⚠️ **unpushed local commits exist** (Track Debrief + server-side recorder) — **no hashes or counts here on purpose**: both go stale the moment you commit again. Ask the repo: `git -C ~/Projects/ops-toc log --oneline @{u}..HEAD`<br>⚠️ `.git` is inside the Syncthing `Projects/` folder, so TestBox and CD share git state — don't run git on both at once |
+| **Repo** | github.com/Slofi/ops-toc<br>checkout `~/Projects/ops-toc/`<br>branch **master** (not main)<br>✅ **fully pushed as of 2026-08-10** (Track Debrief + server-side recorder)<br>**no hashes or counts here on purpose** — both go stale the moment you commit again. Ask the repo: `git -C ~/Projects/ops-toc log --oneline @{u}..HEAD`<br>⚠️ `.git` is inside the Syncthing `Projects/` folder, so TestBox and CD share git state — don't run git on both at once |
 | **Service** | ops-toc.service (user systemd, **not** boot-enabled) |
 | **Key paths** | App `~/Projects/ops-toc/app.py`<br>DB `~/maps/map_app.db`<br>Tiles `~/maps/mbtiles/`<br>Log DB `~/overmesh/overmesh_prefs.db` (toc_log)<br>Live recording buffer `~/maps/active_track.json` (exists only while a track is being recorded or is stopped-but-unsaved) |
 | **GPS** | u-blox USB dongle (`auto`) or internal BN-280 (`/dev/ttyS3`)<br>gpsd masked so OPS-TOC owns the port |
