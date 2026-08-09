@@ -2535,3 +2535,52 @@ a.menu-item {
   #search-form { min-width: 0; }
 }
 .service-splash[data-mode="shutdown"] .ss-anim{display:none}
+
+/* ---- Track Debrief ---- */
+.debrief-dialog { width: min(520px, calc(100vw - 28px)); }
+.debrief-dialog form { max-height: 88vh; overflow-y: auto; }
+.debrief-stats {
+  font-size: 12px; color: var(--text);
+  background: var(--bg3); border: 1px solid var(--border); border-radius: 8px;
+  padding: 7px 10px; margin-bottom: 6px;
+}
+.debrief-fields textarea { resize: vertical; }
+.debrief-stops-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin: 14px 0 6px; color: var(--muted);
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 700;
+}
+.debrief-stop {
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg3); padding: 8px; margin-bottom: 8px;
+}
+.debrief-stop-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.debrief-stop-seq { font-weight: 700; color: var(--accent); font-size: 12px; }
+.debrief-stop-meta { color: var(--muted); font-size: 11px; flex: 1; }
+.debrief-stop-tag { margin-bottom: 6px; }
+.debrief-stop-note { min-height: 34px; }
+
+/* ---- LOG tab: Entries|Tracks sub-nav + tracks list ---- */
+.log-subnav { display: flex; gap: 4px; padding: 6px 8px 0; }
+.log-subnav-btn {
+  flex: 1; padding: 6px 10px; font-size: 12px; font-weight: 600;
+  background: var(--bg2); color: var(--muted);
+  border: 1px solid var(--border); border-radius: 7px; cursor: pointer;
+}
+.log-subnav-btn.active { background: var(--bg3); color: var(--accent); border-color: var(--accent); }
+.log-tracks-view { padding: 8px; overflow-y: auto; }
+.log-tracks-empty { color: var(--muted); font-size: 12px; padding: 14px 6px; text-align: center; }
+.log-track-row {
+  display: flex; align-items: center; gap: 8px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--bg2);
+  padding: 8px 10px; margin-bottom: 6px;
+}
+.log-track-main { flex: 1; min-width: 0; }
+.log-track-name { font-weight: 600; font-size: 13px; color: var(--text); }
+.log-track-meta { color: var(--muted); font-size: 11px; margin-top: 2px; }
+.log-track-badge {
+  display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 999px;
+  background: var(--bg3); border: 1px solid var(--border); color: var(--muted);
+}
+.log-track-badge.report { color: var(--accent); border-color: var(--accent); }
+.log-track-actions { display: flex; gap: 4px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; max-width: 46%; }

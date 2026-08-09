@@ -208,10 +208,15 @@ def init_db() -> None:
             )
             """
         )
-        try:
-            conn.execute("ALTER TABLE tracks ADD COLUMN folder TEXT DEFAULT ''")
-        except Exception:
-            pass
+        for _tcol in (
+            "folder TEXT DEFAULT ''",
+            "report_json TEXT DEFAULT ''",
+            "stops_json TEXT DEFAULT ''",
+        ):
+            try:
+                conn.execute(f"ALTER TABLE tracks ADD COLUMN {_tcol}")
+            except Exception:
+                pass
 
 
 def _clean_text(value: Any, max_len: int, default: str = "") -> str:
@@ -279,6 +284,19 @@ def _track_row(row: sqlite3.Row) -> dict[str, Any]:
         points = json.loads(row["points_json"])
     except (TypeError, ValueError):
         points = []
+    keys = row.keys()
+    report: dict[str, Any] = {}
+    if "report_json" in keys and row["report_json"]:
+        try:
+            report = json.loads(row["report_json"]) or {}
+        except (TypeError, ValueError):
+            report = {}
+    stops: list[Any] = []
+    if "stops_json" in keys and row["stops_json"]:
+        try:
+            stops = json.loads(row["stops_json"]) or []
+        except (TypeError, ValueError):
+            stops = []
     return {
         "id": row["id"],
         "name": row["name"],
@@ -290,6 +308,8 @@ def _track_row(row: sqlite3.Row) -> dict[str, Any]:
         "source": row["source"] or "gps",
         "started_at": row["started_at"],
         "ended_at": row["ended_at"],
+        "report": report if isinstance(report, dict) else {},
+        "stops": stops if isinstance(stops, list) else [],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -983,6 +1003,104 @@ def line_distance_m(points: list[dict[str, float]]) -> float:
     return sum(haversine_m(points[i - 1], points[i]) for i in range(1, len(points)))
 
 
+# --- Track stops / debrief -------------------------------------------------
+# A "stop" = a contiguous at-rest run (<STOP_KMH) lasting at least MIN_STOP_S.
+# STOP_KMH is 1 (not 0) because a parked GPS blips <1 km/h of Doppler noise;
+# MIN_STOP_S filters out momentary halts (traffic lights). Mirrors the moving/
+# stopped logic in app.js trackStats so counts agree.
+STOP_KMH = 1.0
+MIN_STOP_S = 60.0
+REPORT_FIELDS = ("purpose", "summary", "outcome", "followup", "activity")
+
+
+def _seg_speed_kmh(a: dict[str, Any], b: dict[str, Any]) -> float:
+    sa, sb = a.get("speed"), b.get("speed")
+    if isinstance(sa, (int, float)) and isinstance(sb, (int, float)):
+        return (sa + sb) / 2
+    if isinstance(sb, (int, float)):
+        return float(sb)
+    dt = max((b.get("ts") or 0) - (a.get("ts") or 0), 1)
+    return haversine_m(a, b) / dt * 3.6
+
+
+def _mk_stop(points: list[dict[str, Any]], s: int, e: int, run: float, seq: int) -> dict[str, Any]:
+    p = points[s]
+    return {
+        "seq": seq,
+        "start_ts": points[s].get("ts"),
+        "end_ts": points[e].get("ts"),
+        "duration_s": int(round(run)),
+        "lat": p.get("lat"),
+        "lon": p.get("lon"),
+        "note": "",
+        "tag": "",
+    }
+
+
+def _detect_stops(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Materialize discrete stops from a point list (auto-run at save time)."""
+    stops: list[dict[str, Any]] = []
+    n = len(points) if points else 0
+    if n < 2:
+        return stops
+    start_idx: int | None = None
+    run = 0.0
+    seq = 1
+    for k in range(1, n):
+        a, b = points[k - 1], points[k]
+        dt = max((b.get("ts") or 0) - (a.get("ts") or 0), 0)
+        if _seg_speed_kmh(a, b) < STOP_KMH:
+            if start_idx is None:
+                start_idx = k - 1
+            run += dt
+        else:
+            if start_idx is not None and run >= MIN_STOP_S:
+                stops.append(_mk_stop(points, start_idx, k - 1, run, seq)); seq += 1
+            start_idx = None
+            run = 0.0
+    if start_idx is not None and run >= MIN_STOP_S:
+        stops.append(_mk_stop(points, start_idx, n - 1, run, seq)); seq += 1
+    return stops
+
+
+def _clean_report(raw: Any) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, str] = {}
+    for f in REPORT_FIELDS:
+        v = raw.get(f)
+        if v is None:
+            continue
+        text = _clean_text(v, 40 if f == "activity" else 2000)
+        if text:
+            out[f] = text
+    return out
+
+
+def _clean_stops(raw: Any) -> list[dict[str, Any]]:
+    """Sanitize a client-edited stops array — geometry/time kept, note+tag clamped."""
+    out: list[dict[str, Any]] = []
+    if not isinstance(raw, list):
+        return out
+    for i, s in enumerate(raw):
+        if not isinstance(s, dict):
+            continue
+        try:
+            out.append({
+                "seq": _int(s.get("seq", i + 1), "seq"),
+                "start_ts": _int(s["start_ts"], "start_ts") if s.get("start_ts") is not None else None,
+                "end_ts": _int(s["end_ts"], "end_ts") if s.get("end_ts") is not None else None,
+                "duration_s": _int(s.get("duration_s", 0), "duration_s"),
+                "lat": _float(s["lat"], "lat") if s.get("lat") is not None else None,
+                "lon": _float(s["lon"], "lon") if s.get("lon") is not None else None,
+                "note": _clean_text(s.get("note"), 500),
+                "tag": _clean_text(s.get("tag"), 40),
+            })
+        except (ValueError, TypeError):
+            continue
+    return out
+
+
 def marker_feature(marker: dict[str, Any]) -> dict[str, Any]:
     return {
         "type": "Feature",
@@ -1296,6 +1414,11 @@ def _clean_track_points(points: list[Any]) -> list[dict[str, Any]]:
             out["ts"] = _int(point.get("ts"), "ts")
         if point.get("sats") is not None:
             out["sats"] = _int(point.get("sats"), "sats")
+        if point.get("speed") is not None:
+            try:
+                out["speed"] = _float(point.get("speed"), "speed")
+            except ValueError:
+                pass
         clean.append(out)
     return clean
 
@@ -1917,11 +2040,13 @@ def api_create_track():
         ended_at = _int(ended_at, "ended_at") if ended_at is not None else clean_points[-1].get("ts")
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
+    report = _clean_report(payload.get("report"))
+    stops = _detect_stops(clean_points)
     with get_db() as conn:
         cur = conn.execute(
             """
-            INSERT INTO tracks (name,description,color,folder,points_json,distance_m,source,started_at,ended_at,created_at,updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            INSERT INTO tracks (name,description,color,folder,points_json,distance_m,source,started_at,ended_at,report_json,stops_json,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 _clean_text(payload.get("name"), 80, "GPS track") or "GPS track",
@@ -1933,6 +2058,8 @@ def api_create_track():
                 _clean_text(payload.get("source"), 40, "gps") or "gps",
                 started_at,
                 ended_at,
+                json.dumps(report, separators=(",", ":")),
+                json.dumps(stops, separators=(",", ":")),
                 ts,
                 ts,
             ),
@@ -1962,13 +2089,21 @@ def api_update_track(track_id: int):
         description = _clean_text(payload.get("description", current["description"]), 600)
         color = _clean_text(payload.get("color", current["color"]), 16, current["color"]) or current["color"]
         folder = _clean_text(payload.get("folder", current["folder"]), 80)
+        report = _clean_report(payload["report"]) if "report" in payload else current.get("report", {})
+        if "stops" in payload:
+            stops = _clean_stops(payload["stops"])
+        elif "points" in payload:
+            stops = _detect_stops(points)  # points changed, no notes to preserve
+        else:
+            stops = current.get("stops", [])
         conn.execute(
             """
             UPDATE tracks
-            SET name=?,description=?,color=?,folder=?,points_json=?,distance_m=?,updated_at=?
+            SET name=?,description=?,color=?,folder=?,points_json=?,distance_m=?,report_json=?,stops_json=?,updated_at=?
             WHERE id=?
             """,
-            (name, description, color, folder, json.dumps(points, separators=(",", ":")), line_distance_m(points), now_ts(), track_id),
+            (name, description, color, folder, json.dumps(points, separators=(",", ":")), line_distance_m(points),
+             json.dumps(report, separators=(",", ":")), json.dumps(stops, separators=(",", ":")), now_ts(), track_id),
         )
         row = conn.execute("SELECT * FROM tracks WHERE id=?", (track_id,)).fetchone()
     return jsonify({"ok": True, "track": _track_row(row)})
@@ -1979,6 +2114,17 @@ def api_delete_track(track_id: int):
     with get_db() as conn:
         cur = conn.execute("DELETE FROM tracks WHERE id=?", (track_id,))
     return jsonify({"ok": cur.rowcount > 0})
+
+
+@app.route("/api/tracks/<int:track_id>/detect-stops", methods=["POST"])
+def api_detect_track_stops(track_id: int):
+    """Re-scan a track's stored points for stops WITHOUT persisting (preview)."""
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM tracks WHERE id=?", (track_id,)).fetchone()
+    if not row:
+        return jsonify({"error": "Track not found"}), 404
+    track = _track_row(row)
+    return jsonify({"ok": True, "stops": _detect_stops(track["points"])})
 
 
 @app.route("/api/tracks/<int:track_id>/geojson")

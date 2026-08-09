@@ -344,6 +344,64 @@ function syncLogTracks(tracks) {
   if (!Array.isArray(tracks)) return;
   _logTracks = tracks;
   updateTrackAttachSelect();
+  if (_logView === 'tracks') renderLogTracksView();
+}
+
+// ---- LOG tab sub-view: Entries | Tracks -----------------------------------
+// Tracks are a *view* under LOG — the data stays in map_app.db (not the shared
+// OM toc_log). Switching just toggles which LOG-tab elements are visible.
+let _logView = 'entries';
+const _LOG_ENTRY_ELS = ['composer-panel', 'log-filter-bar', 'missions-strip', 'timeline'];
+
+function showLogView(view) {
+  _logView = view === 'tracks' ? 'tracks' : 'entries';
+  const tracks = _logView === 'tracks';
+  _LOG_ENTRY_ELS.forEach(id => {
+    const e = document.getElementById(id);
+    if (e) e.style.display = tracks ? 'none' : '';
+  });
+  const tv = document.getElementById('log-tracks-view');
+  if (tv) tv.style.display = tracks ? '' : 'none';
+  document.querySelectorAll('#log-subnav .log-subnav-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.view === _logView);
+  });
+  if (tracks) { if (!_logTracks.length) loadLogTracks().then(renderLogTracksView); else renderLogTracksView(); }
+}
+
+function renderLogTracksView() {
+  const box = document.getElementById('log-tracks-view');
+  if (!box) return;
+  const tracks = Array.isArray(_logTracks) ? _logTracks.slice() : [];
+  if (!tracks.length) {
+    box.innerHTML = `<div class="log-tracks-empty">No saved tracks yet. Record one from the MAP tab.</div>`;
+    return;
+  }
+  tracks.sort((a, b) => (b.ended_at || b.started_at || 0) - (a.ended_at || a.started_at || 0));
+  box.innerHTML = tracks.map(t => {
+    const dur = (t.started_at && t.ended_at && t.ended_at > t.started_at) ? fmtDuration(t.ended_at - t.started_at) : '';
+    const meta = [fmtLogTrackDistance(t.distance_m || 0), dur, t.started_at ? fmtLogTrackTime(t.started_at) : ''].filter(Boolean).join(' · ');
+    const nStops = Array.isArray(t.stops) ? t.stops.length : 0;
+    const hasReport = t.report && Object.keys(t.report).length > 0;
+    const badges = [];
+    if (nStops) badges.push(`<span class="log-track-badge">${nStops} stop${nStops !== 1 ? 's' : ''}</span>`);
+    if (hasReport) badges.push(`<span class="log-track-badge report">debrief</span>`);
+    return `<div class="log-track-row">
+      <div class="log-track-main">
+        <div class="log-track-name">${esc(t.name || ('Track #' + t.id))}</div>
+        <div class="log-track-meta">${esc(meta)}${badges.length ? ' ' + badges.join(' ') : ''}</div>
+      </div>
+      <div class="log-track-actions">
+        <button class="btn small" onclick="showTrackDebrief(${t.id})">Debrief</button>
+        <button class="btn small" onclick="createLogFromTrack(${t.id})">Log</button>
+        <button class="btn small" onclick="_logTrackShow(${t.id})">Map</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function _logTrackShow(id) {
+  if (typeof showTab === 'function') showTab('map');
+  if (typeof flyToTrack === 'function') flyToTrack(id);
 }
 
 function fmtLogTrackDistance(meters) {
@@ -477,6 +535,7 @@ async function attachTrackFromSelect(sel) {
 }
 
 async function createLogFromTrack(id) {
+  if (typeof showLogView === 'function') showLogView('entries');  // composer is hidden in Tracks view
   if (!_logTracks.length) await loadLogTracks();
   let track = _logTracks.find(t => Number(t.id) === Number(id));
   if (!track && typeof state !== 'undefined' && state.tracks) track = state.tracks.get(Number(id));

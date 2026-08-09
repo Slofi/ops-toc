@@ -2354,6 +2354,7 @@ function trackPopup(track) {
       ${statsHtml}
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button class="btn small" onclick="editTrack(${track.id})">Rename</button>
+        <button class="btn small" onclick="showTrackDebrief(${track.id})">Debrief</button>
         <button class="btn small" onclick="createLogFromTrack(${track.id})">Log</button>
         <button class="btn small" onclick="downloadTrack(${track.id}, 'gpx')">GPX</button>
         <button class="btn small" onclick="downloadTrack(${track.id}, 'geojson')">GeoJSON</button>
@@ -2599,8 +2600,175 @@ function renderTrackSaveColors(current) {
     `<input type="color" id="track-save-custom-color" class="color-swatch-custom" value="${current}" oninput="trackDialogSelectColor(this.value)" title="Custom colour">`;
 }
 
+// ---- Track Debrief (after-action report + annotatable stops) --------------
+// General-purpose flavour, light field-ops edge (aviation/SAR use "debrief" too).
+const TRACK_ACTIVITIES = ["", "Drive", "Patrol", "Recon", "Survey", "Transport", "SAR", "Training", "Other"];
+let _debriefTrack = null;
+let _debriefStops = [];
+
+function _fillActivitySelect(sel, val) {
+  if (!sel) return;
+  sel.innerHTML = TRACK_ACTIVITIES.map(a =>
+    `<option value="${esc(a)}"${a === (val || "") ? " selected" : ""}>${a ? esc(a) : "—"}</option>`).join("");
+  sel.value = val || "";
+}
+
+// Collect non-empty report fields for a given input id-prefix.
+function _readReport(prefix) {
+  const out = {};
+  for (const k of ["activity", "purpose", "summary", "outcome", "followup"]) {
+    const e = el(`${prefix}-${k}`);
+    const v = e ? String(e.value || "").trim() : "";
+    if (v) out[k] = v;
+  }
+  return out;
+}
+
+function _debriefStatsHtml(track) {
+  const s = trackStats(track);
+  if (!s) return "";
+  const bits = [`<b>${fmtDistance(s.dist)}</b>`];
+  if (s.duration > 0) bits.push(fmtDuration(s.duration));
+  if (s.movingTime > 0) bits.push(`moving ${fmtDuration(s.movingTime)}`);
+  if (s.stoppedTime > 0) bits.push(`stopped ${fmtDuration(s.stoppedTime)}`);
+  if (s.maxKmh > 0) bits.push(`max ${s.maxKmh.toFixed(0)} km/h`);
+  return bits.join(" · ");
+}
+
+function _renderDebriefStops() {
+  const box = el("debrief-stops");
+  const cnt = el("debrief-stops-count");
+  if (cnt) cnt.textContent = _debriefStops.length ? `(${_debriefStops.length})` : "";
+  if (!box) return;
+  if (!_debriefStops.length) {
+    box.innerHTML = `<div style="color:var(--muted);font-size:12px;padding:6px 0">No stops recorded. Use "Detect stops" to scan this track.</div>`;
+    return;
+  }
+  box.innerHTML = _debriefStops.map((s, i) => {
+    const when = s.start_ts ? fmtTime(s.start_ts) : "";
+    const dur = s.duration_s ? fmtDuration(s.duration_s) : "";
+    const canFly = (s.lat != null && s.lon != null);
+    return `<div class="debrief-stop">
+      <div class="debrief-stop-head">
+        <span class="debrief-stop-seq">Stop ${s.seq || i + 1}</span>
+        <span class="debrief-stop-meta">${when}${dur ? ` · ${dur}` : ""}</span>
+        ${canFly ? `<button type="button" class="btn small" onclick="_debriefFly(${i})">Map</button>` : ""}
+      </div>
+      <input type="text" class="debrief-stop-tag" placeholder="tag (refuel, break, stop…)" value="${esc(s.tag || "")}" oninput="_debriefStops[${i}].tag=this.value">
+      <textarea class="debrief-stop-note" rows="1" placeholder="What happened here?" oninput="_debriefStops[${i}].note=this.value">${esc(s.note || "")}</textarea>
+    </div>`;
+  }).join("");
+}
+
+function _debriefFly(i) {
+  const s = _debriefStops[i];
+  if (!s || s.lat == null || s.lon == null) return;
+  el("track-debrief-dialog").close();
+  if (state.map) state.map.setView([s.lat, s.lon], Math.max(state.map.getZoom(), 16));
+}
+
+async function showTrackDebrief(id) {
+  let track = _trackCache[id] || (state.tracks && state.tracks.get(Number(id)));
+  // Fetch fresh so we have persisted stops/report even if the cache is thin.
+  try {
+    const all = await api("/api/tracks");
+    const found = all.find(t => Number(t.id) === Number(id));
+    if (found) track = found;
+  } catch (_) {}
+  if (!track) { await appAlert("Track not found.", "Debrief"); return; }
+  _debriefTrack = track;
+  _debriefStops = Array.isArray(track.stops) ? track.stops.map(s => ({ ...s })) : [];
+  el("debrief-title").textContent = `Debrief — ${track.name}`;
+  el("debrief-stats").innerHTML = _debriefStatsHtml(track);
+  const rep = track.report || {};
+  _fillActivitySelect(el("debrief-activity"), rep.activity || "");
+  el("debrief-purpose").value = rep.purpose || "";
+  el("debrief-summary").value = rep.summary || "";
+  el("debrief-outcome").value = rep.outcome || "";
+  el("debrief-followup").value = rep.followup || "";
+  _renderDebriefStops();
+
+  const dlg = el("track-debrief-dialog");
+  el("debrief-form").onsubmit = (e) => { e.preventDefault(); _saveDebrief(); };
+  el("debrief-cancel").onclick = () => dlg.close();
+  el("debrief-export").onclick = () => _exportDebrief();
+  el("debrief-detect").onclick = () => _detectDebriefStops();
+  dlg.showModal();
+}
+
+async function _saveDebrief() {
+  if (!_debriefTrack) return;
+  try {
+    await api(`/api/tracks/${_debriefTrack.id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ report: _readReport("debrief"), stops: _debriefStops }),
+    });
+    el("track-debrief-dialog").close();
+    if (typeof toast === "function") toast("Debrief saved", "ok");
+    await loadTracks();
+  } catch (err) { await appAlert(err.message, "Debrief"); }
+}
+
+// Detect stops WITHOUT persisting (dedicated endpoint), then carry over any
+// existing notes/tags by matching start_ts so a re-scan never loses annotations.
+async function _detectDebriefStops() {
+  if (!_debriefTrack) return;
+  const prev = _debriefStops;
+  try {
+    const r = await api(`/api/tracks/${_debriefTrack.id}/detect-stops`, { method: "POST" });
+    const fresh = (r && Array.isArray(r.stops) ? r.stops : []).map(s => ({ ...s }));
+    for (const ns of fresh) {
+      const old = prev.find(o => o.start_ts === ns.start_ts && (o.note || o.tag));
+      if (old) { ns.note = old.note || ""; ns.tag = old.tag || ""; }
+    }
+    _debriefStops = fresh;
+    _renderDebriefStops();
+    if (typeof toast === "function") toast(`${fresh.length} stop${fresh.length !== 1 ? "s" : ""} detected — Save to keep`, "ok");
+  } catch (err) { await appAlert(err.message, "Debrief"); }
+}
+
+function _exportDebrief() {
+  const t = _debriefTrack;
+  if (!t) return;
+  const s = trackStats(t);
+  const rep = _readReport("debrief");
+  const lines = [`# Debrief — ${t.name}`, ""];
+  if (s) {
+    lines.push(`- Distance: ${fmtDistance(s.dist)}`);
+    if (s.duration > 0) lines.push(`- Total time: ${fmtDuration(s.duration)}`);
+    if (s.movingTime > 0) lines.push(`- Moving: ${fmtDuration(s.movingTime)}`);
+    if (s.stoppedTime > 0) lines.push(`- Stopped: ${fmtDuration(s.stoppedTime)} (${s.stops} stop${s.stops !== 1 ? "s" : ""})`);
+    if (s.maxKmh > 0) lines.push(`- Max speed: ${s.maxKmh.toFixed(0)} km/h`);
+    if (s.startTs) lines.push(`- Start: ${fmtDateTime(s.startTs)}`);
+    lines.push("");
+  }
+  for (const [k, label] of [["activity", "Activity"], ["purpose", "Purpose"], ["summary", "Summary"], ["outcome", "Outcome"], ["followup", "Follow-up"]]) {
+    if (rep[k]) lines.push(`## ${label}`, rep[k], "");
+  }
+  if (_debriefStops.length) {
+    lines.push("## Stops", "");
+    _debriefStops.forEach((st, i) => {
+      const when = st.start_ts ? fmtDateTime(st.start_ts) : "";
+      const dur = st.duration_s ? fmtDuration(st.duration_s) : "";
+      let h = `${i + 1}. ${when}${dur ? ` · ${dur}` : ""}`;
+      if (st.tag) h += ` — [${st.tag}]`;
+      lines.push(h);
+      if (st.note) lines.push(`   ${st.note}`);
+    });
+    lines.push("");
+  }
+  const blob = new Blob([lines.join("\n")], { type: "text/markdown" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${String(t.name || "track").replace(/[^\w.-]+/g, "-")}-debrief.md`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 function showTrackSaveDialog(opts = {}) {
-  const { title = "Save Track", info = "", name = "", folder = "", color = TRACK_COLOR, showDiscard = false } = opts;
+  const { title = "Save Track", info = "", name = "", folder = "", color = TRACK_COLOR, showDiscard = false, stopCount = 0 } = opts;
   return new Promise((resolve) => {
     let settled = false;
     const finish = (val) => { if (!settled) { settled = true; resolve(val); } };
@@ -2626,6 +2794,15 @@ function showTrackSaveDialog(opts = {}) {
     if (_sfEl) _sfEl.value = _pf.sub;
     renderTrackSaveColors(color);
 
+    // Optional report section — reset + collapse; hint how many stops were seen.
+    _fillActivitySelect(el("track-report-activity"), "");
+    if (el("track-report-purpose")) el("track-report-purpose").value = "";
+    if (el("track-report-summary")) el("track-report-summary").value = "";
+    const _repEl = el("track-save-report");
+    if (_repEl) _repEl.open = false;
+    const _shEl = el("track-save-stophint");
+    if (_shEl) _shEl.textContent = stopCount > 0 ? `· ${stopCount} stop${stopCount !== 1 ? "s" : ""} detected` : "";
+
     const discardBtn = el("track-save-discard");
     const cancelBtn = el("track-save-cancel");
     if (discardBtn) discardBtn.hidden = !showDiscard;
@@ -2649,6 +2826,7 @@ function showTrackSaveDialog(opts = {}) {
         name: el("track-save-name").value.trim() || name || "GPS track",
         folder: _buildTrackFolder(el("track-folder-parent")?.value, el("track-save-subfolder")?.value),
         color: _trackSaveSelectedColor,
+        report: _readReport("track-report"),
       });
     };
 
@@ -2845,6 +3023,7 @@ async function stopTrackRecording() {
   const defaultName = `Track ${fmtDateTime(Math.floor(Date.now() / 1000))}`;
   _trackSaveSelectedColor = TRACK_COLOR;
 
+  const _st = trackStats({ points: recording.points, distance_m: trackDistance(recording.points) });
   const result = await showTrackSaveDialog({
     title: "Save Track",
     info: `${pts} point${pts !== 1 ? "s" : ""} · ${dist}`,
@@ -2852,6 +3031,7 @@ async function stopTrackRecording() {
     folder: "",
     color: TRACK_COLOR,
     showDiscard: true,
+    stopCount: _st ? _st.stops : 0,
   });
 
   if (result === null) return; // cancelled — keep recording
@@ -2875,6 +3055,7 @@ async function stopTrackRecording() {
         points: recording.points,
         started_at: recording.started_at,
         ended_at: recording.ended_at,
+        report: result.report || {},
       }),
     });
     const newId = saved?.track?.id;

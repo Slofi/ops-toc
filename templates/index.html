@@ -129,6 +129,12 @@
     <!-- ════════════════════════ LOG TAB ════ -->
     <div id="tab-log" class="tab-pane active">
 
+      <!-- Sub-nav: Entries / Tracks -->
+      <div id="log-subnav" class="log-subnav">
+        <button type="button" class="log-subnav-btn active" data-view="entries" onclick="showLogView('entries')">Entries</button>
+        <button type="button" class="log-subnav-btn" data-view="tracks" onclick="showLogView('tracks')">Tracks</button>
+      </div>
+
       <!-- Composer -->
       <div class="toc-panel" id="composer-panel">
         <div class="toc-panel-header">
@@ -172,7 +178,7 @@
       </div>
 
       <!-- Filter bar -->
-      <div class="filter-bar">
+      <div class="filter-bar" id="log-filter-bar">
         <div class="cat-filter-row" id="cat-filter-row"></div>
         <div class="search-row">
           <input type="text" id="log-search-input" placeholder="Search entries..."
@@ -188,6 +194,9 @@
 
       <!-- Timeline -->
       <div id="timeline" class="timeline"></div>
+
+      <!-- Tracks sub-view (reads map_app.db via _logTracks; data stays there) -->
+      <div id="log-tracks-view" class="log-tracks-view" style="display:none"></div>
     </div><!-- end tab-log -->
 
     <!-- ════════════════════════ MISSIONS TAB ════ -->
@@ -671,9 +680,60 @@
       </div>
       <label>Colour</label>
       <div id="track-save-colors" class="color-swatches"></div>
+      <details id="track-save-report" style="margin-top:6px">
+        <summary style="cursor:pointer;font-size:12px;color:var(--muted);user-select:none;padding:2px 0">
+          Report <span style="opacity:.7">— optional, fill in now or later</span>
+          <span id="track-save-stophint" style="opacity:.75;margin-left:4px"></span>
+        </summary>
+        <div style="margin-top:8px">
+          <label>Activity
+            <select id="track-report-activity" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:6px;color:var(--text);font:inherit;font-size:12px;padding:5px 7px;min-height:30px;cursor:pointer"></select>
+          </label>
+          <label>Purpose
+            <input id="track-report-purpose" type="text" placeholder="What was this for?" autocomplete="off">
+          </label>
+          <label>Summary
+            <textarea id="track-report-summary" rows="2" placeholder="Quick notes — flesh out later in the Debrief" style="width:100%;resize:vertical"></textarea>
+          </label>
+        </div>
+      </details>
       <div class="dialog-actions">
         <button class="btn danger" id="track-save-discard" type="button" hidden>Discard</button>
         <button class="btn" id="track-save-cancel" type="button">Cancel</button>
+        <button class="btn primary" type="submit">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="track-debrief-dialog" class="debrief-dialog">
+    <form method="dialog" id="track-debrief-form">
+      <h2 id="debrief-title">Debrief</h2>
+      <div id="debrief-stats" class="debrief-stats"></div>
+      <div class="debrief-fields">
+        <label>Activity
+          <select id="debrief-activity" style="width:100%;background:var(--bg3);border:1px solid var(--border);border-radius:6px;color:var(--text);font:inherit;font-size:12px;padding:5px 7px;min-height:30px;cursor:pointer"></select>
+        </label>
+        <label>Purpose
+          <input id="debrief-purpose" type="text" placeholder="What was this for?" autocomplete="off">
+        </label>
+        <label>Summary
+          <textarea id="debrief-summary" rows="2" placeholder="What happened, overall" style="width:100%;resize:vertical"></textarea>
+        </label>
+        <label>Outcome
+          <textarea id="debrief-outcome" rows="2" placeholder="Result" style="width:100%;resize:vertical"></textarea>
+        </label>
+        <label>Follow-up
+          <textarea id="debrief-followup" rows="2" placeholder="Actions carried forward" style="width:100%;resize:vertical"></textarea>
+        </label>
+      </div>
+      <div class="debrief-stops-head">
+        <span>Stops <span id="debrief-stops-count" style="color:var(--muted);font-weight:400"></span></span>
+        <button type="button" class="btn small" id="debrief-detect">Detect stops</button>
+      </div>
+      <div id="debrief-stops"></div>
+      <div class="dialog-actions">
+        <button class="btn" id="debrief-export" type="button">Export</button>
+        <button class="btn" id="debrief-cancel" type="button">Close</button>
         <button class="btn primary" type="submit">Save</button>
       </div>
     </form>
