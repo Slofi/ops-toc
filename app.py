@@ -2022,6 +2022,48 @@ def api_get_tracks():
     return jsonify([_track_row(r) for r in rows])
 
 
+def _insert_track(
+    *,
+    points: list[dict[str, Any]],
+    name: Any = None,
+    description: Any = None,
+    color: Any = None,
+    folder: Any = None,
+    source: Any = None,
+    started_at: int | None = None,
+    ended_at: int | None = None,
+    report: dict[str, str] | None = None,
+) -> sqlite3.Row:
+    """Persist a cleaned point list as a track. Shared by the manual POST /api/tracks
+    path and the server-side recorder, so both get identical stop detection,
+    distance and defaults."""
+    ts = now_ts()
+    stops = _detect_stops(points)
+    with get_db() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO tracks (name,description,color,folder,points_json,distance_m,source,started_at,ended_at,report_json,stops_json,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                _clean_text(name, 80, "GPS track") or "GPS track",
+                _clean_text(description, 600),
+                _clean_text(color, 16, "#e8b04f") or "#e8b04f",
+                _clean_text(folder, 80),
+                json.dumps(points, separators=(",", ":")),
+                line_distance_m(points),
+                _clean_text(source, 40, "gps") or "gps",
+                started_at,
+                ended_at,
+                json.dumps(report or {}, separators=(",", ":")),
+                json.dumps(stops, separators=(",", ":")),
+                ts,
+                ts,
+            ),
+        )
+        return conn.execute("SELECT * FROM tracks WHERE id=?", (cur.lastrowid,)).fetchone()
+
+
 @app.route("/api/tracks", methods=["POST"])
 def api_create_track():
     payload = request.get_json(silent=True) or {}
@@ -2032,7 +2074,6 @@ def api_create_track():
         return jsonify({"error": str(exc)}), 400
     if len(clean_points) < 2:
         return jsonify({"error": "At least two GPS points required"}), 400
-    ts = now_ts()
     started_at = payload.get("started_at")
     ended_at = payload.get("ended_at")
     try:
@@ -2040,31 +2081,17 @@ def api_create_track():
         ended_at = _int(ended_at, "ended_at") if ended_at is not None else clean_points[-1].get("ts")
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
-    report = _clean_report(payload.get("report"))
-    stops = _detect_stops(clean_points)
-    with get_db() as conn:
-        cur = conn.execute(
-            """
-            INSERT INTO tracks (name,description,color,folder,points_json,distance_m,source,started_at,ended_at,report_json,stops_json,created_at,updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                _clean_text(payload.get("name"), 80, "GPS track") or "GPS track",
-                _clean_text(payload.get("description"), 600),
-                _clean_text(payload.get("color"), 16, "#e8b04f") or "#e8b04f",
-                _clean_text(payload.get("folder"), 80),
-                json.dumps(clean_points, separators=(",", ":")),
-                line_distance_m(clean_points),
-                _clean_text(payload.get("source"), 40, "gps") or "gps",
-                started_at,
-                ended_at,
-                json.dumps(report, separators=(",", ":")),
-                json.dumps(stops, separators=(",", ":")),
-                ts,
-                ts,
-            ),
-        )
-        row = conn.execute("SELECT * FROM tracks WHERE id=?", (cur.lastrowid,)).fetchone()
+    row = _insert_track(
+        points=clean_points,
+        name=payload.get("name"),
+        description=payload.get("description"),
+        color=payload.get("color"),
+        folder=payload.get("folder"),
+        source=payload.get("source"),
+        started_at=started_at,
+        ended_at=ended_at,
+        report=_clean_report(payload.get("report")),
+    )
     return jsonify({"ok": True, "track": _track_row(row)})
 
 
@@ -3274,6 +3301,273 @@ def api_gps_set():
 @app.route("/api/gps/ports")
 def api_gps_ports():
     return jsonify({"ports": _gps.list_ports()})
+
+
+# ── Track recorder (server-side) ──────────────────────────────────────────────
+# Recording lives HERE, not in the browser. The page is a viewer: it starts and
+# stops the recorder and polls it for the live polyline. A closed tab, a blanked
+# screen, a killed browser or a reloaded page no longer costs a track — only
+# ops-toc.service going down does, and the buffer is flushed to disk so even a
+# service restart resumes mid-track.
+#
+# Why this matters: the old browser recorder failed silently. gps.py kept
+# serving /api/gps, so OM Lite still showed a moving marker while nothing was
+# being recorded (27 km lost that way on 2026-07-07).
+#
+# The capture filters below were MOVED from app.js captureGpsPoint(), not
+# copied — the JS version is deleted. One implementation, one place to fix.
+
+REC_STATE_PATH       = DATA_DIR / "active_track.json"
+REC_MIN_SATS         = 4      # below this the fix is not trustworthy
+REC_NEAR_M           = 3.0    # "hasn't really moved" radius
+REC_MULTIPATH_KMH    = 5.0    # receiver says crawling ...
+REC_MULTIPATH_M      = 50.0   # ... but the position jumped -> multipath glitch
+REC_MAX_SPEED_MS     = 100.0  # 360 km/h absolute sanity cap
+REC_STATIONARY_KMH   = 3.0
+REC_STATIONARY_M     = 5.0
+REC_FLUSH_S          = 5.0    # at most one state write per this many seconds
+REC_DEFAULT_INTERVAL = 10
+REC_TICK_S           = 1.0
+
+# RLock, not Lock: the request handlers build a summary while already holding it.
+_rec_lock = threading.RLock()
+_rec: dict[str, Any] = {
+    "active": False,
+    "points": [],
+    "started_at": None,
+    "ended_at": None,
+    "min_interval": REC_DEFAULT_INTERVAL,
+}
+_rec_dirty = False
+_rec_last_flush = 0.0
+
+
+def _rec_iso(ts: int) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(ts)) + ".000Z"
+
+
+def _rec_consider(pos: dict[str, Any]) -> None:
+    """Filter one GPS sample into the active buffer. Caller holds _rec_lock."""
+    global _rec_dirty
+    if not _rec["active"]:
+        return
+    if not pos.get("fix") or pos.get("lat") is None or pos.get("lon") is None:
+        return
+    if (pos.get("sats") or 0) < REC_MIN_SATS:
+        return
+    raw_spd = pos.get("speed")
+    spd = float(raw_spd) if isinstance(raw_spd, (int, float)) and raw_spd >= 0 else None
+    ts = int(time.time())
+    point = {
+        "lat": float(pos["lat"]),
+        "lon": float(pos["lon"]),
+        "alt": pos.get("alt"),
+        "sats": pos.get("sats") or 0,
+        "speed": spd,
+        "ts": ts,
+        "time": _rec_iso(ts),
+    }
+    pts = _rec["points"]
+    if pts:
+        last = pts[-1]
+        dist = haversine_m(last, point)
+        dt = ts - (last.get("ts") or 0)
+
+        # Interval throttle: don't oversample while barely moving.
+        if dist < REC_NEAR_M and dt < _rec["min_interval"]:
+            return
+
+        # Multipath rejection: receiver reports stopped/crawling but the
+        # position jumped far -> GPS glitch, not movement.
+        if spd is not None and spd < REC_MULTIPATH_KMH and dist > REC_MULTIPATH_M:
+            return
+
+        # Absolute sanity cap regardless of dt.
+        if dt > 0 and dist / dt > REC_MAX_SPEED_MS:
+            return
+
+        # Minimum-movement gate: a parked vehicle must not accumulate GPS-jitter
+        # distance. When stationary, refresh the last point's clock so the track
+        # stays alive and duration keeps counting, without adding fake metres.
+        stationary = spd < REC_STATIONARY_KMH if spd is not None else dist < REC_NEAR_M
+        if stationary and dist < REC_STATIONARY_M:
+            last["ts"] = ts
+            last["time"] = point["time"]
+            _rec["ended_at"] = ts
+            _rec_dirty = True
+            return
+
+    pts.append(point)
+    _rec["ended_at"] = ts
+    _rec_dirty = True
+
+
+def _rec_save_state() -> None:
+    """Atomically persist the buffer so a restart resumes mid-track.
+    Caller holds _rec_lock."""
+    try:
+        if not _rec["points"] and not _rec["active"]:
+            REC_STATE_PATH.unlink(missing_ok=True)
+            return
+        REC_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = REC_STATE_PATH.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(_rec, separators=(",", ":")))
+        tmp.replace(REC_STATE_PATH)
+    except OSError:
+        pass
+
+
+def _rec_load_state() -> None:
+    """Restore a buffer left behind by a previous run (crash, restart, reboot)."""
+    try:
+        raw = json.loads(REC_STATE_PATH.read_text())
+    except (OSError, ValueError):
+        return
+    if not isinstance(raw, dict) or not isinstance(raw.get("points"), list):
+        return
+    try:
+        points = _clean_track_points(raw["points"])
+    except (ValueError, TypeError):
+        points = []
+    with _rec_lock:
+        _rec["active"] = bool(raw.get("active"))
+        _rec["points"] = points
+        _rec["started_at"] = raw.get("started_at")
+        _rec["ended_at"] = raw.get("ended_at")
+        try:
+            _rec["min_interval"] = max(1, int(raw.get("min_interval") or REC_DEFAULT_INTERVAL))
+        except (TypeError, ValueError):
+            _rec["min_interval"] = REC_DEFAULT_INTERVAL
+
+
+def _rec_summary(since: int | None = None) -> dict[str, Any]:
+    """Recorder status. With `since`, also return points from that index on —
+    always including the last known point, because the stationary gate mutates
+    it in place and the client's copy would otherwise go stale."""
+    with _rec_lock:
+        pts = _rec["points"]
+        out: dict[str, Any] = {
+            "active": _rec["active"],
+            "count": len(pts),
+            "distance_m": line_distance_m(pts) if len(pts) > 1 else 0.0,
+            "started_at": _rec["started_at"],
+            "ended_at": _rec["ended_at"],
+            "min_interval": _rec["min_interval"],
+            "buffered": bool(pts),
+        }
+        if since is not None:
+            start = 0 if not pts else max(0, min(since - 1, len(pts) - 1))
+            out["from"] = start
+            out["points"] = [dict(p) for p in pts[start:]]
+        return out
+
+
+def _rec_clear() -> None:
+    """Caller holds _rec_lock."""
+    _rec.update({"active": False, "points": [], "started_at": None, "ended_at": None})
+    _rec_save_state()
+
+
+def _rec_loop() -> None:
+    global _rec_dirty, _rec_last_flush
+    while True:
+        try:
+            with _gps.gps_lock:
+                pos = dict(_gps.gps_state)
+            with _rec_lock:
+                _rec_consider(pos)
+                if _rec_dirty and time.monotonic() - _rec_last_flush >= REC_FLUSH_S:
+                    _rec_save_state()
+                    _rec_dirty = False
+                    _rec_last_flush = time.monotonic()
+        except Exception:
+            pass  # a recorder tick must never kill the thread
+        time.sleep(REC_TICK_S)
+
+
+@app.route("/api/recording")
+def api_recording_get():
+    raw = request.args.get("since")
+    since: int | None
+    try:
+        since = int(raw) if raw is not None else None
+    except ValueError:
+        since = None
+    return jsonify(_rec_summary(since))
+
+
+@app.route("/api/recording/start", methods=["POST"])
+def api_recording_start():
+    payload = request.get_json(silent=True) or {}
+    try:
+        interval = int(payload.get("min_interval", REC_DEFAULT_INTERVAL))
+    except (TypeError, ValueError):
+        interval = REC_DEFAULT_INTERVAL
+    interval = max(1, min(interval, 3600))
+    with _gps.gps_lock:
+        pos = dict(_gps.gps_state)
+    if not pos.get("fix") or pos.get("lat") is None:
+        return jsonify({"error": "Waiting for a GPS fix before recording."}), 409
+    with _rec_lock:
+        if _rec["active"]:
+            return jsonify({"error": "Already recording"}), 409
+        if _rec["points"]:
+            return jsonify({"error": "An unsaved track is still buffered — save or discard it first."}), 409
+        ts = int(time.time())
+        _rec.update({"active": True, "points": [], "started_at": ts, "ended_at": ts, "min_interval": interval})
+        _rec_consider(pos)  # seed the first point immediately
+        _rec_save_state()
+        return jsonify({"ok": True, **_rec_summary(0)})
+
+
+@app.route("/api/recording/stop", methods=["POST"])
+def api_recording_stop():
+    """Halt capture but KEEP the buffer — the save dialog runs afterwards and
+    the points stay server-side until explicitly saved or discarded."""
+    with _rec_lock:
+        _rec["active"] = False
+        _rec_save_state()
+        return jsonify({"ok": True, **_rec_summary(0)})
+
+
+@app.route("/api/recording/save", methods=["POST"])
+def api_recording_save():
+    payload = request.get_json(silent=True) or {}
+    with _rec_lock:
+        _rec["active"] = False  # no appends while we commit
+        points = [dict(p) for p in _rec["points"]]
+        started_at, ended_at = _rec["started_at"], _rec["ended_at"]
+    if len(points) < 2:
+        return jsonify({"error": "At least two GPS points required"}), 400
+    try:
+        clean_points = _clean_track_points(points)
+    except (ValueError, TypeError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    row = _insert_track(
+        points=clean_points,
+        name=payload.get("name"),
+        description=payload.get("description"),
+        color=payload.get("color"),
+        folder=payload.get("folder"),
+        source="gps",
+        started_at=started_at if started_at is not None else clean_points[0].get("ts"),
+        ended_at=ended_at if ended_at is not None else clean_points[-1].get("ts"),
+        report=_clean_report(payload.get("report")),
+    )
+    with _rec_lock:
+        _rec_clear()
+    return jsonify({"ok": True, "track": _track_row(row)})
+
+
+@app.route("/api/recording/discard", methods=["POST"])
+def api_recording_discard():
+    with _rec_lock:
+        _rec_clear()
+    return jsonify({"ok": True})
+
+
+_rec_load_state()
+threading.Thread(target=_rec_loop, daemon=True).start()
 
 
 if __name__ == "__main__":

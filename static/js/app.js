@@ -2881,9 +2881,12 @@ function updateRecordingLayer() {
 function setRecordingButton() {
   const btn = el("track-record-btn");
   if (!btn) return;
-  const active = Boolean(state.recording);
-  btn.classList.toggle("active", active);
-  btn.textContent = active ? `Stop (${state.recording.points.length})` : "Track";
+  const rec = state.recording;
+  btn.classList.toggle("active", Boolean(rec));
+  if (!rec) btn.textContent = "Track";
+  // Buffered but not capturing (recorder was stopped without saving) — the tap
+  // goes straight to the save dialog, so say so.
+  else btn.textContent = rec.active ? `Stop (${rec.count})` : `Save (${rec.count})`;
 }
 
 
@@ -2937,54 +2940,60 @@ function showTrackRecordDialog() {
   });
 }
 
-function captureGpsPoint() {
-  if (!state.recording || !_gpsEnabled || !_gpsState.fix || _gpsState.lat === null || _gpsState.lon === null) return;
-  if ((_gpsState.sats || 0) < 4) return;
-  const spd = (typeof _gpsState.speed === "number" && _gpsState.speed >= 0) ? _gpsState.speed : null; // km/h, GPS SOG
-  const point = {
-    lat: Number(_gpsState.lat),
-    lon: Number(_gpsState.lon),
-    alt: _gpsState.alt,
-    sats: _gpsState.sats || 0,
-    speed: spd,
-    ts: Math.floor(Date.now() / 1000),
-    time: new Date().toISOString(),
-  };
-  const last = state.recording.points.at(-1);
-  if (last) {
-    const dist = distanceBetween(last, point);
-    const dt = point.ts - (last.ts || 0);
+// ── Recorder client ─────────────────────────────────────────────────────────
+// The track is recorded by Flask (see app.py, "Track recorder"). This page only
+// starts/stops it and mirrors the buffer for drawing. Nothing here decides
+// which GPS samples get kept — the filters live server-side, in ONE place.
+// Consequence: closing this tab no longer stops the recording.
 
-    // Interval throttle: don't oversample while barely moving.
-    if (dist < 3 && dt < _recMinInterval) return;
+let _recPollTick = 0;
 
-    // Multipath rejection: receiver reports stopped/crawling but the position
-    // jumped far → GPS glitch. Catches the parked multipath jumps the old
-    // dist/dt>100 test missed (a large dt hid the jump).
-    if (spd != null && spd < 5 && dist > 50) return;
-    // Absolute sanity cap regardless of dt (>100 m/s = 360 km/h).
-    if (dt > 0 && dist / dt > 100) return;
-
-    // Minimum-movement gate: a parked car must not accumulate GPS-jitter
-    // distance. When stationary (GPS speed near zero, or — speed unknown —
-    // sub-3 m move), refresh the last point's timestamp so the track stays
-    // alive and duration keeps counting, without adding fake distance.
-    const stationary = spd != null ? spd < 3 : dist < 3;
-    if (stationary && dist < 5) {
-      last.ts = point.ts;
-      last.time = point.time;
-      state.recording.ended_at = point.ts;
-      try { localStorage.setItem('ops_toc_active_track', JSON.stringify({...state.recording, recMinInterval: _recMinInterval})); } catch (_) {}
-      return;
+function applyRecordingState(d) {
+  // null / empty server state → nothing buffered, clear the map + chrome.
+  if (!d || (!d.active && !d.buffered)) {
+    if (state.recording) {
+      state.recording = null;
+      if (state.recordingLayer) { state.map.removeLayer(state.recordingLayer); state.recordingLayer = null; }
+      setRecordingButton();
+      setBanner("");
     }
+    return;
   }
-  state.recording.points.push(point);
-  state.recording.ended_at = point.ts;
+  const prev = state.recording;
+  // The server resends from `from` (it re-sends the tail point, whose timestamp
+  // it mutates in place while stationary), so splice rather than blind-append.
+  const points = prev ? prev.points.slice(0, d.from ?? 0) : [];
+  for (const p of (d.points || [])) points.push(p);
+  state.recording = {
+    active: Boolean(d.active),
+    count: d.count,
+    distance_m: d.distance_m,
+    started_at: d.started_at,
+    ended_at: d.ended_at,
+    points,
+  };
   updateRecordingLayer();
   setRecordingButton();
-  const distance = trackDistance(state.recording.points);
-  setBanner(`Recording GPS track - ${state.recording.points.length} pts - ${fmtDistance(distance)}`);
-  try { localStorage.setItem('ops_toc_active_track', JSON.stringify({...state.recording, recMinInterval: _recMinInterval})); } catch (_) {}
+  if (d.active) {
+    setBanner(`Recording GPS track - ${d.count} pts - ${fmtDistance(d.distance_m)}`);
+  } else {
+    setBanner(`Track stopped — ${d.count} pts · ${fmtDistance(d.distance_m)} (tap Save)`);
+  }
+  // Point count drifted from the server's → resync from scratch next tick.
+  if (points.length !== d.count) _recPoll(true, true);
+}
+
+async function _recPoll(force = false, resync = false) {
+  // 1 Hz while something is buffered, otherwise a slow watch so a recording
+  // started elsewhere (another tab, another device) still shows up here.
+  if (!force && !state.recording && (++_recPollTick % 5) !== 0) return;
+  try {
+    const since = (resync || !state.recording) ? 0 : state.recording.points.length;
+    if (resync) state.recording = null;
+    applyRecordingState(await api(`/api/recording?since=${since}`));
+  } catch (_) {
+    /* recorder unreachable — keep the last drawn state */
+  }
 }
 
 async function startTrackRecording() {
@@ -2998,32 +3007,36 @@ async function startTrackRecording() {
   }
   const go = await showTrackRecordDialog();
   if (!go) return;
-  const ts = Math.floor(Date.now() / 1000);
-  state.recording = { points: [], started_at: ts, ended_at: ts };
-  captureGpsPoint();
-  setRecordingButton();
+  try {
+    applyRecordingState(await api("/api/recording/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ min_interval: _recMinInterval }),
+    }));
+  } catch (err) {
+    await appAlert(err.message, "Track Recording");
+  }
 }
 
 async function stopTrackRecording() {
   const recording = state.recording;
   if (!recording) return;
 
-  if (recording.points.length < 2) {
-    localStorage.removeItem('ops_toc_active_track');
-    state.recording = null;
-    if (state.recordingLayer) { state.map.removeLayer(state.recordingLayer); state.recordingLayer = null; }
-    setRecordingButton();
-    setBanner("");
+  if (recording.count < 2) {
+    try { await api("/api/recording/discard", { method: "POST" }); } catch (_) {}
+    applyRecordingState(null);
     await appAlert("Track discarded (fewer than 2 points).", "Track Recording");
     return;
   }
 
-  const pts = recording.points.length;
-  const dist = fmtDistance(trackDistance(recording.points));
+  // The recorder keeps running while this dialog is open — points captured
+  // during it are part of the track, same as before the move to the backend.
+  const pts = recording.count;
+  const dist = fmtDistance(recording.distance_m);
   const defaultName = `Track ${fmtDateTime(Math.floor(Date.now() / 1000))}`;
   _trackSaveSelectedColor = TRACK_COLOR;
 
-  const _st = trackStats({ points: recording.points, distance_m: trackDistance(recording.points) });
+  const _st = trackStats({ points: recording.points, distance_m: recording.distance_m });
   const result = await showTrackSaveDialog({
     title: "Save Track",
     info: `${pts} point${pts !== 1 ? "s" : ""} · ${dist}`,
@@ -3034,30 +3047,30 @@ async function stopTrackRecording() {
     stopCount: _st ? _st.stops : 0,
   });
 
-  if (result === null) return; // cancelled — keep recording
+  if (result === null) return; // cancelled — recorder untouched, still running
 
-  localStorage.removeItem('ops_toc_active_track');
-  state.recording = null;
-  if (state.recordingLayer) { state.map.removeLayer(state.recordingLayer); state.recordingLayer = null; }
-  setRecordingButton();
-  setBanner("");
-
-  if (result === "discard") return;
+  if (result === "discard") {
+    try { await api("/api/recording/discard", { method: "POST" }); } catch (err) {
+      await appAlert(err.message, "Track Recording");
+      return;
+    }
+    applyRecordingState(null);
+    return;
+  }
 
   try {
-    const saved = await api("/api/tracks", {
+    // Saves the SERVER's buffer — the browser never carries the points.
+    const saved = await api("/api/recording/save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         name: result.name,
         folder: result.folder,
         color: result.color,
-        points: recording.points,
-        started_at: recording.started_at,
-        ended_at: recording.ended_at,
         report: result.report || {},
       }),
     });
+    applyRecordingState(null);
     const newId = saved?.track?.id;
     if (newId != null) state.trackVisible.set(newId, true);
     await loadTracks();
@@ -4708,23 +4721,10 @@ let _mapDataLoaded = false;
 let _touchPlacing = false;
 
 function _recoverActiveTrack() {
-  try {
-    const saved = localStorage.getItem('ops_toc_active_track');
-    if (!saved) return;
-    const rec = JSON.parse(saved);
-    if (!rec || !Array.isArray(rec.points) || rec.points.length < 1) {
-      localStorage.removeItem('ops_toc_active_track');
-      return;
-    }
-    state.recording = { points: rec.points, started_at: rec.started_at, ended_at: rec.ended_at };
-    if (rec.recMinInterval) _recMinInterval = rec.recMinInterval;
-    updateRecordingLayer();
-    setRecordingButton();
-    const distance = trackDistance(state.recording.points);
-    setBanner(`Track resumed — ${state.recording.points.length} pts · ${fmtDistance(distance)} (tap Stop to save)`);
-  } catch (_) {
-    localStorage.removeItem('ops_toc_active_track');
-  }
+  // Nothing to "recover" any more — the recorder is server-side and has been
+  // running regardless of this page. Just ask it what it has.
+  localStorage.removeItem('ops_toc_active_track'); // drop the old browser buffer
+  _recPoll(true);
 }
 
 async function initMapAndData() {
@@ -5249,7 +5249,7 @@ async function _gpsPoll() {
     _gpsUpdateMarker();
     _updateFixedMarker();
     _drawRangeRings();
-    captureGpsPoint();
+    _recPoll();
     // update status text in settings panel if visible
     const row = el("gps-status-row");
     const txt = el("gps-status-text");

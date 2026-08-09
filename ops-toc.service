@@ -7,7 +7,7 @@ Type=simple
 WorkingDirectory=%h/Projects/ops-toc
 Environment=MAP_APP_DATA_DIR=%h/maps
 Environment=MAP_APP_PORT=8090
-ExecStart=/usr/bin/python3 %h/Projects/ops-toc/app.py
+ExecStart=%h/Projects/ops-toc/venv/bin/python3 %h/Projects/ops-toc/app.py
 Restart=on-failure
 RestartSec=3
 
