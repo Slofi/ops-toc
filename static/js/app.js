@@ -2864,6 +2864,9 @@ async function deleteTrack(id) {
 
 function updateRecordingLayer() {
   if (!state.recording) return;
+  // The recorder is server-side now, so a recording can be discovered before
+  // the map exists (initGps runs on its own timer, MAP tab may be unopened).
+  if (!state.map) return;
   const points = state.recording.points;
   if (state.recordingLayer) state.map.removeLayer(state.recordingLayer);
   if (points.length < 2) {
@@ -2953,7 +2956,7 @@ function applyRecordingState(d) {
   if (!d || (!d.active && !d.buffered)) {
     if (state.recording) {
       state.recording = null;
-      if (state.recordingLayer) { state.map.removeLayer(state.recordingLayer); state.recordingLayer = null; }
+      if (state.recordingLayer) { if (state.map) state.map.removeLayer(state.recordingLayer); state.recordingLayer = null; }
       setRecordingButton();
       setBanner("");
     }
