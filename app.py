@@ -3337,6 +3337,9 @@ _rec: dict[str, Any] = {
     "started_at": None,
     "ended_at": None,
     "min_interval": REC_DEFAULT_INTERVAL,
+    # None | "start" | "end" — which at-rest marker the tail currently is, so a
+    # halt is bracketed by a PAIR of at-rest points (see _rec_consider).
+    "rest_phase": None,
 }
 _rec_dirty = False
 _rec_last_flush = 0.0
@@ -3387,17 +3390,47 @@ def _rec_consider(pos: dict[str, Any]) -> None:
             return
 
         # Minimum-movement gate: a parked vehicle must not accumulate GPS-jitter
-        # distance. When stationary, refresh the last point's clock so the track
-        # stays alive and duration keeps counting, without adding fake metres.
+        # distance. A halt is recorded as TWO at-rest markers bracketing it —
+        # halt-start and halt-end — both pinned to the arrival coordinates and
+        # both carrying the real (near-zero) speed.
+        #
+        # WHY TWO, not one refreshed point (fixed 2026-08-11, S404): _detect_stops
+        # walks consecutive PAIRS and asks _seg_speed_kmh(a, b) < STOP_KMH. That
+        # helper prefers the points' stored `speed` over distance/time. The old
+        # code refreshed the arrival point's timestamp but left its speed at
+        # whatever it was when captured — 50 km/h, recorded while still moving —
+        # so an 80 s halt read as (50+0)/2 = 25 km/h and NEVER tripped the 1 km/h
+        # threshold. A single point can't express "at rest from t1 to t2"; it takes
+        # a pair. Measured before the fix: dt=84 s, dist=13.9 m -> 25.00 km/h with
+        # the stored speed, 0.59 km/h without it.
+        #
+        # Both markers sit at `last`'s exact coordinates, so they add ZERO
+        # distance — the original no-fake-metres guarantee is preserved.
         stationary = spd < REC_STATIONARY_KMH if spd is not None else dist < REC_NEAR_M
         if stationary and dist < REC_STATIONARY_M:
-            last["ts"] = ts
-            last["time"] = point["time"]
+            rest = {
+                **point,
+                "lat": last["lat"],
+                "lon": last["lon"],
+                "speed": 0.0 if spd is None else spd,
+            }
+            phase = _rec.get("rest_phase")
+            if phase is None:
+                pts.append(rest)          # halt START — its ts is when we stopped
+                _rec["rest_phase"] = "start"
+            elif phase == "start":
+                pts.append(rest)          # halt END — from here we only advance it
+                _rec["rest_phase"] = "end"
+            else:
+                last["ts"] = ts           # still parked: advance the end marker
+                last["time"] = rest["time"]
+                last["speed"] = rest["speed"]
             _rec["ended_at"] = ts
             _rec_dirty = True
             return
 
     pts.append(point)
+    _rec["rest_phase"] = None  # moving again — the next halt starts a fresh pair
     _rec["ended_at"] = ts
     _rec_dirty = True
 
@@ -3438,6 +3471,10 @@ def _rec_load_state() -> None:
             _rec["min_interval"] = max(1, int(raw.get("min_interval") or REC_DEFAULT_INTERVAL))
         except (TypeError, ValueError):
             _rec["min_interval"] = REC_DEFAULT_INTERVAL
+        # Restored so a restart mid-halt continues the existing at-rest pair
+        # instead of opening a second one.
+        rp = raw.get("rest_phase")
+        _rec["rest_phase"] = rp if rp in ("start", "end") else None
 
 
 def _rec_summary(since: int | None = None) -> dict[str, Any]:

@@ -1,7 +1,7 @@
 type:: project
 status:: active
 tags:: #ops-toc #map-app #leaflet #offline-maps #field-log #cyberdeck
-updated:: 2026-08-10
+updated:: 2026-08-11
 
 # OPS-TOC
 
@@ -115,6 +115,12 @@ updated:: 2026-08-10
 - Later: **Search pattern generator** — define a polygon area → auto-generate systematic coverage route (grid/spiral/sector) → export as GPX track. Ref: Fields2Cover algorithm (github.com/Fields2Cover/Fields2Cover). Use case: search & rescue, area clearing, field survey. Found 2026-06-09.
 
 ## Changelog
+
+**2026-08-11** — [Claude, S404] **Stop detection fixed — the Debrief stop timeline actually works now.**
+*The bug:* a halt collapsed into ONE point whose timestamp advanced while its `speed` stayed at whatever it was when captured — 50 km/h, recorded while still moving. `_detect_stops()` walks consecutive **pairs** and `_seg_speed_kmh()` prefers stored `speed` over distance÷time, so an 80 s halt averaged `(50+0)/2 = 25 km/h` and never tripped `STOP_KMH = 1.0`. **A single point cannot express "at rest from t1 to t2" — it takes a pair.** Consequence: the Debrief stop timeline had never produced a stop on real data, and *worse* receivers (no RMC speed) detected stops fine because they fell through to the distance÷time path.
+*The fix (~20 lines in `_rec_consider()`):* a halt is bracketed by **two at-rest markers** — halt-start and halt-end — driven by a `rest_phase` state (`None` → `"start"` → `"end"`, cleared when movement resumes, and persisted/restored so a restart mid-halt continues the existing pair rather than opening a second). Both markers are pinned to `last`'s exact coordinates and carry the real near-zero speed, so they add **zero distance** — the original no-fake-metres guarantee is preserved exactly.
+*Verified live on CD* with the same synthetic route that exposed the bug (fake OM GPS source → OPS-TOC's proxy mode; harness recipe in the 2026-08-10 entry below): **0 stops → 1 stop of 79 s**, matching the route's 79 s park exactly, at the right coordinates. **Distance identical to the pre-fix run: 693.7 m**, points 52 → 56 (exactly the 4 markers for two halts). Test track deleted, GPS config restored to `auto`, **63 tracks before and after**.
+⚠️ **Old tracks are NOT retroactively fixed.** Their stored points carry the stale speeds, so re-running detection as-is still finds nothing. A one-off re-detect that *ignores* stored `speed` would recover them — it falls back to distance÷time, which is correct for a parked vehicle. **Not done: it rewrites historical tracks, so it is Filip's call.**
 
 **2026-08-10** — [Claude, S402] **Track recording moved out of the browser and into Flask — the long-standing top open item, now done and verified on CD.**
 *What changed.* `app.py` gained a recorder: module-level buffer + a 1 Hz daemon thread reading `_gps.gps_state`, guarded by an `RLock`. New endpoints `GET /api/recording[?since=N]`, `POST /api/recording/start|stop|save|discard`. The page is now a viewer — it starts/stops the recorder and polls it for the live polyline; `captureGpsPoint()` and the `ops_toc_active_track` localStorage mirror are **deleted**, not disabled.
