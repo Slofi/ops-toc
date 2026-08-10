@@ -1816,7 +1816,8 @@ function hideTrackColorLegend() {
   if (l) l.hidden = true;
 }
 
-function renderTrackColored(trackId, mode) {
+async function renderTrackColored(trackId, mode) {
+  await ensureTrackPoints(trackId);
   const track = _trackCache[trackId];
   if (!track || !state.map) return;
   const pts = track.points;
@@ -2385,6 +2386,23 @@ function renderTrack(track) {
   if (state.map && state.trackVisible.get(track.id)) group.addTo(state.map);
 }
 
+// /api/tracks now returns a SUMMARY (no point arrays) — points were 99.85% of
+// a 21.5 MB response and the list only needs the count. A track's points are
+// fetched on demand, the first time something actually needs them.
+async function ensureTrackPoints(id) {
+  const key = Number(id);
+  let track = state.tracks.get(key);
+  if (track && Array.isArray(track.points) && track.points.length) return track;
+  try {
+    const full = await api(`/api/tracks/${key}`);
+    track = { ...(track || {}), ...full };
+    state.tracks.set(key, track);
+    return track;
+  } catch (_) {
+    return track || null;
+  }
+}
+
 async function loadTracks() {
   const tracks = await api("/api/tracks");
   const active = new Set(tracks.map((track) => track.id));
@@ -2429,7 +2447,7 @@ function renderTrackList() {
   const _trackRow = (track, indent) => {
     const vis = !!state.trackVisible.get(track.id);
     const dateStr = track.updated_at ? fmtDate(track.updated_at) : "";
-    const pts = track.points?.length || 0;
+    const pts = track.point_count ?? track.points?.length ?? 0;
     const distStr = fmtDistance(track.distance_m || 0);
     const tColor = track.color || TRACK_COLOR;
     const cls = indent === 2 ? " track-in-subfolder" : indent === 1 ? " track-in-folder" : "";
@@ -2500,11 +2518,17 @@ function toggleTrackFolder(folder) {
   renderTrackList();
 }
 
-function toggleTrackVisibility(id) {
+async function toggleTrackVisibility(id) {
   if (!state.map) return;
   const vis = !state.trackVisible.get(id);
   state.trackVisible.set(id, vis);
-  const layer = state.trackLayers.get(id);
+  let layer = state.trackLayers.get(id);
+  if (vis && !layer) {
+    // First time this track is shown: its points were never downloaded.
+    const track = await ensureTrackPoints(id);
+    if (track) renderTrack(track);
+    layer = state.trackLayers.get(id);
+  }
   if (layer) {
     if (vis) layer.addTo(state.map);
     else state.map.removeLayer(layer);
@@ -2513,8 +2537,13 @@ function toggleTrackVisibility(id) {
   renderTrackList();
 }
 
-function flyToTrack(id) {
+async function flyToTrack(id) {
   if (!state.map) return;
+  // The layer may not exist yet — points are fetched on demand now.
+  if (!state.trackLayers.get(id)) {
+    const track = await ensureTrackPoints(id);
+    if (track) renderTrack(track);
+  }
   if (!state.trackVisible.get(id)) {
     state.trackVisible.set(id, true);
     const l = state.trackLayers.get(id);
@@ -2671,8 +2700,7 @@ async function showTrackDebrief(id) {
   let track = _trackCache[id] || (state.tracks && state.tracks.get(Number(id)));
   // Fetch fresh so we have persisted stops/report even if the cache is thin.
   try {
-    const all = await api("/api/tracks");
-    const found = all.find(t => Number(t.id) === Number(id));
+    const found = await api(`/api/tracks/${Number(id)}`);
     if (found) track = found;
   } catch (_) {}
   if (!track) { await appAlert("Track not found.", "Debrief"); return; }

@@ -279,7 +279,11 @@ def _drawing_row(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def _track_row(row: sqlite3.Row) -> dict[str, Any]:
+def _track_row(row: sqlite3.Row, include_points: bool = True) -> dict[str, Any]:
+    """With include_points=False, omit the point array but still report
+    `point_count`. The list endpoint uses that: points were 99.85% of a 21.5 MB
+    /api/tracks response (167k points across 63 tracks) and the list only ever
+    needed the count — see the 2026-08-11 changelog entry."""
     try:
         points = json.loads(row["points_json"])
     except (TypeError, ValueError):
@@ -303,7 +307,8 @@ def _track_row(row: sqlite3.Row) -> dict[str, Any]:
         "description": row["description"] or "",
         "color": row["color"] or "#e8b04f",
         "folder": row["folder"] or "",
-        "points": points if isinstance(points, list) else [],
+        **({"points": points if isinstance(points, list) else []} if include_points else {}),
+        "point_count": len(points) if isinstance(points, list) else 0,
         "distance_m": row["distance_m"] or 0,
         "source": row["source"] or "gps",
         "started_at": row["started_at"],
@@ -2017,9 +2022,25 @@ def api_delete_drawing(drawing_id: int):
 
 @app.route("/api/tracks", methods=["GET"])
 def api_get_tracks():
+    """Summary list by default — NO point arrays. Pass ?points=1 for the full
+    payload (export/backup paths). Callers that need one track's points should
+    use GET /api/tracks/<id> rather than pulling the whole list."""
+    want_points = request.args.get("points") in ("1", "true", "yes")
     with get_db() as conn:
         rows = conn.execute("SELECT * FROM tracks ORDER BY updated_at DESC, id DESC").fetchall()
-    return jsonify([_track_row(r) for r in rows])
+    return jsonify([_track_row(r, include_points=want_points) for r in rows])
+
+
+@app.route("/api/tracks/<int:track_id>", methods=["GET"])
+def api_get_track(track_id: int):
+    """Single track WITH points. Added 2026-08-11 — this route did not exist
+    (it 405'd), which is why the frontend was fetching the entire list just to
+    read one track."""
+    with get_db() as conn:
+        row = conn.execute("SELECT * FROM tracks WHERE id=?", (track_id,)).fetchone()
+    if not row:
+        return jsonify({"error": "Track not found"}), 404
+    return jsonify(_track_row(row))
 
 
 def _insert_track(

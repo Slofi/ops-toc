@@ -426,7 +426,7 @@ function fmtDuration(secs) {
 }
 
 function trackLogFields(track) {
-  const points = Array.isArray(track.points) ? track.points.length : 0;
+  const points = track.point_count ?? (Array.isArray(track.points) ? track.points.length : 0);
   const dur = (track.started_at && track.ended_at && track.ended_at > track.started_at)
     ? fmtDuration(track.ended_at - track.started_at) : '';
   return {
@@ -446,7 +446,7 @@ function _enrichTrack(t) {
     id: full.id,
     name: full.name || t.name,
     distance_m: full.distance_m || 0,
-    points: Array.isArray(full.points) ? full.points.length : 0,
+    points: full.point_count ?? (Array.isArray(full.points) ? full.points.length : 0),
     started_at: full.started_at || null,
     ended_at: full.ended_at || null,
   };
@@ -488,7 +488,7 @@ function setAttachedTrack(track, opts = {}) {
     id: track.id,
     name: track.name || 'GPS track',
     distance_m: track.distance_m || 0,
-    points: Array.isArray(track.points) ? track.points.length : 0,
+    points: track.point_count ?? (Array.isArray(track.points) ? track.points.length : 0),
     started_at: track.started_at || null,
     ended_at: track.ended_at || null,
   });

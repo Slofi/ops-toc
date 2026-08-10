@@ -31,12 +31,16 @@ updated:: 2026-08-11
 | `systemctl --user start ops-toc` / `stop ops-toc` | start / stop |
 | `journalctl --user -u ops-toc -f` | follow logs |
 | `curl -s localhost:8090/api/gps` | check GPS / speed feed |
+| `curl -s localhost:8090/api/tracks` | track list — **summary only, no point arrays** (~32 KB). Add `?points=1` for the full payload (~20 MB) |
+| `curl -s localhost:8090/api/tracks/<id>` | one track **with** its points |
 | `curl -s localhost:8090/api/recording` | is a track being recorded right now? (`active`, `count`, `distance_m`) |
 | `curl -s -X POST localhost:8090/api/recording/start -H 'Content-Type: application/json' -d '{"min_interval":10}'` | start recording without a browser |
 | `curl -s -X POST localhost:8090/api/recording/stop` | halt capture, keep the buffer for saving |
 | `git -C ~/Projects/ops-toc log --oneline @{u}..HEAD` | what is committed locally but not pushed (branch is **master**, not main — `origin/main..HEAD` silently returns nothing) |
 
 ## Troubleshooting / Recovery
+
+- **`/api/tracks` doesn't include points — that's deliberate (2026-08-11).** It returns a summary with `point_count`; the full arrays were **99.85% of a 21.5 MB response** (167k points across 63 tracks) and the list only ever needed the count. Use **`GET /api/tracks/<id>`** for one track's points, or `?points=1` for the whole lot (export/backup). The frontend fetches a track's points lazily, the first time it is shown, flown to, or coloured by speed/altitude.
 
 - **GPS "port busy" / no fix:** gpsd grabbed the receiver (it's masked, but if it returns) → `sudo systemctl mask --now gpsd.service gpsd.socket`. Internal BN-280 needs explicit `/dev/ttyS3` (`auto` is USB-only).
 - **Flask import breaks after a Syncthing sync:** venv got cross-machine contaminated → rebuild `python3.12 -m venv venv && venv/bin/pip install -r requirements.txt` (venvs are Syncthing-ignored).
