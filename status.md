@@ -479,7 +479,7 @@ Proxy integration:
 
 Caveat:
 
-- A backup from the original live GPS patch remains in the checkout as `gps.py.before-ttyS-gps`.
+- ✅ **Resolved 2026-08-10 (S403):** the stray `gps.py.before-ttyS-gps` backup was **deleted** from the checkout after verifying it was byte-identical (md5) to a version git already holds — commit `abc69a2` (2026-06-22, *"fix: GPS enabled flag not preserved on partial config save"*). Nothing was lost; recover with `git -C ~/Projects/ops-toc show abc69a2:gps.py`. Working tree is now clean.
 
 ## Internal GPS Field Diagnosis — 2026-06-28
 
