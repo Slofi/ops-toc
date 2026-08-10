@@ -3501,7 +3501,13 @@ def _rec_summary(since: int | None = None) -> dict[str, Any]:
 
 def _rec_clear() -> None:
     """Caller holds _rec_lock."""
-    _rec.update({"active": False, "points": [], "started_at": None, "ended_at": None})
+    # rest_phase reset explicitly: today the `if pts:` guard means an empty
+    # buffer always takes the append path (which clears it), so a stale value is
+    # harmless — but that is implicit. If the guard or the append ever moves, a
+    # leftover "end" would make the next track's FIRST halt collapse into one
+    # point again: exactly the bug this state machine exists to fix.
+    _rec.update({"active": False, "points": [], "started_at": None,
+                 "ended_at": None, "rest_phase": None})
     _rec_save_state()
 
 
@@ -3551,7 +3557,8 @@ def api_recording_start():
         if _rec["points"]:
             return jsonify({"error": "An unsaved track is still buffered — save or discard it first."}), 409
         ts = int(time.time())
-        _rec.update({"active": True, "points": [], "started_at": ts, "ended_at": ts, "min_interval": interval})
+        _rec.update({"active": True, "points": [], "started_at": ts, "ended_at": ts,
+                     "min_interval": interval, "rest_phase": None})
         _rec_consider(pos)  # seed the first point immediately
         _rec_save_state()
         return jsonify({"ok": True, **_rec_summary(0)})
