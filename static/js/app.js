@@ -1817,8 +1817,10 @@ function hideTrackColorLegend() {
 }
 
 async function renderTrackColored(trackId, mode) {
-  await ensureTrackPoints(trackId);
-  const track = _trackCache[trackId];
+  // ensureTrackPoints() populates state.tracks, NOT _trackCache — take its
+  // return value. Reading _trackCache alone made the ensure a silent no-op
+  // when the track's points had never been fetched (caught in sweep, S404).
+  const track = (await ensureTrackPoints(trackId)) || _trackCache[trackId];
   if (!track || !state.map) return;
   const pts = track.points;
   if (!pts || pts.length < 2) return;
@@ -2399,7 +2401,7 @@ async function ensureTrackPoints(id) {
     state.tracks.set(key, track);
     return track;
   } catch (_) {
-    return track || null;
+    return null;   // fetch failed — say so; a summary without points is useless here
   }
 }
 
@@ -2528,6 +2530,21 @@ async function toggleTrackVisibility(id) {
     const track = await ensureTrackPoints(id);
     if (track) renderTrack(track);
     layer = state.trackLayers.get(id);
+    if (!layer) {
+      // Points never arrived. Without this the flag stays true and the list
+      // renders the track as SHOWN while nothing is on the map — a silent
+      // failure reported as success (sweep, S404).
+      state.trackVisible.set(id, false);
+      renderTrackList();
+      // Read the count from the SUMMARY we already hold — `track` is null when
+      // the fetch failed, and using it here would misreport a network failure
+      // as "too few points".
+      const n = state.tracks.get(Number(id))?.point_count ?? 0;
+      setBanner(n < 2
+        ? "That track has too few points to draw."
+        : "Couldn't load that track's points — check the connection and try again.");
+      return;
+    }
   }
   if (layer) {
     if (vis) layer.addTo(state.map);
