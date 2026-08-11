@@ -284,11 +284,21 @@ def _track_row(row: sqlite3.Row, include_points: bool = True) -> dict[str, Any]:
     `point_count`. The list endpoint uses that: points were 99.85% of a 21.5 MB
     /api/tracks response (167k points across 63 tracks) and the list only ever
     needed the count — see the 2026-08-11 changelog entry."""
-    try:
-        points = json.loads(row["points_json"])
-    except (TypeError, ValueError):
-        points = []
     keys = row.keys()
+    # Summary mode must NOT parse points_json. Omitting the array from the
+    # response but still json.loads()-ing it to count made /api/tracks take
+    # 0.46 s for 32 KB while a single 753 KB track took 0.066 s — the cost was
+    # never the transfer, it was parsing 167k points on every list request.
+    # The caller supplies point_count via SQL json_array_length() instead.
+    if include_points:
+        try:
+            points = json.loads(row["points_json"])
+        except (TypeError, ValueError):
+            points = []
+        n_points = len(points)
+    else:
+        points = []
+        n_points = int(row["point_count"]) if "point_count" in keys and row["point_count"] is not None else 0
     report: dict[str, Any] = {}
     if "report_json" in keys and row["report_json"]:
         try:
@@ -308,7 +318,7 @@ def _track_row(row: sqlite3.Row, include_points: bool = True) -> dict[str, Any]:
         "color": row["color"] or "#e8b04f",
         "folder": row["folder"] or "",
         **({"points": points if isinstance(points, list) else []} if include_points else {}),
-        "point_count": len(points) if isinstance(points, list) else 0,
+        "point_count": n_points,
         "distance_m": row["distance_m"] or 0,
         "source": row["source"] or "gps",
         "started_at": row["started_at"],
@@ -2026,8 +2036,21 @@ def api_get_tracks():
     payload (export/backup paths). Callers that need one track's points should
     use GET /api/tracks/<id> rather than pulling the whole list."""
     want_points = request.args.get("points") in ("1", "true", "yes")
+    sql = "SELECT * FROM tracks ORDER BY updated_at DESC, id DESC"
+    if not want_points:
+        # json_array_length() counts in SQLite (~0.08 s for all tracks) instead
+        # of parsing every point array in Python (~0.4 s and growing).
+        # Every column EXCEPT points_json — otherwise ~20 MB of JSON text is
+        # read into Python only to be discarded. json_array_length() does the
+        # counting inside SQLite.
+        sql = (
+            "SELECT id, name, description, color, distance_m, source, started_at, "
+            "ended_at, created_at, updated_at, folder, report_json, stops_json, "
+            "json_array_length(points_json) AS point_count "
+            "FROM tracks ORDER BY updated_at DESC, id DESC"
+        )
     with get_db() as conn:
-        rows = conn.execute("SELECT * FROM tracks ORDER BY updated_at DESC, id DESC").fetchall()
+        rows = conn.execute(sql).fetchall()
     return jsonify([_track_row(r, include_points=want_points) for r in rows])
 
 
