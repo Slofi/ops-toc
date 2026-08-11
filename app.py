@@ -3414,6 +3414,8 @@ _rec: dict[str, Any] = {
     # None | "start" | "end" — which at-rest marker the tail currently is, so a
     # halt is bracketed by a PAIR of at-rest points (see _rec_consider).
     "rest_phase": None,
+    # True only while a /save is committing — see api_recording_save().
+    "saving": False,
 }
 _rec_dirty = False        # something changed
 _rec_points_dirty = False # a point was ADDED (not just the tail ts advanced)
@@ -3659,10 +3661,27 @@ def api_recording_stop():
 @app.route("/api/recording/save", methods=["POST"])
 def api_recording_save():
     payload = request.get_json(silent=True) or {}
+    # RACE (fixed 2026-08-11, S404): the buffer was read under the lock but only
+    # cleared AFTER _insert_track(), and that insert — up to several thousand
+    # points — runs outside the lock. Two concurrent /save calls therefore both
+    # read the same buffer and both inserted, producing TWO tracks from one
+    # recording. A double-tap on Save is enough. The flag closes the window while
+    # still leaving the points intact if the insert fails.
     with _rec_lock:
+        if _rec.get("saving"):
+            return jsonify({"error": "A save is already in progress"}), 409
+        _rec["saving"] = True
         _rec["active"] = False  # no appends while we commit
         points = [dict(p) for p in _rec["points"]]
         started_at, ended_at = _rec["started_at"], _rec["ended_at"]
+    try:
+        return _recording_save_commit(payload, points, started_at, ended_at)
+    finally:
+        with _rec_lock:
+            _rec["saving"] = False
+
+
+def _recording_save_commit(payload, points, started_at, ended_at):
     if len(points) < 2:
         return jsonify({"error": "At least two GPS points required"}), 400
     try:
