@@ -217,6 +217,13 @@ def init_db() -> None:
                 conn.execute(f"ALTER TABLE tracks ADD COLUMN {_tcol}")
             except Exception:
                 pass
+        # Markers gained folders 2026-08-11 (S404). a3c38dc had shipped the
+        # frontend grouping for this in June but never the column or the input,
+        # which also broke Add/Edit Marker outright — see that changelog entry.
+        try:
+            conn.execute("ALTER TABLE markers ADD COLUMN folder TEXT DEFAULT ''")
+        except Exception:
+            pass
 
 
 def _clean_text(value: Any, max_len: int, default: str = "") -> str:
@@ -230,6 +237,18 @@ def _float(value: Any, field: str) -> float:
     except (TypeError, ValueError) as exc:
         raise ValueError(f"Invalid {field}") from exc
     if math.isnan(out) or math.isinf(out):
+        raise ValueError(f"Invalid {field}")
+    return out
+
+
+def _coord(value: Any, field: str) -> float:
+    """_float plus an on-Earth range check. Added 2026-08-11 (S404 sweep):
+    nothing validated latitude/longitude anywhere, so a malformed GPX import or
+    a client bug could store lat=999 — which then breaks fitBounds and puts a
+    marker somewhere impossible. NaN/Inf were already rejected by _float."""
+    out = _float(value, field)
+    limit = 90.0 if field.startswith("lat") else 180.0
+    if not -limit <= out <= limit:
         raise ValueError(f"Invalid {field}")
     return out
 
@@ -257,6 +276,7 @@ def _marker_row(row: sqlite3.Row) -> dict[str, Any]:
         "description": row["description"] or "",
         "emoji": row["emoji"] or "pin",
         "category": row["category"] or "note",
+        "folder": (row["folder"] if "folder" in row.keys() else "") or "",
         "source": row["source"] or "map-app",
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
@@ -1106,8 +1126,8 @@ def _clean_stops(raw: Any) -> list[dict[str, Any]]:
                 "start_ts": _int(s["start_ts"], "start_ts") if s.get("start_ts") is not None else None,
                 "end_ts": _int(s["end_ts"], "end_ts") if s.get("end_ts") is not None else None,
                 "duration_s": _int(s.get("duration_s", 0), "duration_s"),
-                "lat": _float(s["lat"], "lat") if s.get("lat") is not None else None,
-                "lon": _float(s["lon"], "lon") if s.get("lon") is not None else None,
+                "lat": _coord(s["lat"], "lat") if s.get("lat") is not None else None,
+                "lon": _coord(s["lon"], "lon") if s.get("lon") is not None else None,
                 "note": _clean_text(s.get("note"), 500),
                 "tag": _clean_text(s.get("tag"), 40),
             })
@@ -1217,8 +1237,8 @@ def _feature_points(coords: list[Any]) -> list[dict[str, float]]:
         if not isinstance(coord, list) or len(coord) < 2:
             continue
         try:
-            lon = _float(coord[0], "lon")
-            lat = _float(coord[1], "lat")
+            lon = _coord(coord[0], "lon")
+            lat = _coord(coord[1], "lat")
         except ValueError:
             continue
         points.append({"lat": lat, "lon": lon})
@@ -1247,8 +1267,8 @@ def import_markings_feature_collection(geojson: dict[str, Any]) -> dict[str, int
                 if len(coords) < 2:
                     continue
                 try:
-                    lon = _float(coords[0], "lon")
-                    lat = _float(coords[1], "lat")
+                    lon = _coord(coords[0], "lon")
+                    lat = _coord(coords[1], "lat")
                 except ValueError:
                     continue
                 conn.execute(
@@ -1402,7 +1422,7 @@ def _xml_points(nodes: list[ET.Element]) -> list[dict[str, float]]:
     points = []
     for node in nodes:
         try:
-            point = {"lat": _float(node.attrib.get("lat"), "lat"), "lon": _float(node.attrib.get("lon"), "lon")}
+            point = {"lat": _coord(node.attrib.get("lat"), "lat"), "lon": _coord(node.attrib.get("lon"), "lon")}
             ele = _xml_text(node, "ele")
             if ele:
                 point["alt"] = _float(ele, "alt")
@@ -1420,7 +1440,7 @@ def _clean_track_points(points: list[Any]) -> list[dict[str, Any]]:
     for point in points:
         if not isinstance(point, dict):
             continue
-        out: dict[str, Any] = {"lat": _float(point.get("lat"), "lat"), "lon": _float(point.get("lon"), "lon")}
+        out: dict[str, Any] = {"lat": _coord(point.get("lat"), "lat"), "lon": _coord(point.get("lon"), "lon")}
         if point.get("alt") is not None:
             out["alt"] = _float(point.get("alt"), "alt")
         if point.get("time") is not None:
@@ -1478,8 +1498,8 @@ def import_gpx_bytes(raw: bytes) -> dict[str, int]:
     with get_db() as conn:
         for wpt in _xml_children(root, "wpt"):
             try:
-                lat = _float(wpt.attrib.get("lat"), "lat")
-                lon = _float(wpt.attrib.get("lon"), "lon")
+                lat = _coord(wpt.attrib.get("lat"), "lat")
+                lon = _coord(wpt.attrib.get("lon"), "lon")
             except ValueError:
                 continue
             name = _clean_text(_xml_text(wpt, "name", "Waypoint"), 80, "Waypoint") or "Waypoint"
@@ -1802,8 +1822,8 @@ def api_search():
     results = []
     for item in data:
         try:
-            lat = _float(item.get("lat"), "lat")
-            lon = _float(item.get("lon"), "lon")
+            lat = _coord(item.get("lat"), "lat")
+            lon = _coord(item.get("lon"), "lon")
         except ValueError:
             continue
         results.append(
@@ -1905,8 +1925,8 @@ def api_get_markers():
 def api_create_marker():
     payload = request.get_json(silent=True) or {}
     try:
-        lat = _float(payload.get("lat"), "lat")
-        lon = _float(payload.get("lon"), "lon")
+        lat = _coord(payload.get("lat"), "lat")
+        lon = _coord(payload.get("lon"), "lon")
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     name = _clean_text(payload.get("name"), 80)
@@ -1916,8 +1936,8 @@ def api_create_marker():
     with get_db() as conn:
         cur = conn.execute(
             """
-            INSERT INTO markers (lat,lon,name,description,emoji,category,source,created_at,updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?)
+            INSERT INTO markers (lat,lon,name,description,emoji,category,folder,source,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 lat,
@@ -1926,6 +1946,7 @@ def api_create_marker():
                 _clean_text(payload.get("description"), 400),
                 _clean_text(payload.get("emoji"), 24, "pin") or "pin",
                 _clean_text(payload.get("category"), 40, "note") or "note",
+                _clean_text(payload.get("folder"), 80),
                 _clean_text(payload.get("source"), 40, "map-app") or "map-app",
                 ts,
                 ts,
@@ -1949,14 +1970,14 @@ def api_update_marker(marker_id: int):
         lon = existing["lon"]
         if "lat" in payload:
             try:
-                lat = _float(payload.get("lat"), "lat")
-                lon = _float(payload.get("lon"), "lon")
+                lat = _coord(payload.get("lat"), "lat")
+                lon = _coord(payload.get("lon"), "lon")
             except ValueError as exc:
                 return jsonify({"error": str(exc)}), 400
         conn.execute(
             """
             UPDATE markers
-            SET lat=?,lon=?,name=?,description=?,emoji=?,category=?,updated_at=?
+            SET lat=?,lon=?,name=?,description=?,emoji=?,category=?,folder=?,updated_at=?
             WHERE id=?
             """,
             (
@@ -1966,6 +1987,7 @@ def api_update_marker(marker_id: int):
                 _clean_text(payload.get("description"), 400),
                 _clean_text(payload.get("emoji"), 24, "pin") or "pin",
                 _clean_text(payload.get("category"), 40, "note") or "note",
+                _clean_text(payload.get("folder"), 80),
                 now_ts(),
                 marker_id,
             ),
@@ -2001,7 +2023,7 @@ def api_create_drawing():
     clean_points = []
     try:
         for p in points:
-            clean_points.append({"lat": _float(p.get("lat"), "lat"), "lon": _float(p.get("lon"), "lon")})
+            clean_points.append({"lat": _coord(p.get("lat"), "lat"), "lon": _coord(p.get("lon"), "lon")})
     except (AttributeError, ValueError) as exc:
         return jsonify({"error": str(exc)}), 400
     data["points"] = clean_points
@@ -2251,7 +2273,7 @@ def api_measure():
     payload = request.get_json(silent=True) or {}
     points = payload.get("points") if isinstance(payload.get("points"), list) else []
     try:
-        clean = [{"lat": _float(p.get("lat"), "lat"), "lon": _float(p.get("lon"), "lon")} for p in points]
+        clean = [{"lat": _coord(p.get("lat"), "lat"), "lon": _coord(p.get("lon"), "lon")} for p in points]
     except (AttributeError, ValueError) as exc:
         return jsonify({"error": str(exc)}), 400
     if len(clean) < 2:

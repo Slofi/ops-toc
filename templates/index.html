@@ -640,6 +640,11 @@
       <label>Category
         <input id="marker-category" maxlength="40" placeholder="note">
       </label>
+      <label>Folder
+        <input id="marker-folder" type="text" list="marker-folder-datalist" maxlength="80"
+               placeholder="Optional — use Parent/Sub for a sub-folder" autocomplete="off">
+        <datalist id="marker-folder-datalist"></datalist>
+      </label>
       <div id="marker-status"></div>
       <div class="dialog-actions">
         <button class="btn" value="cancel">Cancel</button>
