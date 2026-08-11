@@ -252,6 +252,9 @@ function appPrompt(message, value = "", title = "Name") {
 const CHECKLIST_STORAGE_KEY = "ops_toc_checklists";
 const CHECKLIST_FOLDER_STORAGE_KEY = "ops_toc_checklist_folders_collapsed";
 const CHECKLIST_BACKUP_PREFIX = "ops_toc_checklists_backup_";
+// Pre-import snapshots to keep. They are write-only today (nothing reads them),
+// so this is a safety net against a bad import, not a history.
+const CHECKLIST_BACKUP_KEEP = 3;
 let _checklists = [];
 let _checklistCollapsedFolders = new Set();
 
@@ -302,7 +305,24 @@ function checklistBackupCurrent(reason = "backup") {
     exported_at: new Date().toISOString(),
     checklists: _checklists,
   };
-  localStorage.setItem(`${CHECKLIST_BACKUP_PREFIX}${stamp}`, JSON.stringify(payload));
+  // Keep only the most recent few. Each call wrote a NEW timestamped key
+  // holding a full copy of every checklist, and nothing ever read, listed or
+  // pruned them (the prefix appeared exactly twice in this file: the constant
+  // and this write) — so they accumulated forever as unreadable dead weight,
+  // and localStorage has no quota handling anywhere. Sweep, S404 2026-08-11.
+  try {
+    localStorage.setItem(`${CHECKLIST_BACKUP_PREFIX}${stamp}`, JSON.stringify(payload));
+  } catch (err) {
+    console.warn("[checklists] backup skipped (storage full?):", err?.name || err);
+  }
+  try {
+    const keys = Object.keys(localStorage)
+      .filter(k => k.startsWith(CHECKLIST_BACKUP_PREFIX))
+      .sort();                                   // timestamped -> lexicographic == chronological
+    for (const k of keys.slice(0, Math.max(0, keys.length - CHECKLIST_BACKUP_KEEP))) {
+      localStorage.removeItem(k);
+    }
+  } catch (_) { /* pruning is best-effort */ }
 }
 
 function checklistFind(listId) {
