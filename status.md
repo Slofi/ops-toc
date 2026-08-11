@@ -116,6 +116,10 @@ updated:: 2026-08-11
 
 ## Changelog
 
+**2026-08-11** — [Claude, S404] **Recorder state-file write amplification — the M-H Redis pattern, milder.** `_rec_save_state()` rewrites the **whole** buffer every `REC_FLUSH_S` (5 s), so each flush grows with the track (~133 B/point). Measured: 1000 pts = 91 MB/h, 4000 pts = 364 MB/h, **6235 pts = 568 MB/h** — total bytes are **O(n²)** in points. The pure-waste case is a long halt: no point is added, yet the entire buffer is rewritten every 5 s just to advance one timestamp (track #31 sat parked 74 minutes).
+⚠️ **Scope it honestly: CD keeps `~/maps` on NVMe (233 GB), not the SD card** — so this is wasted I/O, *not* the flash-death scenario that made Redis-on-SD urgent on M-H. Fixed anyway because it's free: parked flushes are rate-limited separately (`REC_FLUSH_IDLE_S = 60`), tracked by a new `_rec_points_dirty` flag that distinguishes "a point was appended" from "only the tail timestamp moved". A crash while parked now costs up to 60 s of *halt duration* and **zero distance**.
+**Verified live:** parked → state file untouched for 36 s then flushed at **exactly 60 s**; movement → flushes promptly again; buffer, counts and distance unaffected.
+
 **2026-08-11** — [Claude, S404] 🔴 **TWO user-facing features were silently dead — same root cause, found because Filip said "the Debrief button doesn't do anything".**
 `el()` is plain `document.getElementById`, so a wrong id yields `null` — and both places **dereferenced it before calling `showModal()`**, so the TypeError aborted the handler and the button did *nothing at all*. No error visible without the console open.
 · **Debrief** — `el("debrief-form")`; the template's id is **`track-debrief-form`**. Broken since the Debrief shipped (S402) and never caught because *the frontend had never been opened in a browser* — the note said "frontend browser validation still pending" and that was exactly right.

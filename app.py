@@ -3370,6 +3370,14 @@ REC_MAX_SPEED_MS     = 100.0  # 360 km/h absolute sanity cap
 REC_STATIONARY_KMH   = 3.0
 REC_STATIONARY_M     = 5.0
 REC_FLUSH_S          = 5.0    # at most one state write per this many seconds
+# ...but a PARKED recorder adds no points and only advances the tail timestamp,
+# yet _rec_save_state() rewrites the WHOLE buffer. That write grows with the
+# track (~133 B/point: 4000 points = 518 KB per flush = 364 MB/hour), so a long
+# halt burns hundreds of MB rewriting a number. Total bytes are O(n^2) in points.
+# Parked flushes are therefore rate-limited separately; losing up to this many
+# seconds of PARKED time on a crash costs no distance and a few seconds of halt
+# duration. (CD keeps ~/maps on NVMe, so this is waste and I/O, not SD wear.)
+REC_FLUSH_IDLE_S     = 60.0
 REC_DEFAULT_INTERVAL = 10
 REC_TICK_S           = 1.0
 
@@ -3385,7 +3393,8 @@ _rec: dict[str, Any] = {
     # halt is bracketed by a PAIR of at-rest points (see _rec_consider).
     "rest_phase": None,
 }
-_rec_dirty = False
+_rec_dirty = False        # something changed
+_rec_points_dirty = False # a point was ADDED (not just the tail ts advanced)
 _rec_last_flush = 0.0
 
 
@@ -3395,7 +3404,7 @@ def _rec_iso(ts: int) -> str:
 
 def _rec_consider(pos: dict[str, Any]) -> None:
     """Filter one GPS sample into the active buffer. Caller holds _rec_lock."""
-    global _rec_dirty
+    global _rec_dirty, _rec_points_dirty
     if not _rec["active"]:
         return
     if not pos.get("fix") or pos.get("lat") is None or pos.get("lon") is None:
@@ -3461,9 +3470,11 @@ def _rec_consider(pos: dict[str, Any]) -> None:
             phase = _rec.get("rest_phase")
             if phase is None:
                 pts.append(rest)          # halt START — its ts is when we stopped
+                _rec_points_dirty = True
                 _rec["rest_phase"] = "start"
             elif phase == "start":
                 pts.append(rest)          # halt END — from here we only advance it
+                _rec_points_dirty = True
                 _rec["rest_phase"] = "end"
             else:
                 last["ts"] = ts           # still parked: advance the end marker
@@ -3474,6 +3485,7 @@ def _rec_consider(pos: dict[str, Any]) -> None:
             return
 
     pts.append(point)
+    _rec_points_dirty = True
     _rec["rest_phase"] = None  # moving again — the next halt starts a fresh pair
     _rec["ended_at"] = ts
     _rec_dirty = True
@@ -3556,16 +3568,20 @@ def _rec_clear() -> None:
 
 
 def _rec_loop() -> None:
-    global _rec_dirty, _rec_last_flush
+    global _rec_dirty, _rec_points_dirty, _rec_last_flush
     while True:
         try:
             with _gps.gps_lock:
                 pos = dict(_gps.gps_state)
             with _rec_lock:
                 _rec_consider(pos)
-                if _rec_dirty and time.monotonic() - _rec_last_flush >= REC_FLUSH_S:
+                # A parked recorder only moves the tail timestamp — rewriting
+                # the whole buffer every 5 s for that is pure waste.
+                due = REC_FLUSH_S if _rec_points_dirty else REC_FLUSH_IDLE_S
+                if _rec_dirty and time.monotonic() - _rec_last_flush >= due:
                     _rec_save_state()
                     _rec_dirty = False
+                    _rec_points_dirty = False
                     _rec_last_flush = time.monotonic()
         except Exception:
             pass  # a recorder tick must never kill the thread
