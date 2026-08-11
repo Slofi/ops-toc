@@ -116,6 +116,9 @@ updated:: 2026-08-11
 
 ## Changelog
 
+**2026-08-11** — [Claude, S404] **GPS reader handoff could hit "device busy" (`gps.py` sweep).** `_stop_current()` set the stop flag then slept **0.25 s** — but the reader parks in `ser.readline()` for up to `ser.timeout` (**1 s**), so the old thread could still hold the serial port when `gps_start()` reopened it. Symptom: changing GPS settings occasionally fails with "cannot open / device busy" and GPS stays down until the 5 s watchdog recovers it. Replaced the sleep with `thread.join(timeout=2.5)` — the reader closes the port on its way out, so the handoff is now deterministic instead of a timing bet.
+⚠️ **Honest scope: verified by construction, not reproduced.** Six rapid source switches produced no errors, but the fake-GPS harness drives the **proxy** path, which holds no serial port — the serial race needs the u-blox physically attached to exercise. Worth a glance next time the dongle is on.
+
 **2026-08-11** — [Claude, S404] 🔴 **Race in `/api/recording/save` — two concurrent saves produced two tracks from one recording.** Found sweeping my own code. The buffer was read under `_rec_lock` but only cleared **after** `_insert_track()`, and that insert — up to several thousand points — runs *outside* the lock. Two `/save` calls therefore both read the same buffer and both inserted. **A double-tap on Save is enough**; DS added a double-submit guard to Mesh-Torry's admin UI for precisely this reason. Fixed with a `saving` flag taken under the lock (second caller gets **409**), with the commit factored into `_recording_save_commit()` and the flag released in a `finally` — so a failed insert leaves the points **intact** rather than lost. `/start` and `/discard` were already atomic; only `/save` had the gap.
 **Armed-tested:** two concurrent saves against an 11-point buffer → `save1 → 200`, `save2 → 409`, and exactly **one** track created (verified by count and by name). Test track deleted.
 

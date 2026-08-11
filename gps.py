@@ -476,8 +476,19 @@ def _proxy_reader(om_url, fallback_port, stop_event):
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def _stop_current():
+    """Stop the running reader and WAIT for it to actually let go of the port.
+
+    The old code set the stop flag then slept 0.25 s — but the reader can be
+    parked in ser.readline() for up to ser.timeout (1 s), so the port could
+    still be open when gps_start() immediately reopened it. That surfaces as
+    "Device or resource busy"/"cannot open" on a GPS settings change, leaving
+    GPS down until the 5 s watchdog recovers it. Joining is deterministic:
+    the reader closes the port on its way out (S404 sweep, 2026-08-11).
+    """
     _stop_event.set()
-    time.sleep(0.25)
+    t = _gps_thread
+    if t is not None and t.is_alive():
+        t.join(timeout=2.5)   # comfortably > the 1 s readline timeout
 
 
 def gps_start(port):
