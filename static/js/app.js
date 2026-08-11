@@ -1384,7 +1384,13 @@ function openMarkerDialog(marker = null, latlng = null) {
   el("marker-desc").value = marker?.description || "";
   el("marker-emoji").value = marker?.emoji || "pin";
   el("marker-category").value = marker?.category || "note";
-  el("marker-folder").value = marker?.folder || "";
+  // #marker-folder does not exist in index.html — a3c38dc (2026-06-23) added the
+  // folder JS but never the input, and markers have no folder column in the DB
+  // either. el() returns null, so the old hard dereference threw HERE, before
+  // showModal() below — meaning Add/Edit Marker silently did nothing for weeks.
+  // Null-safe so the dialog works; the half-built feature is left for a decision.
+  const _mf = el("marker-folder");
+  if (_mf) _mf.value = marker?.folder || "";
   el("marker-status").textContent = "";
   populateMarkerFolderDatalist();
   el("marker-dialog").showModal();
@@ -1401,7 +1407,7 @@ async function saveMarker(event) {
     description: el("marker-desc").value.trim(),
     emoji: el("marker-emoji").value.trim() || "pin",
     category: el("marker-category").value.trim() || "note",
-    folder: el("marker-folder").value.trim(),
+    folder: el("marker-folder")?.value.trim() || "",
   };
   try {
     if (id) {
@@ -2734,7 +2740,11 @@ async function showTrackDebrief(id) {
   _renderDebriefStops();
 
   const dlg = el("track-debrief-dialog");
-  el("debrief-form").onsubmit = (e) => { e.preventDefault(); _saveDebrief(); };
+  // id is track-debrief-form in the template. el() returns null for a wrong id,
+  // and this line ran BEFORE dlg.showModal() — so the TypeError aborted the
+  // function and the Debrief button silently did nothing. Never caught because
+  // the Debrief frontend had never been opened in a browser (S402 -> S404).
+  el("track-debrief-form").onsubmit = (e) => { e.preventDefault(); _saveDebrief(); };
   el("debrief-cancel").onclick = () => dlg.close();
   el("debrief-export").onclick = () => _exportDebrief();
   el("debrief-detect").onclick = () => _detectDebriefStops();
