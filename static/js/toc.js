@@ -189,12 +189,9 @@ function tocFormatTs(ts) {
   return `${date}  ${time}`;
 }
 
-function jsSafe(s) {
-  return String(s || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '');
-}
-
+// jsSafe/jsAttr now live in app.js (which loads first and already provides
+// esc(), on which this file has always depended). One definition, one place.
 function escAttr(s) { return esc(s); }
-function jsAttr(s) { return escAttr(jsSafe(s)); }
 function classToken(s) {
   return String(s || '').replace(/[^a-zA-Z0-9_-]/g, '-');
 }

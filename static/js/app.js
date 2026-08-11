@@ -903,6 +903,18 @@ function esc(text) {
   }[c]));
 }
 
+// esc() ALONE IS NOT SAFE inside an inline handler's JS string. The browser
+// HTML-decodes the attribute BEFORE parsing the JS, so esc's &#39; turns back
+// into a real quote and closes the string. A folder called "Mum's place" then
+// produces onclick="toggleMarkerFolder('Mum's place')" — a syntax error, so the
+// button silently does nothing (and a crafted name could run code).
+// Backslash-escape for JS first, THEN entity-escape for HTML.
+// toc.js already did this correctly at all 13 of its call sites; app.js did not.
+function jsSafe(s) {
+  return String(s ?? "").replace(/\\/g, "\\\\").replace(/'/g, "\\'").replace(/\n/g, "\\n").replace(/\r/g, "");
+}
+function jsAttr(s) { return esc(jsSafe(s)); }
+
 const MAP_APP_MANUAL_SECTIONS = [
   {
     title: "Map Basics",
@@ -1540,7 +1552,7 @@ function renderMarkerList() {
     const totalCount = [...subMap.values()].reduce((n, t) => n + t.length, 0);
 
     if (parent) {
-      html += `<div class="track-folder-header marker-folder-header" onclick="toggleMarkerFolder('${esc(parent)}')" data-folder="${esc(parent)}">
+      html += `<div class="track-folder-header marker-folder-header" onclick="toggleMarkerFolder('${jsAttr(parent)}')" data-folder="${esc(parent)}">
         <span class="track-folder-icon">${parentCollapsed ? "▶" : "▼"}</span>
         <span class="track-folder-name">${esc(parent)}</span>
         <span class="track-folder-count">${totalCount}</span>
@@ -1558,7 +1570,7 @@ function renderMarkerList() {
       const subCollapsed = subKey && state.collapsedMarkerFolders.has(subKey);
 
       if (sub) {
-        html += `<div class="track-folder-header track-subfolder-header marker-folder-header" onclick="toggleMarkerFolder('${esc(subKey)}')" data-folder="${esc(subKey)}">
+        html += `<div class="track-folder-header track-subfolder-header marker-folder-header" onclick="toggleMarkerFolder('${jsAttr(subKey)}')" data-folder="${esc(subKey)}">
           <span class="track-folder-icon">${subCollapsed ? "▶" : "▼"}</span>
           <span class="track-folder-name">${esc(sub)}</span>
           <span class="track-folder-count">${subMarkers.length}</span>
@@ -2527,7 +2539,7 @@ function renderTrackList() {
     const totalCount = [...subMap.values()].reduce((n, t) => n + t.length, 0);
 
     if (parent) {
-      html += `<div class="track-folder-header" onclick="toggleTrackFolder('${esc(parent)}')" data-folder="${esc(parent)}">
+      html += `<div class="track-folder-header" onclick="toggleTrackFolder('${jsAttr(parent)}')" data-folder="${esc(parent)}">
         <span class="track-folder-icon">${parentCollapsed ? "▶" : "▼"}</span>
         <span class="track-folder-name">${esc(parent)}</span>
         <span class="track-folder-count">${totalCount}</span>
@@ -2545,7 +2557,7 @@ function renderTrackList() {
       const subCollapsed = subKey && state.collapsedFolders.has(subKey);
 
       if (sub) {
-        html += `<div class="track-folder-header track-subfolder-header" onclick="toggleTrackFolder('${esc(subKey)}')" data-folder="${esc(subKey)}">
+        html += `<div class="track-folder-header track-subfolder-header" onclick="toggleTrackFolder('${jsAttr(subKey)}')" data-folder="${esc(subKey)}">
           <span class="track-folder-icon">${subCollapsed ? "▶" : "▼"}</span>
           <span class="track-folder-name">${esc(sub)}</span>
           <span class="track-folder-count">${subTracks.length}</span>
