@@ -2068,7 +2068,13 @@ def api_get_tracks():
         sql = (
             "SELECT id, name, description, color, distance_m, source, started_at, "
             "ended_at, created_at, updated_at, folder, report_json, stops_json, "
-            "json_array_length(points_json) AS point_count "
+            # json_valid() guard: json_array_length('') raises "malformed JSON",
+            # which would 500 the WHOLE list, not just the bad row. The schema
+            # defaults these TEXT columns to '' and 17 rows already have exactly
+            # that in stops_json — so the empty case is real in this database,
+            # not hypothetical (S404 sweep).
+            "CASE WHEN json_valid(points_json) THEN json_array_length(points_json) ELSE 0 END "
+            "AS point_count "
             "FROM tracks ORDER BY updated_at DESC, id DESC"
         )
     with get_db() as conn:
