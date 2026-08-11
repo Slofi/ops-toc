@@ -1676,7 +1676,12 @@ function flyToDrawing(id) {
 async function deleteDrawing(id) {
   const drawing = state.drawings.get(id);
   if (!drawing || !(await appConfirm(`Delete drawing "${drawing.name}"?`, "Delete Drawing"))) return;
-  await api(`/api/drawings/${id}`, { method: "DELETE" });
+  try {
+    await api(`/api/drawings/${id}`, { method: "DELETE" });
+  } catch (err) {
+    await appAlert(err.message || "Could not delete the drawing.", "Delete Drawing");
+    return;
+  }
   await loadDrawings();
 }
 
@@ -2950,7 +2955,15 @@ async function trackToDrawing(id) {
 async function deleteTrack(id) {
   const track = state.tracks.get(id);
   if (!track || !(await appConfirm(`Delete track "${track.name}"?`, "Delete Track"))) return;
-  await api(`/api/tracks/${id}`, { method: "DELETE" });
+  // Called from an inline onclick, so nothing awaits this — an unhandled
+  // rejection meant loadTracks() never ran and the track stayed on screen with
+  // NO error, reading as "the button didn't work" (sweep, S404).
+  try {
+    await api(`/api/tracks/${id}`, { method: "DELETE" });
+  } catch (err) {
+    await appAlert(err.message || "Could not delete the track.", "Delete Track");
+    return;
+  }
   await loadTracks();
 }
 
