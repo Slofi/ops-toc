@@ -1,3 +1,12 @@
+
+// app.js loads first and defines safeSetItem (quota-safe localStorage write);
+// fall back locally in case that ever changes, so a full store can never crash
+// a tab switch or an SOP tick. See the S404 sweep note in app.js.
+function tocSetItem(key, value) {
+  if (typeof safeSetItem === "function") return safeSetItem(key, value);
+  try { localStorage.setItem(key, value); return true; } catch (_) { return false; }
+}
+
 'use strict';
 
 // ── Constants ─────────────────────────────────────────────────────────
@@ -158,7 +167,7 @@ function showTab(name) {
     setTimeout(() => { if (typeof state !== 'undefined' && state.map) state.map.invalidateSize(); }, 60);
     initMapAndData();
   }
-  localStorage.setItem('tocActiveTab', name);
+  tocSetItem('tocActiveTab', name);
 }
 
 // ── Toast ─────────────────────────────────────────────────────────────
@@ -256,7 +265,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // Start on last active tab, default to log
   const tabs = new Set(['log', 'missions', 'map', 'sop', 'checklist']);
   const savedTab = localStorage.getItem('tocActiveTab') || 'log';
-  if (!tabs.has(savedTab)) localStorage.setItem('tocActiveTab', 'log');
+  if (!tabs.has(savedTab)) tocSetItem('tocActiveTab', 'log');
   showTab(tabs.has(savedTab) ? savedTab : 'log');
 
   // GPS header text refreshed alongside existing GPS poll
@@ -1164,7 +1173,7 @@ function sopUpdate(cb) {
   const section = cb.dataset.section;
   const id = cb.dataset.id;
   if (cb.checked) {
-    localStorage.setItem(sopKey(section, id), '1');
+    tocSetItem(sopKey(section, id), '1');
   } else {
     localStorage.removeItem(sopKey(section, id));
   }

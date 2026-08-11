@@ -44,6 +44,23 @@ const state = {
 };
 
 const el = (id) => document.getElementById(id);
+
+// localStorage.setItem throws QuotaExceededError when the store is full (and in
+// Safari private mode it throws even when empty). Unguarded, that surfaces as a
+// crash in whatever happened to be saving — a map view, a checklist, a toggle —
+// which is near-undiagnosable. Every write goes through here instead; a failed
+// save is a warning, never a broken UI. Returns true on success.
+// (S404 sweep, 2026-08-11 — 24 of ~34 call sites were unguarded.)
+function safeSetItem(key, value) {
+  try {
+    localStorage.setItem(key, value);
+    return true;
+  } catch (err) {
+    console.warn("[storage] could not save", key, "-", err?.name || err);
+    return false;
+  }
+}
+
 const DEFAULT_ACCENT = "#e8b04f";
 // Lite (/lite, HD 5" 1024x600) runs unscaled — sizes are hand-tuned in lite.css
 const BASE_UI_SCALE = window.OPS_TOC_LITE ? 1.0 : 1.09;
@@ -158,9 +175,9 @@ function applyUIZoom(pct) {
 function savedUIZoom() {
   const raw = localStorage.getItem("mapAppUIZoom");
   if (localStorage.getItem(UI_ZOOM_BASE_MIGRATION_KEY) !== "1") {
-    localStorage.setItem(UI_ZOOM_BASE_MIGRATION_KEY, "1");
+    safeSetItem(UI_ZOOM_BASE_MIGRATION_KEY, "1");
     if (raw !== null && Number(raw) === 115) {
-      localStorage.setItem("mapAppUIZoom", String(DEFAULT_UI_ZOOM));
+      safeSetItem("mapAppUIZoom", String(DEFAULT_UI_ZOOM));
       return DEFAULT_UI_ZOOM;
     }
   }
@@ -169,7 +186,7 @@ function savedUIZoom() {
 
 function saveZoom() {
   const pct = Number(el("ui-zoom-input")?.value || DEFAULT_UI_ZOOM);
-  localStorage.setItem("mapAppUIZoom", pct);
+  safeSetItem("mapAppUIZoom", pct);
   applyUIZoom(pct);
 }
 
@@ -289,11 +306,11 @@ function checklistLoad() {
 }
 
 function checklistSave() {
-  localStorage.setItem(CHECKLIST_STORAGE_KEY, JSON.stringify(_checklists));
+  safeSetItem(CHECKLIST_STORAGE_KEY, JSON.stringify(_checklists));
 }
 
 function checklistSaveFolderState() {
-  localStorage.setItem(CHECKLIST_FOLDER_STORAGE_KEY, JSON.stringify([..._checklistCollapsedFolders]));
+  safeSetItem(CHECKLIST_FOLDER_STORAGE_KEY, JSON.stringify([..._checklistCollapsedFolders]));
 }
 
 function checklistBackupCurrent(reason = "backup") {
@@ -311,7 +328,7 @@ function checklistBackupCurrent(reason = "backup") {
   // and this write) — so they accumulated forever as unreadable dead weight,
   // and localStorage has no quota handling anywhere. Sweep, S404 2026-08-11.
   try {
-    localStorage.setItem(`${CHECKLIST_BACKUP_PREFIX}${stamp}`, JSON.stringify(payload));
+    safeSetItem(`${CHECKLIST_BACKUP_PREFIX}${stamp}`, JSON.stringify(payload));
   } catch (err) {
     console.warn("[checklists] backup skipped (storage full?):", err?.name || err);
   }
@@ -1559,8 +1576,8 @@ function renderMarkerList() {
 function toggleMarkerFolder(folder) {
   if (state.collapsedMarkerFolders.has(folder)) state.collapsedMarkerFolders.delete(folder);
   else state.collapsedMarkerFolders.add(folder);
-  localStorage.setItem("ops_toc_collapsed_marker_folders", JSON.stringify([...state.collapsedMarkerFolders]));
-  localStorage.setItem("ops_toc_seen_marker_folders",     JSON.stringify([...state.seenMarkerFolders]));
+  safeSetItem("ops_toc_collapsed_marker_folders", JSON.stringify([...state.collapsedMarkerFolders]));
+  safeSetItem("ops_toc_seen_marker_folders",     JSON.stringify([...state.seenMarkerFolders]));
   renderMarkerList();
 }
 
@@ -2541,8 +2558,8 @@ function renderTrackList() {
 function toggleTrackFolder(folder) {
   if (state.collapsedFolders.has(folder)) state.collapsedFolders.delete(folder);
   else state.collapsedFolders.add(folder);
-  localStorage.setItem("ops_toc_collapsed_folders", JSON.stringify([...state.collapsedFolders]));
-  localStorage.setItem("ops_toc_seen_folders",     JSON.stringify([...state.seenFolders]));
+  safeSetItem("ops_toc_collapsed_folders", JSON.stringify([...state.collapsedFolders]));
+  safeSetItem("ops_toc_seen_folders",     JSON.stringify([...state.seenFolders]));
   renderTrackList();
 }
 
@@ -2976,7 +2993,7 @@ let _recMinInterval = (() => {
 
 function setRecInterval(secs) {
   _recMinInterval = secs;
-  localStorage.setItem("rec_interval", String(secs));
+  safeSetItem("rec_interval", String(secs));
 }
 
 function _intervalLabel(idx) {
@@ -3191,7 +3208,7 @@ function omSyncUrl() {
   const input = el("om-sync-url");
   const value = (input?.value || "http://localhost:8082").trim().replace(/\/+$/, "");
   if (input) input.value = value;
-  localStorage.setItem("mapAppOmSyncUrl", value);
+  safeSetItem("mapAppOmSyncUrl", value);
   return value;
 }
 
@@ -3353,7 +3370,7 @@ function setLayer(value) {
   state.activeLayerValue = value;
   state.baseLayer = createTileLayer(value).addTo(state.map);
   syncMagnifierLayer();
-  localStorage.setItem("mapAppLayer", value);
+  safeSetItem("mapAppLayer", value);
   const select = el("layer-select");
   if (select) select.value = value;
   document.querySelectorAll("#layers-panel-list .layer-opt").forEach((btn) => {
@@ -3441,8 +3458,8 @@ function openSettingsFromMenu(targetId) {
 
 function saveLayerKeys(event) {
   event?.preventDefault();
-  localStorage.setItem("thunderforestApiKey", el("tf-api-key-input").value.trim());
-  localStorage.setItem("mapTilerApiKey", el("mt-api-key-input").value.trim());
+  safeSetItem("thunderforestApiKey", el("tf-api-key-input").value.trim());
+  safeSetItem("mapTilerApiKey", el("mt-api-key-input").value.trim());
   el("layer-key-status").textContent = "Saved.";
   setTimeout(() => {
     setLayer(el("layer-select").value);
@@ -3452,12 +3469,12 @@ function saveLayerKeys(event) {
 function saveAccent(event) {
   event?.preventDefault();
   const hex = el("accent-color-input").value || DEFAULT_ACCENT;
-  localStorage.setItem("mapAppAccentColor", hex);
+  safeSetItem("mapAppAccentColor", hex);
   applyAccentColor(hex);
 }
 
 function resetAccent() {
-  localStorage.setItem("mapAppAccentColor", DEFAULT_ACCENT);
+  safeSetItem("mapAppAccentColor", DEFAULT_ACCENT);
   el("accent-color-input").value = DEFAULT_ACCENT;
   applyAccentColor(DEFAULT_ACCENT);
 }
@@ -3944,7 +3961,7 @@ const OVERLAY_CULL_PAD = 0.6;
 const SONDE_TTL_SEC = 1800; // drop radiosondes with no telemetry for 30 min (landed/dead)
 
 function _overlaySaveEnabled() {
-  localStorage.setItem("ops_toc_live_overlays", JSON.stringify([...state.overlayEnabled]));
+  safeSetItem("ops_toc_live_overlays", JSON.stringify([...state.overlayEnabled]));
 }
 
 function setOverlaysPanelOpen(open) {
@@ -4286,7 +4303,7 @@ function renderOmOverlay(data) {
 // Per-network sub-toggle (Meshtastic / MeshCore) under the OM overlay.
 function setOmNet(net, enabled) {
   state.omNets[net] = enabled;
-  try { localStorage.setItem("ops_toc_om_nets", JSON.stringify(state.omNets)); } catch (_) {}
+  try { safeSetItem("ops_toc_om_nets", JSON.stringify(state.omNets)); } catch (_) {}
   if (state.omLastData) renderOmOverlay(state.omLastData); // instant re-filter from cache
 }
 
@@ -4416,7 +4433,7 @@ let _commsPinned = null;           // a DM thread opened from a map node before 
 let _commsSSE = null;
 let _commsSSEDebounce = 0;
 let _commsSeen = (function () { try { return JSON.parse(localStorage.getItem("ops_toc_comms_seen") || "{}"); } catch (_) { return {}; } })();
-function _commsSaveSeen() { try { localStorage.setItem("ops_toc_comms_seen", JSON.stringify(_commsSeen)); } catch (_) {} }
+function _commsSaveSeen() { try { safeSetItem("ops_toc_comms_seen", JSON.stringify(_commsSeen)); } catch (_) {} }
 
 function toggleCommsPanel(open) {
   const panel = el("comms-panel"); if (!panel) return;
@@ -4642,7 +4659,7 @@ function initMap() {
     .setView(saved ? [saved.lat, saved.lon] : [46.05, 14.5], saved ? saved.zoom : 9);
   state.map.on("moveend", () => {
     const c = state.map.getCenter();
-    localStorage.setItem("mapAppView", JSON.stringify({ lat: c.lat, lon: c.lng, zoom: state.map.getZoom() }));
+    safeSetItem("mapAppView", JSON.stringify({ lat: c.lat, lon: c.lng, zoom: state.map.getZoom() }));
   });
   state.map.on("click", (event) => {
     if (_gpsPickMode) {
@@ -5503,9 +5520,9 @@ function saveFixedPosition() {
   if (!isNaN(latVal) && !isNaN(lonVal)) { _fixedPosLat = latVal; _fixedPosLon = lonVal; }
   _fixedPosEnabled = enabled;
   try {
-    localStorage.setItem("opsTocFixedPosEnabled", enabled ? "1" : "0");
-    if (_fixedPosLat != null) localStorage.setItem("opsTocFixedPosLat", String(_fixedPosLat));
-    if (_fixedPosLon != null) localStorage.setItem("opsTocFixedPosLon", String(_fixedPosLon));
+    safeSetItem("opsTocFixedPosEnabled", enabled ? "1" : "0");
+    if (_fixedPosLat != null) safeSetItem("opsTocFixedPosLat", String(_fixedPosLat));
+    if (_fixedPosLon != null) safeSetItem("opsTocFixedPosLon", String(_fixedPosLon));
   } catch(e) {}
   _updateFixedMarker();
   _drawRangeRings();
@@ -5661,14 +5678,14 @@ function _ringsUpdateSwatches() {
 
 function setRingsColor(color) {
   _ringsColor = color;
-  try { localStorage.setItem("opsTocRingsColor", color); } catch(e) {}
+  try { safeSetItem("opsTocRingsColor", color); } catch(e) {}
   _ringsUpdateSwatches();
   if (_ringsEnabled) _drawRangeRings();
 }
 
 function setRingsHardness(v) {
   _ringsHardness = Math.max(0.1, Math.min(1, parseFloat(v)));
-  try { localStorage.setItem("opsTocRingsHardness", String(_ringsHardness)); } catch(e) {}
+  try { safeSetItem("opsTocRingsHardness", String(_ringsHardness)); } catch(e) {}
   if (_ringsEnabled) _drawRangeRings();
 }
 
@@ -5681,14 +5698,14 @@ function _updateCardinalsButtons() {
 
 function setRingsCardinals(n) {
   _ringsCardinals = n;
-  try { localStorage.setItem("opsTocRingsCardinals", String(n)); } catch(e) {}
+  try { safeSetItem("opsTocRingsCardinals", String(n)); } catch(e) {}
   _updateCardinalsButtons();
   if (_ringsEnabled) { _ringsDrawKey = ""; _drawRangeRings(); }
 }
 
 function setRingsDynamic(on) {
   _ringsDynamic = !!on;
-  try { localStorage.setItem("opsTocRingsDynamic", _ringsDynamic ? "1" : "0"); } catch(e) {}
+  try { safeSetItem("opsTocRingsDynamic", _ringsDynamic ? "1" : "0"); } catch(e) {}
   if (_ringsEnabled) { _ringsDrawKey = ""; _drawRangeRings(); }
 }
 
@@ -5698,8 +5715,8 @@ function applyRingsSettings() {
   _ringsCount = Math.max(1, Math.min(10, count));
   _ringsStep  = Math.max(0.1, step);
   try {
-    localStorage.setItem("opsTocRingsCount", String(_ringsCount));
-    localStorage.setItem("opsTocRingsStep",  String(_ringsStep));
+    safeSetItem("opsTocRingsCount", String(_ringsCount));
+    safeSetItem("opsTocRingsStep",  String(_ringsStep));
   } catch(e) {}
   if (_ringsEnabled) _drawRangeRings();
 }
@@ -5723,7 +5740,7 @@ function initRangeRings() {
   const cb = el("rings-enabled");
   if (cb) cb.onchange = () => {
     _ringsEnabled = cb.checked;
-    try { localStorage.setItem("opsTocRingsEnabled", cb.checked ? "1" : "0"); } catch(e) {}
+    try { safeSetItem("opsTocRingsEnabled", cb.checked ? "1" : "0"); } catch(e) {}
     _drawRangeRings();
   };
   const dyn = el("rings-dynamic");
@@ -5781,7 +5798,7 @@ function _getSideCollapsed() {
 }
 
 function _saveSideCollapsed(set) {
-  localStorage.setItem(SIDE_SECTION_KEY, JSON.stringify([...set]));
+  safeSetItem(SIDE_SECTION_KEY, JSON.stringify([...set]));
 }
 
 function initSideSections() {
