@@ -3379,7 +3379,7 @@ function resolveTileUrl(url, layerName = "selected layer") {
 function layerKeyMissing(url) {
   const has = (lsKey) => Boolean((localStorage.getItem(lsKey) || "").trim());
   if (url.includes("{apikey}")) return !has("thunderforestApiKey");
-  if (url.includes("{mtapkey}")) return !has("mapTilerApiKey");
+  if (url.includes("{mtapikey}")) return !has("mapTilerApiKey");
   if (url.includes("{cartokey}")) return !has("cartoApiKey");
   if (url.includes("{stadiakey}")) return !has("stadiaApiKey");
   return false;
