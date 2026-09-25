@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Set map key</title>
+<body style="font:14px system-ui,sans-serif;background:#111;color:#eee;padding:2rem;line-height:1.5">
+<h3 style="margin:0 0 .5rem">Map key seeding</h3>
+<p id="msg">Reading…</p>
+<p style="opacity:.65;font-size:12px;max-width:46rem">
+Usage: <code>seed-key.html#NAME=VALUE</code> — e.g. <code>#cartoApiKey=cb1_…</code> (names per app are in the
+project docs). The part after <code>#</code> <b>never leaves the browser</b>: fragments are not sent to the
+server and no file stores it. The fragment is dropped from the address bar after saving.
+Send an empty value (<code>#NAME=</code>) to clear a key. Nothing here is bundled with the app — this page
+is a convenience for entering <i>your own</i> key on a device where typing is awkward.
+</p>
+<script>
+(function () {
+  var out = document.getElementById('msg');
+  var h = (location.hash || '').replace(/^#/, '');
+  if (!h) { out.textContent = 'No key in the URL fragment — nothing changed.'; return; }
+  var i = h.indexOf('=');
+  if (i < 1) { out.textContent = 'Malformed fragment; expected NAME=VALUE.'; return; }
+  var name = decodeURIComponent(h.slice(0, i));
+  var val = decodeURIComponent(h.slice(i + 1)).trim();
+  try {
+    if (val) { localStorage.setItem(name, val); } else { localStorage.removeItem(name); }
+    out.textContent = (val ? 'Saved ' : 'Cleared ') + name +
+      (val ? ' (••••' + val.slice(-6) + ')' : '') + ' — opening the app…';
+    history.replaceState(null, '', location.pathname);
+    setTimeout(function () { location.href = '/'; }, 900);
+  } catch (e) {
+    out.textContent = 'Could not write localStorage: ' + e;
+  }
+})();
+</script>
