@@ -1,7 +1,7 @@
 type:: project-overview
 project:: ops-toc
 tags:: #overview #ops-toc #map-app #leaflet #offline-maps #field-log #cyberdeck
-updated:: 2026-08-11
+updated:: 2026-09-25 (DeepSeek — **the app ships NO map key**: CARTO, Thunderforest, MapTiler and Stadia all take the user's own, entered in Settings → *Map Layer Keys*. The four Stadia layers were dead (401 blocked-tile images) and now carry `?api_key={stadiakey}`; the MapTiler offline-download guard was **blind** (`{mtapkey}` vs `{mtapikey}`) and would have baked blocked tiles into an `.mbtiles`. Both fixed and verified live on CD. ⚠️ `api_key` is documented-but-not-observed for Stadia. Detail → `changelog.md` 2026-09-25.) · 2026-08-11
 
 # OPS-TOC — Overview Card
 

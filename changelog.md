@@ -1,5 +1,18 @@
 # OPS-TOC / Map App - Changelog
 
+## 2026-09-25 (late) — four Stadia layers were dead, and the MapTiler download guard was blind
+
+**made by DeepSeek — start**
+
+**[DeepSeek]** — **Two bugs, one of them pre-existing and reachable. Both found by a sweep after the CARTO work, both fixed, both verified on CD.**
+- 🔴 **Four Stadia layers were serving HTTP 401 blocked-tile images** — *Toner Lite*, *Toner Dark*, *Stamen Terrain*, *Stadia Outdoors*. Stadia Maps now requires an API key on the tile URL and these four carried none. They now use the same own-key rule as CARTO: `app.py`'s four URLs end **`?api_key={stadiakey}`**, `resolveTileUrl()` gained the `{stadiakey}` branch (warn + substitute from `localStorage.stadiaApiKey`), and a **Stadia Maps API key** field sits in the existing *Map Layer Keys* section. `openSettings()` loads it, `saveLayerKeys()` stores it.
+- 🔴 **Pre-existing, and the worse half: the MapTiler offline-download guard never matched.** `app.py`'s four MapTiler URLs carry **`{mtapikey}`** and `resolveTileUrl()` correctly checks `{mtapikey}` — but `layerKeyMissing()`, the guard `startOfflineDownload()` consults, tested for **`{mtapkey}`**. One missing `i`, so it returned false: **a MapTiler layer with no key saved was treated as keyed and would have been baked into an `.mbtiles` as blocked/watermarked tiles** — the same hole closed for CARTO the same day, still open for MapTiler until now. Fixed to `{mtapikey}`.
+- ✅ **Verified end-to-end on CD, not just statically:** files md5-identical to TestBox, `ops-toc.service` active, `/api/tile-layers` returning **4 Stadia URLs all carrying `api_key={stadiakey}`**, 4 MapTiler with `{mtapikey}`, 5 CARTO with `{cartokey}`, **0 bundled keys**, and the served page containing both key fields. Service stopped afterwards (it is on-demand).
+- ⚠️ **Unverified and flagged, not guessed:** the Stadia parameter name `api_key` is confirmed against Stadia's **documentation** but never observed end-to-end — an invalid key and a missing key return the same blocked image, so only a real Stadia key can confirm it.
+- ⚠️ **Fixed in-flight, worth remembering:** the first version of the `app.py` change used `//` comments in a **Python** file — a `SyntaxError` that would have stopped the app from starting. The syntax check caught it before anything ran; broken for about 90 seconds.
+
+**made by DeepSeek — end**
+
 ## 2026-09-25
 
 **made by DeepSeek — start**
