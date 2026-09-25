@@ -3351,7 +3351,27 @@ function resolveTileUrl(url, layerName = "selected layer") {
     }
     url = url.replace("{mtapikey}", encodeURIComponent(key));
   }
+  // CARTO: the app ships NO key — the layer URL carries the {cartokey} placeholder and each user supplies
+  // their own, stored in this browser profile. Never falls back to a built-in key.
+  if (url.includes("{cartokey}")) {
+    const key = localStorage.getItem("cartoApiKey") || "";
+    if (!key) {
+      appAlert(`${layerName} needs a CARTO API key. Open Map Keys and save your own — the app ships none.`, "API Key Required");
+    }
+    url = url.replace("{cartokey}", encodeURIComponent(key));
+  }
   return url;
+}
+
+// Does this layer template need an API key that this browser profile does not have?
+// resolveTileUrl() above only WARNS and then substitutes an empty key, which is survivable for a live
+// view (the watermark is visible) but not for a download — see startOfflineDownload().
+function layerKeyMissing(url) {
+  const has = (lsKey) => Boolean((localStorage.getItem(lsKey) || "").trim());
+  if (url.includes("{apikey}")) return !has("thunderforestApiKey");
+  if (url.includes("{mtapkey}")) return !has("mapTilerApiKey");
+  if (url.includes("{cartokey}")) return !has("cartoApiKey");
+  return false;
 }
 
 const TRANSPARENT_TILE_URL = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
@@ -3372,7 +3392,7 @@ function createTileLayer(value, magnifier = false) {
     });
   }
   const opt = [...el("layer-select").options].find((o) => o.value === value);
-  const rawUrl = opt?.dataset.url || "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png";
+  const rawUrl = opt?.dataset.url || "https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png?key={cartokey}";
   return L.tileLayer(resolveTileUrl(rawUrl, opt?.textContent || "selected layer"), {
     maxZoom: Number(opt?.dataset.maxzoom || 19),
     attribution: opt?.dataset.attr || "",
@@ -3409,6 +3429,7 @@ function setLayer(value) {
 function openSettings(targetId = "") {
   el("tf-api-key-input").value = localStorage.getItem("thunderforestApiKey") || "";
   el("mt-api-key-input").value = localStorage.getItem("mapTilerApiKey") || "";
+  el("carto-api-key-input").value = localStorage.getItem("cartoApiKey") || "";
   el("accent-color-input").value = localStorage.getItem("mapAppAccentColor") || currentAccentColor();
   const savedZoom = savedUIZoom();
   if (el("ui-zoom-input")) { el("ui-zoom-input").value = savedZoom; el("ui-zoom-value").textContent = savedZoom + "%"; }
@@ -3485,6 +3506,7 @@ function saveLayerKeys(event) {
   event?.preventDefault();
   safeSetItem("thunderforestApiKey", el("tf-api-key-input").value.trim());
   safeSetItem("mapTilerApiKey", el("mt-api-key-input").value.trim());
+  safeSetItem("cartoApiKey", el("carto-api-key-input").value.trim());
   el("layer-key-status").textContent = "Saved.";
   setTimeout(() => {
     setLayer(el("layer-select").value);
@@ -3525,6 +3547,7 @@ function currentLayerDownloadDef() {
   return {
     name: opt.textContent || "Map layer",
     url: resolveTileUrl(rawUrl, opt.textContent || "selected layer"),
+    keyMissing: layerKeyMissing(rawUrl), // computed from the RAW template — url above has no placeholder left
     attribution: opt.dataset.attr || "",
     maxzoom: Number(opt.dataset.maxzoom || 19),
     format: rawUrl.includes(".jpg") || rawUrl.includes(".jpeg") ? "jpg" : "png",
@@ -3708,6 +3731,16 @@ async function startOfflineDownload() {
   const layer = currentLayerDownloadDef();
   if (!layer) {
     await appAlert("Select an online map layer before downloading.", "Offline Maps");
+    return;
+  }
+  // A keyed layer with no key of our own resolves to an EMPTY key: the job would download CARTO's
+  // "API KEY REQUIRED" watermark (or fail) and bake it into an offline pack that then looks
+  // authoritative in the field, with no way to tell from the map that it is useless.
+  if (layer.keyMissing) {
+    await appAlert(
+      `${layer.name} needs its own API key before it can be downloaded. Open Map Keys, save your key, then try again.`,
+      "API Key Required",
+    );
     return;
   }
   el("offline-download-btn").disabled = true;
