@@ -3360,6 +3360,16 @@ function resolveTileUrl(url, layerName = "selected layer") {
     }
     url = url.replace("{cartokey}", encodeURIComponent(key));
   }
+  // Stadia: same rule — Stadia now requires a key on the tile URL and the app ships none. These four
+  // layers (Toner Lite/Dark, Stamen Terrain, Stadia Outdoors) returned 401 + a blocked-tile image until
+  // they were given this placeholder (2026-09-25).
+  if (url.includes("{stadiakey}")) {
+    const key = localStorage.getItem("stadiaApiKey") || "";
+    if (!key) {
+      appAlert(`${layerName} needs a Stadia Maps API key. Open Map Keys and save your own — the app ships none.`, "API Key Required");
+    }
+    url = url.replace("{stadiakey}", encodeURIComponent(key));
+  }
   return url;
 }
 
@@ -3371,6 +3381,7 @@ function layerKeyMissing(url) {
   if (url.includes("{apikey}")) return !has("thunderforestApiKey");
   if (url.includes("{mtapkey}")) return !has("mapTilerApiKey");
   if (url.includes("{cartokey}")) return !has("cartoApiKey");
+  if (url.includes("{stadiakey}")) return !has("stadiaApiKey");
   return false;
 }
 
@@ -3430,6 +3441,7 @@ function openSettings(targetId = "") {
   el("tf-api-key-input").value = localStorage.getItem("thunderforestApiKey") || "";
   el("mt-api-key-input").value = localStorage.getItem("mapTilerApiKey") || "";
   el("carto-api-key-input").value = localStorage.getItem("cartoApiKey") || "";
+  el("stadia-api-key-input").value = localStorage.getItem("stadiaApiKey") || "";
   el("accent-color-input").value = localStorage.getItem("mapAppAccentColor") || currentAccentColor();
   const savedZoom = savedUIZoom();
   if (el("ui-zoom-input")) { el("ui-zoom-input").value = savedZoom; el("ui-zoom-value").textContent = savedZoom + "%"; }
@@ -3507,6 +3519,7 @@ function saveLayerKeys(event) {
   safeSetItem("thunderforestApiKey", el("tf-api-key-input").value.trim());
   safeSetItem("mapTilerApiKey", el("mt-api-key-input").value.trim());
   safeSetItem("cartoApiKey", el("carto-api-key-input").value.trim());
+  safeSetItem("stadiaApiKey", el("stadia-api-key-input").value.trim());
   el("layer-key-status").textContent = "Saved.";
   setTimeout(() => {
     setLayer(el("layer-select").value);

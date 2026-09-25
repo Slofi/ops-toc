@@ -1663,22 +1663,24 @@ def api_tile_layers():
         },
         {
             "id": "stamen_toner_lite",
+            # ⚠️ Stadia now requires an API key and this app ships none: {stadiakey} is the user's own,
+            # substituted at runtime. Without it these layers return HTTP 401 with a blocked-tile image.
             "name": "Toner Lite",
-            "url": "https://tiles.stadiamaps.com/tiles/stamen_toner_lite/{z}/{x}/{y}{r}.png",
+            "url": "https://tiles.stadiamaps.com/tiles/stamen_toner_lite/{z}/{x}/{y}{r}.png?api_key={stadiakey}",
             "attribution": "Stadia Maps, Stamen Design, OpenMapTiles, OpenStreetMap",
             "maxzoom": 20,
         },
         {
             "id": "stamen_toner_dark",
             "name": "Toner Dark",
-            "url": "https://tiles.stadiamaps.com/tiles/stamen_toner_dark/{z}/{x}/{y}{r}.png",
+            "url": "https://tiles.stadiamaps.com/tiles/stamen_toner_dark/{z}/{x}/{y}{r}.png?api_key={stadiakey}",
             "attribution": "Stadia Maps, Stamen Design, OpenMapTiles, OpenStreetMap",
             "maxzoom": 20,
         },
         {
             "id": "stamen_terrain",
             "name": "Stamen Terrain",
-            "url": "https://tiles.stadiamaps.com/tiles/stamen_terrain/{z}/{x}/{y}{r}.png",
+            "url": "https://tiles.stadiamaps.com/tiles/stamen_terrain/{z}/{x}/{y}{r}.png?api_key={stadiakey}",
             "attribution": "Stadia Maps, Stamen Design, OpenMapTiles, OpenStreetMap",
             "maxzoom": 20,
         },
@@ -1713,7 +1715,7 @@ def api_tile_layers():
         {
             "id": "stadia_outdoors",
             "name": "Stadia Outdoors",
-            "url": "https://tiles.stadiamaps.com/tiles/outdoors/{z}/{x}/{y}{r}.png",
+            "url": "https://tiles.stadiamaps.com/tiles/outdoors/{z}/{x}/{y}{r}.png?api_key={stadiakey}",
             "attribution": "Stadia Maps, OpenMapTiles, OpenStreetMap",
             "maxzoom": 20,
         },
