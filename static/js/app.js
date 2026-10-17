@@ -3836,6 +3836,13 @@ async function loadVersionStatus(checkRemote = false) {
   if (checkRemote) el("version-summary").textContent = "Checking GitHub version...";
   try {
     const data = await api(`/api/version${checkRemote ? "?check=1" : ""}`);
+    if (data.synced) {
+      // Syncthing is the delivery path: the git HEAD is not what is running, so never show "update available".
+      const when = data.code_updated ? new Date(data.code_updated * 1000).toLocaleString() : "unknown";
+      el("version-summary").textContent = `Syncthing checkout · code updated ${when}`;
+      el("update-status").textContent = "Updates arrive by Syncthing. Use Restart after Python or template changes.";
+      return;
+    }
     const parts = [];
     parts.push(`Current: ${data.current || "unknown"}`);
     if (data.branch) parts.push(`Branch: ${data.branch}`);
@@ -3850,6 +3857,31 @@ async function loadVersionStatus(checkRemote = false) {
   } finally {
     if (btn) btn.disabled = false;
   }
+}
+
+// "Code on disk is newer than this process" banner: restart without the confirm dialog, then reload once
+// the service is back. The banner is rendered server-side, so it exists only after this feature first shipped.
+async function restartFromBanner() {
+  const btn = el("app-restart-banner-btn");
+  if (btn) { btn.disabled = true; btn.textContent = "Restarting..."; }
+  try {
+    await api("/api/service/restart", { method: "POST" });
+  } catch (err) {
+    if (btn) { btn.disabled = false; btn.textContent = "Restart OPS-TOC"; }
+    await appAlert(`Restart failed: ${err.message}`, "Restart");
+    return;
+  }
+  const started = Date.now();
+  const tick = async () => {
+    try {
+      await fetch("/api/health", { cache: "no-store" });
+      window.location.reload();
+    } catch (e) {
+      if (Date.now() - started < 30000) setTimeout(tick, 500);
+      else if (btn) { btn.disabled = false; btn.textContent = "Restart OPS-TOC"; }
+    }
+  };
+  setTimeout(tick, 800);
 }
 
 async function restartApp() {

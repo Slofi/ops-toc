@@ -721,6 +721,28 @@ select {
 }
 #banner.show { display: block; }
 
+/* "code on disk is newer than this process" strip: sits inside the map wrap, under the toolbar */
+#app-restart-banner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 7px 14px;
+  background: var(--accent-bg);
+  border-bottom: 1px solid var(--accent-mid);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-align: center;
+}
+#app-restart-banner .btn { flex: none; }
+
 #measure-card {
   display: none;
   position: absolute;

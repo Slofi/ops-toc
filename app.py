@@ -36,6 +36,56 @@ TILE_FETCH_WORKERS = int(os.environ.get("OPS_TOC_TILE_WORKERS", "16"))
 TILE_FETCH_BATCH = 64
 DEFAULT_TILE_ESTIMATE_BYTES = int(os.environ.get("MAP_APP_TILE_ESTIMATE_BYTES", "12000"))
 
+# Wall-clock time this process started. Anything on disk newer than this (Python files, Jinja templates)
+# is code the running process has NOT loaded yet, so the UI must offer a restart instead of pretending
+# it is current. Static JS/CSS are excluded on purpose: a page reload picks those up, no restart needed.
+PROCESS_STARTED_AT = time.time()
+
+
+def find_syncthing_root(path: Path) -> str | None:
+    """The Syncthing folder containing this checkout, or None.
+
+    A `.stfolder` marker in any parent means the files arrive by sync, not by git. On such a checkout
+    the in-app `git pull` is wrong twice over: the code is already there, and the git index is not part
+    of the sync (`.git` is ignored), so it can be far behind the files. That produced a real HTTP 500 on
+    CD on 2026-10-17 (untracked `static/seed-key.html` blocked the pull). See the guard in /api/update.
+    """
+    try:
+        here = Path(path).resolve()
+    except OSError:
+        return None
+    for parent in (here, *here.parents):
+        if (parent / ".stfolder").is_dir():
+            return str(parent)
+    return None
+
+
+def newest_code_mtime() -> float:
+    """Newest mtime of the files a restart is needed for (Python + Jinja templates)."""
+    newest = 0.0
+    paths = list(APP_ROOT.glob("*.py"))
+    tdir = APP_ROOT / "templates"
+    if tdir.is_dir():
+        paths.extend(tdir.rglob("*.html"))
+    for f in paths:
+        try:
+            newest = max(newest, f.stat().st_mtime)
+        except OSError:
+            pass
+    return newest
+
+
+def app_state_payload() -> dict[str, Any]:
+    synced_root = find_syncthing_root(APP_ROOT)
+    newest = newest_code_mtime()
+    return {
+        "synced": bool(synced_root),
+        "synced_root": synced_root or "",
+        "started_at": PROCESS_STARTED_AT,
+        "code_mtime": newest,
+        "restart_needed": newest > PROCESS_STARTED_AT,
+    }
+
 # Read-only live-map providers. OPS-TOC presents their data but the specialist
 # apps remain the owners of decoding, radio state, and transmissions.
 OVERLAY_URLS = {
@@ -537,7 +587,16 @@ def run_git(args: list[str], timeout: int = 20) -> subprocess.CompletedProcess[s
 
 
 def git_version_payload(check_remote: bool = False) -> dict[str, Any]:
-    payload: dict[str, Any] = {"ok": True, "is_git": (APP_ROOT / ".git").exists()}
+    synced_root = find_syncthing_root(APP_ROOT)
+    payload: dict[str, Any] = {
+        "ok": True,
+        "is_git": (APP_ROOT / ".git").exists(),
+        # On a Syncthing checkout the git HEAD is NOT what is running: files arrive by sync and `.git`
+        # is per-machine. Report the honest state (code mtime) and never offer a remote "update".
+        "synced": bool(synced_root),
+        "synced_root": synced_root or "",
+        "code_updated": newest_code_mtime(),
+    }
     current = run_git(["rev-parse", "--short", "HEAD"])
     branch = run_git(["rev-parse", "--abbrev-ref", "HEAD"])
     remote = run_git(["config", "--get", "remote.origin.url"])
@@ -551,6 +610,9 @@ def git_version_payload(check_remote: bool = False) -> dict[str, Any]:
     if not payload["is_git"] or current.returncode != 0:
         payload["ok"] = False
         payload["error"] = "OPS-TOC directory is not a usable git checkout."
+        return payload
+    if payload["synced"]:
+        # No remote check: a synced checkout is current by delivery, not by git.
         return payload
     if check_remote:
         ref = payload["branch"] if payload["branch"] and payload["branch"] != "HEAD" else "master"
@@ -1558,13 +1620,13 @@ def import_gpx_bytes(raw: bytes) -> dict[str, int]:
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", **app_state_payload())
 
 
 @app.route("/lite")
 def lite():
     # OPS-TOC Lite — same template/backend, compact HD 5" (1024x600) frontend
-    return render_template("index.html", hd_lite=True)
+    return render_template("index.html", hd_lite=True, **app_state_payload())
 
 
 @app.route("/api/health")
@@ -1578,8 +1640,27 @@ def api_version():
     return jsonify(git_version_payload(check_remote))
 
 
+@app.route("/api/app-state")
+def api_app_state():
+    return jsonify(app_state_payload())
+
+
 @app.route("/api/update", methods=["POST"])
 def api_update_app():
+    synced_root = find_syncthing_root(APP_ROOT)
+    if synced_root:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": (
+                        f"This checkout is delivered by Syncthing ({synced_root}), so the code arrives on its own. "
+                        "Use Restart instead; the GitHub pull is disabled here."
+                    ),
+                }
+            ),
+            409,
+        )
     logs: list[str] = []
     try:
         status = run_git(["status", "--short", "--branch"], timeout=20)
