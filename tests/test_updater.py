@@ -130,6 +130,53 @@ def test_ahead_behind_counting() -> None:
     assert info["fetch_ok"] is True
 
 
+
+def test_git_timeout_is_reported_not_raised() -> None:
+    """A hung fetch must come back as fetch_ok=False + an error, not an exception."""
+    base, work = make_repos()
+    real = app.run_git
+
+    def boom(*args, **kwargs):
+        raise subprocess.TimeoutExpired("git", 90)
+
+    app.run_git = boom
+    try:
+        info = app._git_update_info(fetch=True, cwd=work)
+    finally:
+        app.run_git = real
+    assert info["fetch_ok"] is False, info
+    assert "timed out" in (info["error"] or ""), info["error"]
+
+
+def test_refresh_records_an_error() -> None:
+    real = app._git_update_info
+    app._git_update_info = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom"))
+    try:
+        cached = app._refresh_update_check(fetch=True)
+    finally:
+        app._git_update_info = real
+    assert cached["available"] is False and "boom" in (cached["error"] or ""), cached
+
+
+def test_status_snapshot_copies_the_log() -> None:
+    with app._update_lock:
+        app._update_state.update({"running": False, "ok": None, "message": "", "log": ["one"]})
+    snap = app._update_state_snapshot()
+    app._update_append("two")  # a worker appending after the snapshot
+    assert snap["log"] == ["one"], snap["log"]
+    assert "two" in app._update_state_snapshot()["log"]
+
+
+def test_update_available_coalesces_refreshes() -> None:
+    app._set_refresh_inflight(True)
+    try:
+        client = app.app.test_client()
+        st = client.get("/api/update/available?refresh=1")
+        assert st.status_code == 200, st.status_code
+        assert app._refresh_inflight is True, "a second refresh thread was started"
+    finally:
+        app._set_refresh_inflight(False)
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

@@ -633,9 +633,14 @@ def run_git(args: list[str], timeout: int = 20, cwd: Path | None = None) -> subp
 # guard is kept as a safety net even though it can no longer match this tree.
 UPDATE_CHECK_INITIAL_DELAY = 25   # let GPS/serial settle after a restart
 UPDATE_CHECK_INTERVAL = 6 * 3600  # then every 6 h, like OM
-UPDATE_CHECK_STALE_S = 600  # end-to-end verified against GitHub on 2026-10-17 (S455)        # a cached answer older than this refreshes in the background
+# A cached answer older than this refreshes in the background. (The updater was
+# verified end-to-end against GitHub on 2026-10-17: a commit pushed from another
+# clone showed up as behind=1, the in-app update landed it, the strip offered
+# Restart, and the restart cleared restart_needed.)
+UPDATE_CHECK_STALE_S = 600
 
 _update_lock = threading.Lock()
+_refresh_inflight = False
 _update_state: dict[str, Any] = {
     "running": False, "ok": None, "message": "", "log": [], "updated_at": 0,
 }
@@ -658,7 +663,12 @@ def _git_update_info(fetch: bool = False, cwd: Path | None = None) -> dict[str, 
         return info
 
     def g(args: list[str], timeout: int = 10) -> tuple[int, str]:
-        proc = run_git(args, timeout=timeout, cwd=root)
+        try:
+            proc = run_git(args, timeout=timeout, cwd=root)
+        except subprocess.TimeoutExpired:
+            # A timeout used to escape this helper: the fetch retry never saw it and
+            # /api/update/available surfaced nothing. Report it as a normal failure.
+            return -1, f"git {' '.join(args)} timed out after {timeout}s"
         return proc.returncode, (proc.stdout or "").strip()
 
     _, info["branch"] = g(["rev-parse", "--abbrev-ref", "HEAD"])
@@ -721,24 +731,35 @@ def _update_append(line: str) -> None:
         _update_state["updated_at"] = int(time.time())
 
 
-def _refresh_update_check(fetch: bool = True, cwd: Path | None = None) -> dict[str, Any]:
-    info = _git_update_info(fetch=fetch, cwd=cwd)
-    available = bool(info["managed"] and not info.get("error") and info["behind"] > 0)
+def _set_refresh_inflight(active: bool = True) -> None:
+    global _refresh_inflight
     with _update_lock:
-        _update_check.update(
-            {
-                "checked_at": int(time.time()),
-                "available": available,
-                "behind": info["behind"],
-                "ahead": info["ahead"],
-                "dirty": info["dirty"],
-                "branch": info["branch"],
-                "local_commit": info["commit"],
-                "remote_commit": info["remote_commit"],
-                "error": info.get("error"),
-            }
-        )
-    return dict(_update_check)
+        _refresh_inflight = active
+
+
+def _refresh_update_check(fetch: bool = True, cwd: Path | None = None) -> dict[str, Any]:
+    global _refresh_inflight
+    try:
+        info = _git_update_info(fetch=fetch, cwd=cwd)
+        available = bool(info["managed"] and not info.get("error") and info["behind"] > 0)
+        update = {
+            "checked_at": int(time.time()),
+            "available": available,
+            "behind": info["behind"],
+            "ahead": info["ahead"],
+            "dirty": info["dirty"],
+            "branch": info["branch"],
+            "local_commit": info["commit"],
+            "remote_commit": info["remote_commit"],
+            "error": info.get("error"),
+        }
+    except Exception as exc:  # a broken checkout / hung git must not kill the caller
+        update = {"checked_at": int(time.time()), "available": False, "error": str(exc)}
+    finally:
+        _set_refresh_inflight(False)
+    with _update_lock:
+        _update_check.update(update)
+        return {**_update_check}
 
 
 def _update_run_job(target: Path | None = None) -> None:
@@ -2024,10 +2045,19 @@ def api_update_app():
     return jsonify({"ok": True, "started": True, "message": "Updating from GitHub…"}), 202
 
 
+def _update_state_snapshot() -> dict[str, Any]:
+    """Copy under the lock — including the log LIST, not just the dict.
+
+    Handing the live list to jsonify made serialisation race an appending worker
+    (inconsistent output at best, "list changed size during iteration" at worst).
+    """
+    with _update_lock:
+        return {**_update_state, "log": list(_update_state["log"])}
+
+
 @app.route("/api/update/status")
 def api_update_status():
-    with _update_lock:
-        state = dict(_update_state)
+    state = _update_state_snapshot()
     state["version"] = git_version_payload(check_remote=False)
     return jsonify(state)
 
@@ -2038,7 +2068,9 @@ def api_update_available():
     with _update_lock:
         cached = dict(_update_check)
     stale = (time.time() - (cached.get("checked_at") or 0)) > UPDATE_CHECK_STALE_S
-    if request.args.get("refresh") in {"1", "true", "yes"} or stale:
+    force = request.args.get("refresh") in {"1", "true", "yes"}
+    if (force or stale) and not _refresh_inflight:
+        _set_refresh_inflight()
         threading.Thread(target=_refresh_update_check, kwargs={"fetch": True}, daemon=True).start()
     return jsonify(cached)
 
