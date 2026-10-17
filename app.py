@@ -633,7 +633,7 @@ def run_git(args: list[str], timeout: int = 20, cwd: Path | None = None) -> subp
 # guard is kept as a safety net even though it can no longer match this tree.
 UPDATE_CHECK_INITIAL_DELAY = 25   # let GPS/serial settle after a restart
 UPDATE_CHECK_INTERVAL = 6 * 3600  # then every 6 h, like OM
-UPDATE_CHECK_STALE_S = 600        # a cached answer older than this refreshes in the background
+UPDATE_CHECK_STALE_S = 600  # end-to-end verified against GitHub on 2026-10-17 (S455)        # a cached answer older than this refreshes in the background
 
 _update_lock = threading.Lock()
 _update_state: dict[str, Any] = {
