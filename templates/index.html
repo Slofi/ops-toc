@@ -1124,7 +1124,7 @@
         {% if synced %}
         <p class="dialog-note">This checkout is delivered by <b>Syncthing</b>{% if synced_root %} (<code>{{ synced_root }}</code>){% endif %}. Code arrives on its own, so there is no GitHub update to run here. Use <b>Restart</b> after a Python or template change; static JS/CSS only needs a page reload.</p>
         {% else %}
-        <p class="dialog-note">Pulls the latest GitHub version into this checkout, restarts <code>ops-toc.service</code>, then reloads the page.</p>
+        <p class="dialog-note">Fetches the latest GitHub version into this checkout. It never restarts on its own: when the new code is on disk a strip over the map offers <b>Restart</b>.</p>
         {% endif %}
         <div id="version-summary" class="version-summary">Checking version...</div>
         <div id="update-status"></div>

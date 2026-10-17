@@ -3894,6 +3894,9 @@ async function startOfflineDownload() {
   }
 }
 
+// Update = fetch + reset to origin on the server (a background job), then the restart
+// stays with the user: the strip over the map appears because the code on disk is now
+// newer than the running process. Same shape as OM.
 async function updateApp() {
   const btn = el("update-app-btn");
   btn.disabled = true;
@@ -3901,19 +3904,38 @@ async function updateApp() {
   el("update-log").hidden = true;
   el("update-log").textContent = "";
   try {
-    const data = await api("/api/update", { method: "POST" });
-    el("update-status").textContent = data.restart ? "Updated. Restarting service and reloading..." : "Already up to date.";
-    el("update-log").textContent = data.log || "";
-    el("update-log").hidden = !data.log;
-    setTimeout(() => window.location.reload(), 3500);
+    await api("/api/update", { method: "POST" });
   } catch (err) {
     btn.disabled = false;
     el("update-status").textContent = `Update failed: ${err.message}`;
-    if (err.data?.log) {
-      el("update-log").textContent = err.data.log;
+    return;
+  }
+  const started = Date.now();
+  while (Date.now() - started < 300000) {
+    await new Promise((r) => setTimeout(r, 1000));
+    let st;
+    try {
+      st = await api("/api/update/status");
+    } catch (_) {
+      continue;  // a brief restart of the connection must not abort the poll
+    }
+    if (Array.isArray(st.log) && st.log.length) {
+      el("update-log").textContent = st.log.join("\n");
       el("update-log").hidden = false;
     }
+    if (st.running) continue;
+    btn.disabled = false;
+    if (st.ok) {
+      el("update-status").textContent = st.message || "Updated. Restart required.";
+      // reload so the server-rendered "code on disk is newer" strip can offer Restart
+      setTimeout(() => window.location.reload(), 2500);
+    } else {
+      el("update-status").textContent = `Update failed: ${st.message || "unknown error"}`;
+    }
+    return;
   }
+  btn.disabled = false;
+  el("update-status").textContent = "Update timed out — check the log above.";
 }
 
 async function loadVersionStatus(checkRemote = false) {

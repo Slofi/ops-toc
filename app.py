@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sqlite3
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -598,7 +599,12 @@ def service_action_soon(action: str) -> None:
     subprocess.run(["systemctl", "--user", action, "ops-toc.service"], cwd=APP_ROOT, check=False)
 
 
-def run_git(args: list[str], timeout: int = 20) -> subprocess.CompletedProcess[str]:
+def run_git(args: list[str], timeout: int = 20, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    """Run git with the service's own key and no interactive prompt.
+
+    `cwd` exists so the updater can be pointed at a throwaway repo in tests while the
+    live code keeps operating on APP_ROOT.
+    """
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"
     key = Path.home() / ".ssh" / "id_ed25519"
@@ -606,7 +612,7 @@ def run_git(args: list[str], timeout: int = 20) -> subprocess.CompletedProcess[s
         env["GIT_SSH_COMMAND"] = f"ssh -i {key} -o BatchMode=yes -o StrictHostKeyChecking=no"
     return subprocess.run(
         ["git", *args],
-        cwd=APP_ROOT,
+        cwd=Path(cwd) if cwd else APP_ROOT,
         env=env,
         stdin=subprocess.DEVNULL,
         check=False,
@@ -615,6 +621,202 @@ def run_git(args: list[str], timeout: int = 20) -> subprocess.CompletedProcess[s
         stderr=subprocess.STDOUT,
         timeout=timeout,
     )
+
+
+# ── GitHub updater (S455 migration) ──────────────────────────────────────────
+# The app now runs from a dedicated git clone (~/ops-toc), so git owns the whole
+# tree and an update can be a plain fetch + `reset --hard`, the same shape OM uses.
+# The old layout (code inside the Syncthing Projects/ folder) could not do this:
+# `.git` is Syncthing-ignored, each machine had its own stale index, and the docs
+# lived only as uncommitted working-tree edits — a reset there would have destroyed
+# them (S454's 500 was the mild version of the same collision). The `.stfolder`
+# guard is kept as a safety net even though it can no longer match this tree.
+UPDATE_CHECK_INITIAL_DELAY = 25   # let GPS/serial settle after a restart
+UPDATE_CHECK_INTERVAL = 6 * 3600  # then every 6 h, like OM
+UPDATE_CHECK_STALE_S = 600        # a cached answer older than this refreshes in the background
+
+_update_lock = threading.Lock()
+_update_state: dict[str, Any] = {
+    "running": False, "ok": None, "message": "", "log": [], "updated_at": 0,
+}
+_update_check: dict[str, Any] = {
+    "checked_at": 0, "available": False, "behind": 0, "ahead": 0, "dirty": False,
+    "local_commit": "", "remote_commit": "", "branch": "", "error": None,
+}
+
+
+def _git_update_info(fetch: bool = False, cwd: Path | None = None) -> dict[str, Any]:
+    """Branch/commit/dirty and ahead-behind against origin, optionally fetching first."""
+    root = Path(cwd) if cwd else APP_ROOT
+    info: dict[str, Any] = {
+        "managed": (root / ".git").exists(), "branch": "", "commit": "", "remote": "",
+        "dirty": False, "dirty_summary": [], "ahead": 0, "behind": 0,
+        "remote_commit": "", "fetch_ok": None, "error": None,
+    }
+    if not info["managed"]:
+        info["error"] = "This install is not a git checkout."
+        return info
+
+    def g(args: list[str], timeout: int = 10) -> tuple[int, str]:
+        proc = run_git(args, timeout=timeout, cwd=root)
+        return proc.returncode, (proc.stdout or "").strip()
+
+    _, info["branch"] = g(["rev-parse", "--abbrev-ref", "HEAD"])
+    _, info["commit"] = g(["rev-parse", "--short", "HEAD"])
+    _, info["remote"] = g(["config", "--get", "remote.origin.url"])
+    # Tracked modifications only: untracked files (scratch scripts, backups) do not
+    # block an update — a reset leaves them alone.
+    rc, status = g(["status", "--porcelain", "--untracked-files=no"])
+    info["dirty"] = bool(status) if rc == 0 else True
+    info["dirty_summary"] = status.splitlines()[:12] if rc == 0 else []
+
+    if fetch:
+        last_err = ""
+        for attempt in (1, 2):  # a cold link failed a single attempt often enough
+            rc, out = g(["fetch", "--prune", "origin"], timeout=90)
+            if rc == 0:
+                info["fetch_ok"] = True
+                break
+            last_err = out or "git fetch failed."
+            info["fetch_ok"] = False
+            if attempt == 1:
+                time.sleep(3)
+        if not info["fetch_ok"]:
+            info["error"] = last_err
+
+    upstream = f"origin/{info['branch'] or 'master'}"
+    rc, remote_commit = g(["rev-parse", "--short", upstream])
+    if rc == 0 and remote_commit:
+        info["remote_commit"] = remote_commit
+        rc, counts = g(["rev-list", "--left-right", "--count", f"HEAD...{upstream}"])
+        if rc == 0 and counts:
+            try:
+                info["ahead"], info["behind"] = (int(x) for x in counts.split()[:2])
+            except ValueError:
+                pass
+    elif not info.get("error"):
+        info["error"] = f"No upstream ref {upstream} (fetch once to create it)."
+    return info
+
+
+def _clear_skip_worktree_flags(cwd: Path) -> int:
+    """Drop stale skip-worktree / assume-unchanged flags before a reset.
+
+    `git reset --hard` refuses with "Entry '<file>' not uptodate" when one is set —
+    that exact flag (on templates/index.html) bricked OM's in-app updater once.
+    """
+    proc = run_git(["ls-files", "-v"], cwd=cwd)
+    cleared = 0
+    for line in (proc.stdout or "").splitlines():
+        if line[:1] in {"S", "s"} and len(line) > 2:
+            path = line[2:].strip()
+            run_git(["update-index", "--no-skip-worktree", "--no-assume-unchanged", "--", path], cwd=cwd)
+            cleared += 1
+    return cleared
+
+
+def _update_append(line: str) -> None:
+    with _update_lock:
+        _update_state["log"].append(line)
+        _update_state["updated_at"] = int(time.time())
+
+
+def _refresh_update_check(fetch: bool = True, cwd: Path | None = None) -> dict[str, Any]:
+    info = _git_update_info(fetch=fetch, cwd=cwd)
+    available = bool(info["managed"] and not info.get("error") and info["behind"] > 0)
+    with _update_lock:
+        _update_check.update(
+            {
+                "checked_at": int(time.time()),
+                "available": available,
+                "behind": info["behind"],
+                "ahead": info["ahead"],
+                "dirty": info["dirty"],
+                "branch": info["branch"],
+                "local_commit": info["commit"],
+                "remote_commit": info["remote_commit"],
+                "error": info.get("error"),
+            }
+        )
+    return dict(_update_check)
+
+
+def _update_run_job(target: Path | None = None) -> None:
+    """Fetch, reset to origin and (if needed) reinstall deps. Restart stays with the user."""
+    root = Path(target) if target else APP_ROOT
+    with _update_lock:
+        if _update_state["running"]:
+            return
+        _update_state.update(
+            {"running": True, "ok": None, "message": "Updating…", "log": [], "updated_at": int(time.time())}
+        )
+    try:
+        _update_append("Checking repository state…")
+        info = _git_update_info(fetch=True, cwd=root)
+        if not info["managed"]:
+            raise RuntimeError(info["error"] or "Not a git checkout.")
+        if not info["fetch_ok"]:
+            raise RuntimeError(info.get("error") or "git fetch failed.")
+        if info["ahead"] > 0:
+            raise RuntimeError("Local commits are ahead of origin. Push or reconcile before updating.")
+        upstream = f"origin/{info['branch']}"
+        if info["behind"] == 0:
+            _update_append("Already up to date.")
+            with _update_lock:
+                _update_state.update({"running": False, "ok": True, "message": "Already up to date.",
+                                      "updated_at": int(time.time())})
+            _refresh_update_check(fetch=False, cwd=root)
+            return
+        proc = run_git(["diff", "--name-only", "HEAD", upstream], cwd=root)
+        changed = set((proc.stdout or "").splitlines())
+        if info["dirty"]:
+            _update_append("Local changes detected: stashing before the update…")
+            stash = run_git(["stash", "push", "--include-untracked", "-m", f"ops-toc-update-{int(time.time())}"],
+                            cwd=root, timeout=30)
+            if stash.returncode != 0:
+                raise RuntimeError((stash.stdout or "").strip() or "git stash failed.")
+        cleared = _clear_skip_worktree_flags(root)
+        if cleared:
+            _update_append(f"Cleared {cleared} stale index flag(s).")
+        _update_append(f"Resetting to {upstream}…")
+        reset = run_git(["reset", "--hard", upstream], cwd=root, timeout=60)
+        if reset.returncode != 0:
+            raise RuntimeError((reset.stdout or "").strip() or "git reset --hard failed.")
+        if "requirements.txt" in changed:
+            _update_append("requirements.txt changed; installing dependencies…")
+            pip = subprocess.run(
+                [sys.executable or "python3", "-m", "pip", "install", "-r", "requirements.txt"],
+                cwd=root, capture_output=True, text=True, timeout=300, check=False,
+            )
+            if pip.returncode != 0:
+                raise RuntimeError((pip.stderr or pip.stdout or "pip install failed").strip()[-600:])
+            _update_append("Dependencies updated.")
+        final = _git_update_info(fetch=False, cwd=root)
+        _update_append(f"Update complete ({final['commit']}). Restart required.")
+        with _update_lock:
+            _update_state.update({
+                "running": False, "ok": True,
+                "message": f"Updated to {final['commit']}. Restart required.",
+                "updated_at": int(time.time()),
+            })
+        _refresh_update_check(fetch=False, cwd=root)
+    except Exception as exc:
+        with _update_lock:
+            _update_state.update({"running": False, "ok": False, "message": str(exc),
+                                  "updated_at": int(time.time())})
+        _update_append(f"Error: {exc}")
+
+
+def _update_check_loop() -> None:
+    """Boot check then every 6 h, like OM. Never blocks a request."""
+    time.sleep(UPDATE_CHECK_INITIAL_DELAY)
+    while True:
+        try:
+            if (APP_ROOT / ".git").exists() and not find_syncthing_root(APP_ROOT):
+                _refresh_update_check(fetch=True)
+        except Exception:
+            pass
+        time.sleep(UPDATE_CHECK_INTERVAL)
 
 
 def git_version_payload(check_remote: bool = False) -> dict[str, Any]:
@@ -646,14 +848,15 @@ def git_version_payload(check_remote: bool = False) -> dict[str, Any]:
         # No remote check: a synced checkout is current by delivery, not by git.
         return payload
     if check_remote:
-        ref = payload["branch"] if payload["branch"] and payload["branch"] != "HEAD" else "master"
-        latest = run_git(["ls-remote", "origin", ref], timeout=20)
-        if latest.returncode == 0 and latest.stdout.strip():
-            full = latest.stdout.split()[0]
-            payload["latest"] = full[:7]
-            payload["up_to_date"] = full.startswith(payload["current"])
-        else:
-            payload["remote_error"] = latest.stdout.strip() or "Unable to check remote version."
+        # Fetch-based, not `ls-remote`: a fetch is what the updater itself will use, and
+        # its answer (behind/ahead) is the one that decides whether Reset is safe.
+        info = _git_update_info(fetch=True)
+        payload["latest"] = info.get("remote_commit") or ""
+        payload["behind"] = info.get("behind", 0)
+        payload["ahead"] = info.get("ahead", 0)
+        payload["up_to_date"] = not info.get("error") and info.get("behind", 0) == 0
+        if info.get("error"):
+            payload["remote_error"] = info["error"]
     return payload
 
 
@@ -1803,34 +2006,41 @@ def api_app_state():
 
 @app.route("/api/update", methods=["POST"])
 def api_update_app():
+    """Start the GitHub update in the background; the browser polls /api/update/status."""
     synced_root = find_syncthing_root(APP_ROOT)
     if synced_root:
-        return (
-            jsonify(
-                {
-                    "ok": False,
-                    "error": (
-                        f"This checkout is delivered by Syncthing ({synced_root}), so the code arrives on its own. "
-                        "Use Restart instead; the GitHub pull is disabled here."
-                    ),
-                }
-            ),
-            409,
-        )
-    logs: list[str] = []
-    try:
-        status = run_git(["status", "--short", "--branch"], timeout=20)
-        if status.stdout.strip():
-            logs.append("$ git status --short --branch\n" + status.stdout.strip())
-        result = run_git(["pull", "--rebase", "--autostash"], timeout=90)
-        logs.append("$ git pull --rebase --autostash\n" + result.stdout.strip())
-    except Exception as exc:
-        logs.append(str(exc))
-        return jsonify({"ok": False, "error": str(exc), "log": "\n\n".join(logs)[-6000:]}), 500
-    ok = result.returncode == 0
-    if ok:
-        threading.Thread(target=service_action_soon, args=("restart",), daemon=True).start()
-    return jsonify({"ok": ok, "log": "\n\n".join(logs)[-6000:], "restart": ok}), (200 if ok else 500)
+        # Safety net only — the app now runs from ~/ops-toc, so this cannot match.
+        return jsonify({
+            "ok": False,
+            "error": (f"This checkout is delivered by Syncthing ({synced_root}), so the code arrives on its own. "
+                      "Use Restart instead; the GitHub pull is disabled here."),
+        }), 409
+    if not (APP_ROOT / ".git").exists():
+        return jsonify({"ok": False, "error": "This install is not a git checkout."}), 400
+    with _update_lock:
+        if _update_state["running"]:
+            return jsonify({"ok": False, "error": "An update is already running."}), 409
+    threading.Thread(target=_update_run_job, daemon=True).start()
+    return jsonify({"ok": True, "started": True, "message": "Updating from GitHub…"}), 202
+
+
+@app.route("/api/update/status")
+def api_update_status():
+    with _update_lock:
+        state = dict(_update_state)
+    state["version"] = git_version_payload(check_remote=False)
+    return jsonify(state)
+
+
+@app.route("/api/update/available")
+def api_update_available():
+    """Cached answer (boot check + every 6 h), refreshed in the background when stale."""
+    with _update_lock:
+        cached = dict(_update_check)
+    stale = (time.time() - (cached.get("checked_at") or 0)) > UPDATE_CHECK_STALE_S
+    if request.args.get("refresh") in {"1", "true", "yes"} or stale:
+        threading.Thread(target=_refresh_update_check, kwargs={"fetch": True}, daemon=True).start()
+    return jsonify(cached)
 
 
 @app.route("/api/service/restart", methods=["POST"])
@@ -3996,6 +4206,10 @@ def api_recording_discard():
 
 _rec_load_state()
 threading.Thread(target=_rec_loop, daemon=True).start()
+
+# Update check: 25 s after boot, then every 6 h (OM does the same). It only fills the
+# cached answer the banner reads — it never fetches on a request thread.
+threading.Thread(target=_update_check_loop, daemon=True).start()
 
 
 if __name__ == "__main__":
