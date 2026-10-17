@@ -20,3 +20,8 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# Project docs live in the Syncthing Projects/ folder, not in the code repo (S455)
+status.md
+changelog.md
+ops-toc-overview.md
