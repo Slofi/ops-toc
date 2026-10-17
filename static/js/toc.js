@@ -384,7 +384,7 @@ function renderLogTracksView() {
   }
   tracks.sort((a, b) => (b.ended_at || b.started_at || 0) - (a.ended_at || a.started_at || 0));
   box.innerHTML = tracks.map(t => {
-    const dur = (t.started_at && t.ended_at && t.ended_at > t.started_at) ? fmtDuration(t.ended_at - t.started_at) : '';
+    const dur = (t.started_at && t.ended_at && t.ended_at > t.started_at) ? fmtTocDuration(t.ended_at - t.started_at) : '';
     const meta = [fmtLogTrackDistance(t.distance_m || 0), dur, t.started_at ? fmtLogTrackTime(t.started_at) : ''].filter(Boolean).join(' · ');
     const nStops = Array.isArray(t.stops) ? t.stops.length : 0;
     const hasReport = t.report && Object.keys(t.report).length > 0;
@@ -421,7 +421,10 @@ function fmtLogTrackTime(ts) {
   return ts ? tocFormatTs(ts) : '';
 }
 
-function fmtDuration(secs) {
+// LOG formatting wants padded minutes/seconds and a blank for zero, which the app-wide
+// fmtDuration does not do. Kept under its own name so the two cannot silently override
+// each other by script load order (they did until 2026-10-17, S455).
+function fmtTocDuration(secs) {
   if (!secs || secs <= 0) return '';
   const h = Math.floor(secs / 3600);
   const m = Math.floor((secs % 3600) / 60);
@@ -434,7 +437,7 @@ function fmtDuration(secs) {
 function trackLogFields(track) {
   const points = track.point_count ?? (Array.isArray(track.points) ? track.points.length : 0);
   const dur = (track.started_at && track.ended_at && track.ended_at > track.started_at)
-    ? fmtDuration(track.ended_at - track.started_at) : '';
+    ? fmtTocDuration(track.ended_at - track.started_at) : '';
   return {
     Track: `${track.name || 'GPS track'} (#${track.id})`,
     Distance: fmtLogTrackDistance(track.distance_m || 0),
@@ -481,7 +484,7 @@ function _updateTrackFormFields() {
   setFld('Start', earliest ? fmtLogTrackTime(earliest) : '');
   setFld('End', latest ? fmtLogTrackTime(latest) : '');
   setFld('Duration', (earliest && latest && latest > earliest)
-    ? fmtDuration(latest - earliest) : '');
+    ? fmtTocDuration(latest - earliest) : '');
 }
 
 function setAttachedTrack(track, opts = {}) {

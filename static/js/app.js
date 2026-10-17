@@ -1709,15 +1709,6 @@ function distanceBetween(a, b) {
 
 const _trackCache = {};
 
-function fmtDuration(secs) {
-  const h = Math.floor(secs / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  const s = secs % 60;
-  if (h) return `${h}h ${m}m`;
-  if (m) return `${m}m ${s}s`;
-  return `${s}s`;
-}
-
 function speedPercentile(arr, p) {
   if (!arr.length) return 0;
   const s = [...arr].sort((a, b) => a - b);
@@ -1829,7 +1820,10 @@ function trackStats(track) {
   let stationaryStops = 0, stoppedStops = 0, longestStop = 0, curStop = 0;
   const closeHalt = () => {
     if (curStop <= 0) return;
-    longestStop = Math.max(longestStop, curStop);
+    // longestStop is the longest DISCRETE stop (>= MIN_STOP_S), matching the
+    // server's stop list. A 24 s pause at a junction is rest time, not a stop —
+    // counting it here made the field disagree with the server on 21 tracks.
+    if (curStop >= MIN_STOP_S) longestStop = Math.max(longestStop, curStop);
     if (curStop >= STOPPED_MIN_S) { stoppedStops++; stoppedTime += curStop; }
     else { if (curStop >= MIN_STOP_S) stationaryStops++; stationaryTime += curStop; }
     curStop = 0;
@@ -3559,19 +3553,6 @@ function toggleLayersPanel(event) {
   setLayersPanelOpen(el("layers-panel")?.hidden ?? true);
 }
 
-function setMarkersMenuOpen(open) {
-  const menu = el("markers-menu");
-  const btn = el("markers-menu-btn");
-  if (!menu || !btn) return;
-  menu.hidden = !open;
-  btn.classList.toggle("active", open);
-}
-
-function toggleMarkersMenu(event) {
-  event?.stopPropagation();
-  setMarkersMenuOpen(el("markers-menu")?.hidden ?? true);
-}
-
 function closeToolsCompact() {
   const m = el("tools-compact-menu");
   if (m) m.hidden = true;
@@ -5015,7 +4996,6 @@ function bindUi() {
     if (!el("menu-wrap")?.contains(event.target)) setHamburgerOpen(false);
     if (!el("layer-wrap")?.contains(event.target)) setLayersPanelOpen(false);
     if (!el("overlay-wrap")?.contains(event.target)) setOverlaysPanelOpen(false);
-    if (!el("markers-wrap")?.contains(event.target)) setMarkersMenuOpen(false);
     if (!el("tools-compact-wrap")?.contains(event.target)) closeToolsCompact();
   });
 }
@@ -5369,7 +5349,7 @@ async function loadDownloadQueue() {
         </div>
         <div class="tileset-actions">
           <button class="btn small" data-job-action="pause" data-id="${esc(j.id)}" ${["running", "queued"].includes(j.status) ? "" : "disabled"}>Pause</button>
-          <button class="btn small" data-job-action="resume" data-id="${esc(j.id)}" ${j.status === "paused" ? "" : "disabled"}>Resume</button>
+          <button class="btn small" data-job-action="resume" data-id="${esc(j.id)}" ${["paused", "error"].includes(j.status) ? "" : "disabled"}>Resume</button>
           <button class="btn small danger" data-job-action="cancel" data-id="${esc(j.id)}">Cancel</button>
         </div>
       </div>`;
@@ -5384,16 +5364,6 @@ async function loadDownloadQueue() {
     if (summary) summary.textContent = "Failed to load jobs.";
     box.innerHTML = '<p class="field-help" style="color:var(--muted)">Failed to load queue.</p>';
   }
-}
-
-function fmtDuration(seconds) {
-  const s = Math.max(0, Number(seconds) || 0);
-  if (s < 60) return `${Math.round(s)}s`;
-  const m = Math.floor(s / 60);
-  const rem = Math.round(s % 60);
-  if (m < 60) return `${m}m ${rem}s`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
 }
 
 async function clearFinishedDownloads() {

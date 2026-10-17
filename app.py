@@ -18,6 +18,7 @@ import urllib.request
 import urllib.error
 import uuid
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -652,7 +653,10 @@ def update_job(job_id: str, **updates: Any) -> None:
 
 
 def _job_payload_json(job: dict[str, Any]) -> str:
-    if job.get("status") in {"done", "error", "cancelled"}:
+    # "error" keeps its payload: a failed download is resumeable (the .part is kept
+    # now), but the tile list lives only here, so dropping it turned every retry
+    # after a restart into a no-op. "done"/"cancelled" are final — no payload.
+    if job.get("status") in {"done", "cancelled"}:
         return "{}"
     return json.dumps(job.get("payload") or {}, separators=(",", ":"))
 
@@ -713,7 +717,8 @@ def start_download_worker_locked() -> None:
 
 def _download_job_from_row(row: sqlite3.Row) -> dict[str, Any]:
     status = row["status"]
-    if status in {"done", "error", "cancelled"}:
+    # "error" keeps its payload too, so a failed job can be retried after a restart.
+    if status in {"done", "cancelled"}:
         payload = {}
     else:
         try:
@@ -785,6 +790,26 @@ def enqueue_download_job(job: dict[str, Any], payload: dict[str, Any]) -> dict[s
     job["queued_at"] = now_ts()
     job["payload"] = payload
     with download_condition:
+        # Two identical requests (a double tap, or two tabs) both pick the same
+        # output file: job_from_download_payload chooses the name outside this lock,
+        # where a QUEUED job has created neither the .mbtiles nor the .part yet, so
+        # the "does it exist" loop sees nothing. Two jobs then write one file —
+        # interleaved SQLite writes at best, a corrupt pack at worst. Reserve
+        # against the jobs we already hold, under the lock that guards them.
+        taken = {
+            other.get("path")
+            for other in download_jobs.values()
+            if other.get("status") not in {"done", "error", "cancelled"}
+        }
+        path = Path(job.get("path") or "")
+        if job.get("path") in taken:
+            n = 2
+            stem, suffix = path.name[: -len(path.suffix)], path.suffix
+            candidate = path
+            while candidate.exists() or candidate.with_suffix(candidate.suffix + ".part").exists() or str(candidate) in taken:
+                candidate = path.with_name(f"{stem}-{n}{suffix}")
+                n += 1
+            job["path"] = payload["path"] = str(candidate)
         download_jobs[job["id"]] = job
         download_queue.append(job["id"])
         persist_download_job(job)
@@ -992,9 +1017,14 @@ def run_download_job(job_id: str, payload: dict[str, Any]) -> None:
         tmp_path.replace(path)
         update_job(job_id, status="done", done=len(tiles), saved=saved, failed=failed, path=str(path), finished_at=now_ts())
     except Exception as exc:
-        if tmp_path.exists():
-            tmp_path.unlink(missing_ok=True)
-        update_job(job_id, status="error", error=str(exc), finished_at=now_ts())
+        # KEEP the .part on error. It used to be deleted, which threw away every
+        # tile already fetched — for a 900k-tile pack that is hours of work lost to
+        # one transient network error, and Resume then started from zero. The next
+        # attempt resumes from this file, and run_download_job already discards it
+        # when it is not a readable mbtiles (is_readable_mbtiles check above), so a
+        # half-written or corrupt partial cannot poison a later run.
+        update_job(job_id, status="error", error=str(exc), finished_at=now_ts(),
+                   resumable=tmp_path.exists())
 
 
 def job_from_download_payload(payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None, tuple[str, int] | None]:
@@ -1545,6 +1575,41 @@ def _xml_text(node: ET.Element, name: str, default: str = "") -> str:
     return default
 
 
+def _iso_to_ts(text: Any) -> int | None:
+    """ISO-8601 timestamp -> epoch seconds. None when it does not parse.
+
+    Accepts `2026-10-17T19:32:18Z`, a numeric offset (`+02:00`) and fractional
+    seconds. Needed because GPX carries `<time>` as ISO text while every internal
+    calculation (`dt`, stops, duration) needs an integer `ts` — the import used to
+    keep only the string, so every imported track had no timestamps at all.
+    """
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return int(dt.timestamp())
+
+
+def _sort_points_by_ts(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Stable-sort points by `ts` when EVERY point has one; otherwise leave as-is.
+
+    Order is load-bearing: distances are summed over consecutive pairs, `dt` is
+    `b.ts - a.ts`, and a track's duration is last-first. A single out-of-order
+    point (a receiver glitch — track 56 has one 3 s inversion) adds a phantom
+    distance segment and can hide a stop, because a negative dt contributes zero.
+    Points without timestamps are left untouched: sorting them would invent an
+    order that the data does not have.
+    """
+    if points and all(isinstance(p.get("ts"), int) for p in points):
+        return sorted(points, key=lambda p: p["ts"])  # stable: ties keep file order
+    return points
+
+
 def _xml_points(nodes: list[ET.Element]) -> list[dict[str, float]]:
     points = []
     for node in nodes:
@@ -1556,9 +1621,13 @@ def _xml_points(nodes: list[ET.Element]) -> list[dict[str, float]]:
             time_text = _xml_text(node, "time")
             if time_text:
                 point["time"] = time_text
+                ts = _iso_to_ts(time_text)
+                if ts is not None:
+                    point["ts"] = ts
             points.append(point)
         except ValueError:
             continue
+    _sort_points_by_ts(points)
     return points
 
 
@@ -1582,7 +1651,7 @@ def _clean_track_points(points: list[Any]) -> list[dict[str, Any]]:
             except ValueError:
                 pass
         clean.append(out)
-    return clean
+    return _sort_points_by_ts(clean)
 
 
 def _track_gpx_text(track: dict[str, Any]) -> bytes:
@@ -1659,12 +1728,16 @@ def import_gpx_bytes(raw: bytes) -> dict[str, int]:
                 if len(points) < 2:
                     continue
                 seg_name = name if idx == 1 else f"{name} {idx}"
+                # After _xml_points' sort these are the real first/last samples. Before
+                # 2026-10-17 (S455) <time> was kept only as a string, so BOTH were None
+                # on every imported track and no stop could ever be detected.
                 started_at = points[0].get("ts")
                 ended_at = points[-1].get("ts")
+                stops = _detect_stops(points)
                 conn.execute(
                     """
-                    INSERT INTO tracks (name,description,color,points_json,distance_m,source,started_at,ended_at,created_at,updated_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?)
+                    INSERT INTO tracks (name,description,color,points_json,distance_m,source,started_at,ended_at,stops_json,created_at,updated_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)
                     """,
                     (
                         seg_name,
@@ -1675,6 +1748,7 @@ def import_gpx_bytes(raw: bytes) -> dict[str, int]:
                         "gpx-import",
                         started_at,
                         ended_at,
+                        json.dumps(stops, separators=(",", ":")),
                         ts,
                         ts,
                     ),
@@ -2346,6 +2420,13 @@ def api_update_track(track_id: int):
         color = _clean_text(payload.get("color", current["color"]), 16, current["color"]) or current["color"]
         folder = _clean_text(payload.get("folder", current["folder"]), 80)
         report = _clean_report(payload["report"]) if "report" in payload else current.get("report", {})
+        # Replacing the points must move the track's start/end with them: the
+        # columns feed the track list and the LOG fields, while the popup's stats
+        # read the points, so leaving them alone makes the two disagree.
+        started_at, ended_at = current["started_at"], current["ended_at"]
+        if "points" in payload:
+            tss = [p["ts"] for p in points if isinstance(p.get("ts"), int)]
+            started_at, ended_at = (min(tss), max(tss)) if tss else (None, None)
         if "stops" in payload:
             stops = _clean_stops(payload["stops"])
         elif "points" in payload:
@@ -2355,10 +2436,11 @@ def api_update_track(track_id: int):
         conn.execute(
             """
             UPDATE tracks
-            SET name=?,description=?,color=?,folder=?,points_json=?,distance_m=?,report_json=?,stops_json=?,updated_at=?
+            SET name=?,description=?,color=?,folder=?,points_json=?,distance_m=?,started_at=?,ended_at=?,report_json=?,stops_json=?,updated_at=?
             WHERE id=?
             """,
             (name, description, color, folder, json.dumps(points, separators=(",", ":")), line_distance_m(points),
+             started_at, ended_at,
              json.dumps(report, separators=(",", ":")), json.dumps(stops, separators=(",", ":")), now_ts(), track_id),
         )
         row = conn.execute("SELECT * FROM tracks WHERE id=?", (track_id,)).fetchone()
@@ -2623,7 +2705,9 @@ def api_log_entries():
     miss   = request.args.get("mission", "")
     search = request.args.get("search", "")
     try:
-        limit = min(int(request.args.get("limit", 500)), 10000)
+        # max(0, ...) is load-bearing: SQLite reads a NEGATIVE LIMIT as "no limit",
+        # so limit=-1 returned the whole table and silently defeated the cap.
+        limit = max(0, min(int(request.args.get("limit", 500)), 10000))
     except (ValueError, TypeError):
         limit = 500
     where = []
@@ -2763,7 +2847,10 @@ def api_log_stats():
 def api_log_export():
     fmt = request.args.get("fmt", "txt")
     with get_toc_db() as conn:
-        rows = conn.execute("SELECT id,ts,category,body FROM toc_log ORDER BY ts ASC").fetchall()
+        # uuid is NOT optional here: _toc_row() reads it, and a SELECT that omits a
+        # column it needs raises IndexError ("No item with that key") -> HTTP 500.
+        # That is exactly what the two Export buttons did until 2026-10-17 (S455).
+        rows = conn.execute("SELECT id,uuid,ts,category,body FROM toc_log ORDER BY ts ASC").fetchall()
     entries = [_toc_row(r) for r in rows]
     if fmt == "json":
         return Response(
@@ -2908,10 +2995,14 @@ def api_resume_download(job_id):
         job = download_jobs.get(job_id)
         if not job:
             return jsonify({"error": "Job not found"}), 404
-        if job.get("status") not in {"paused", "running"}:
+        # "error" is resumable since 2026-10-17 (S455): the partial pack is kept, so
+        # retrying the same job continues where it stopped instead of starting over.
+        if job.get("status") not in {"paused", "running", "error"}:
             return jsonify({"error": "Job cannot be resumed"}), 400
+        if job.get("status") == "error" and not (job.get("payload") or {}).get("tiles"):
+            return jsonify({"error": "This job has no retained tile list — start a new download."}), 400
         _paused_jobs.discard(job_id)
-        if job.get("status") == "paused":
+        if job.get("status") in {"paused", "error"}:
             if job_id in _active_jobs:
                 job["status"] = "running"
             else:
