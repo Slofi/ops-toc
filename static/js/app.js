@@ -3311,13 +3311,35 @@ async function loadLayers() {
     }
   }
 
-  if (data.online.length && panelList) {
-    const lbl = document.createElement("div");
-    lbl.className = "layer-group-label";
-    lbl.textContent = "Online";
-    panelList.appendChild(lbl);
+  // Keyless layers first, then one group per provider. The star means "needs your own API key", and the
+  // groups keep a 24-layer menu readable. Same order and cues as OverMesh's layer menu (S454).
+  const providerRank = { "": 0, thunderforest: 1, maptiler: 2, carto: 3, stadia: 4 };
+  const providerLabel = {
+    "": "Free maps",
+    thunderforest: "Thunderforest ★",
+    maptiler: "MapTiler ★",
+    carto: "CARTO ★",
+    stadia: "Stadia Maps ★",
+  };
+  const onlineOrdered = [...data.online].sort((a, b) =>
+    (providerRank[a.key_provider || ""] ?? 9) - (providerRank[b.key_provider || ""] ?? 9));
+  if (panelList && onlineOrdered.some((l) => l.key_provider)) {
+    const hint = document.createElement("div");
+    hint.className = "field-help";
+    hint.style.padding = "0 10px 6px";
+    hint.textContent = "★ needs your own API key (Settings → Map Layer Keys).";
+    panelList.appendChild(hint);
   }
-  for (const layer of data.online) {
+  let lastProvider = null;
+  for (const layer of onlineOrdered) {
+    const prov = layer.key_provider || "";
+    if (prov !== lastProvider && panelList) {
+      const lbl = document.createElement("div");
+      lbl.className = "layer-group-label";
+      lbl.textContent = providerLabel[prov] || prov;
+      panelList.appendChild(lbl);
+    }
+    lastProvider = prov;
     const opt = document.createElement("option");
     opt.value = `online:${layer.id}`;
     opt.textContent = layer.name;
