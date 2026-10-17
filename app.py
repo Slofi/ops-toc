@@ -738,7 +738,6 @@ def _set_refresh_inflight(active: bool = True) -> None:
 
 
 def _refresh_update_check(fetch: bool = True, cwd: Path | None = None) -> dict[str, Any]:
-    global _refresh_inflight
     try:
         info = _git_update_info(fetch=fetch, cwd=cwd)
         available = bool(info["managed"] and not info.get("error") and info["behind"] > 0)
