@@ -1804,24 +1804,47 @@ function trackStats(track) {
   const rawSpeeds = segmentSpeeds(pts);
   const maxKmh = speedPercentile(rawSpeeds, 0.95);
 
-  // Moving vs stopped breakdown (after-action). "Stopped" means actually at
-  // rest (~0 km/h) — STOP_KMH is 1, not a literal 0, because a parked GPS still
-  // blips <1 km/h of Doppler noise and a hard 0 would fragment real stops. A
-  // contiguous stopped run only counts as a discrete stop once it lasts
-  // MIN_STOP_S; all stopped seconds still add to stoppedTime regardless.
-  const STOP_KMH = 1, MIN_STOP_S = 60;
-  let movingTime = 0, stoppedTime = 0, stops = 0, longestStop = 0, curStop = 0;
+  // Moving vs at-rest breakdown (after-action), split in two kinds by duration
+  // (Filip, 2026-10-17) — mirrors app.py `_detect_stops`, so the numbers agree:
+  //   stationary — a short halt that is part of the drive (traffic light, junction).
+  //                Includes halts shorter than MIN_STOP_S: they are rest time, they
+  //                are just not an event of their own.
+  //   stopped    — a halt of STOPPED_MIN_S or longer: an errand, a shop, parking.
+  // The WHOLE halt is one or the other; the two totals never overlap and always add
+  // up to the total at-rest time.
+  const STOP_KMH = 1, MIN_STOP_S = 60, STOPPED_MIN_S = 600;
+  // Best evidence that one pair is at rest: the POSITIONS say ~0 km/h, OR the stored
+  // speeds do. Stored speed alone is what silently lost every long stop: across a
+  // receiver dropout the pair carries the speed from before the halt and from after
+  // it, so its mean reads as a slow crawl (2.5 km/h) and no stop was ever seen.
+  const pairHaltKmh = (a, b) => {
+    const dt = Math.max((b.ts || 0) - (a.ts || 0), 1);
+    const geo = distanceBetween(a, b) / dt * 3.6;
+    const sa = typeof a.speed === "number" ? a.speed : null;
+    const sb = typeof b.speed === "number" ? b.speed : null;
+    const stored = (sa != null && sb != null) ? (sa + sb) / 2 : (sb != null ? sb : geo);
+    return Math.min(geo, stored);
+  };
+  let movingTime = 0, stationaryTime = 0, stoppedTime = 0;
+  let stationaryStops = 0, stoppedStops = 0, longestStop = 0, curStop = 0;
+  const closeHalt = () => {
+    if (curStop <= 0) return;
+    longestStop = Math.max(longestStop, curStop);
+    if (curStop >= STOPPED_MIN_S) { stoppedStops++; stoppedTime += curStop; }
+    else { if (curStop >= MIN_STOP_S) stationaryStops++; stationaryTime += curStop; }
+    curStop = 0;
+  };
   for (let k = 0; k < rawSpeeds.length; k++) {
     const dt = Math.max((pts[k + 1].ts || 0) - (pts[k].ts || 0), 0);
-    if (rawSpeeds[k] < STOP_KMH) {
-      stoppedTime += dt; curStop += dt;
+    if (pairHaltKmh(pts[k], pts[k + 1]) < STOP_KMH) {
+      curStop += dt;
     } else {
       movingTime += dt;
-      if (curStop >= MIN_STOP_S) { stops++; longestStop = Math.max(longestStop, curStop); }
-      curStop = 0;
+      closeHalt();
     }
   }
-  if (curStop >= MIN_STOP_S) { stops++; longestStop = Math.max(longestStop, curStop); }
+  closeHalt();
+  const atRestTime = stationaryTime + stoppedTime;
   const movingAvgKmh = movingTime > 0 ? dist / movingTime * 3.6 : 0;
 
   const alts = pts.map(p => p.alt != null ? Number(p.alt) : null).filter(a => a !== null);
@@ -1833,7 +1856,8 @@ function trackStats(track) {
   }
   const minAlt = alts.length ? Math.min(...alts) : null;
   const maxAlt = alts.length ? Math.max(...alts) : null;
-  return { dist, duration, avgKmh, maxKmh, movingTime, stoppedTime, stops, longestStop, movingAvgKmh,
+  return { dist, duration, avgKmh, maxKmh, movingTime, stationaryTime, stoppedTime, atRestTime,
+           stationaryStops, stoppedStops, stops: stationaryStops + stoppedStops, longestStop, movingAvgKmh,
            elevGain, elevLoss, hasAlt: alts.length > 0, minAlt, maxAlt, startTs: pts[0].ts || null, endTs: pts.at(-1).ts || null };
 }
 
@@ -2394,7 +2418,8 @@ function trackPopup(track) {
       <tr><td style="color:var(--muted);padding:1px 6px 1px 0">Distance</td><td>${fmtDistance(stats.dist)}</td></tr>
       ${stats.duration > 0 ? `<tr><td style="color:var(--muted);padding:1px 6px 1px 0">Total time</td><td>${fmtDuration(stats.duration)}</td></tr>` : ""}
       ${stats.movingTime > 0 ? `<tr><td style="color:var(--muted);padding:1px 6px 1px 0">Moving</td><td>${fmtDuration(stats.movingTime)}</td></tr>` : ""}
-      ${stats.stoppedTime > 0 ? `<tr><td style="color:var(--muted);padding:1px 6px 1px 0">Stopped</td><td>${fmtDuration(stats.stoppedTime)}${stats.stops > 0 ? ` · ${stats.stops} stop${stats.stops !== 1 ? "s" : ""}` : ""}</td></tr>` : ""}
+      ${stats.stationaryTime > 0 ? `<tr><td style="color:var(--muted);padding:1px 6px 1px 0">Stationary</td><td>${fmtDuration(stats.stationaryTime)}${stats.stationaryStops > 0 ? ` · ${stats.stationaryStops}` : ""}</td></tr>` : ""}
+      ${stats.stoppedTime > 0 ? `<tr><td style="color:var(--muted);padding:1px 6px 1px 0">Stopped</td><td>${fmtDuration(stats.stoppedTime)}${stats.stoppedStops > 0 ? ` · ${stats.stoppedStops}` : ""}</td></tr>` : ""}
       ${stats.avgKmh > 0 ? `<tr><td style="color:var(--muted);padding:1px 6px 1px 0">Avg speed</td><td>${stats.avgKmh.toFixed(1)} km/h</td></tr>` : ""}
       ${stats.movingAvgKmh > 0 ? `<tr><td style="color:var(--muted);padding:1px 6px 1px 0">Moving avg</td><td>${stats.movingAvgKmh.toFixed(1)} km/h</td></tr>` : ""}
       ${stats.maxKmh > 0 ? `<tr><td style="color:var(--muted);padding:1px 6px 1px 0">Max speed</td><td>${stats.maxKmh.toFixed(1)} km/h</td></tr>` : ""}
@@ -2736,15 +2761,31 @@ function _debriefStatsHtml(track) {
   const bits = [`<b>${fmtDistance(s.dist)}</b>`];
   if (s.duration > 0) bits.push(fmtDuration(s.duration));
   if (s.movingTime > 0) bits.push(`moving ${fmtDuration(s.movingTime)}`);
+  if (s.stationaryTime > 0) bits.push(`stationary ${fmtDuration(s.stationaryTime)}`);
   if (s.stoppedTime > 0) bits.push(`stopped ${fmtDuration(s.stoppedTime)}`);
   if (s.maxKmh > 0) bits.push(`max ${s.maxKmh.toFixed(0)} km/h`);
   return bits.join(" · ");
 }
 
+// A stop's kind is derived from its duration (never stored independently — see
+// app.py stop_kind): 10 min or more is an event of its own, anything shorter is
+// part of the drive.
+function _stopKind(s) {
+  if (s && (s.kind === "stopped" || s.kind === "stationary")) return s.kind;
+  return (Number(s && s.duration_s) || 0) >= 600 ? "stopped" : "stationary";
+}
+
 function _renderDebriefStops() {
   const box = el("debrief-stops");
   const cnt = el("debrief-stops-count");
-  if (cnt) cnt.textContent = _debriefStops.length ? `(${_debriefStops.length})` : "";
+  if (cnt) {
+    const nStopped = _debriefStops.filter(s => _stopKind(s) === "stopped").length;
+    const nStationary = _debriefStops.length - nStopped;
+    const parts = [];
+    if (nStopped) parts.push(`${nStopped} stopped`);
+    if (nStationary) parts.push(`${nStationary} stationary`);
+    cnt.textContent = parts.length ? `(${parts.join(" · ")})` : "";
+  }
   if (!box) return;
   if (!_debriefStops.length) {
     box.innerHTML = `<div style="color:var(--muted);font-size:12px;padding:6px 0">No stops recorded. Use "Detect stops" to scan this track.</div>`;
@@ -2754,14 +2795,17 @@ function _renderDebriefStops() {
     const when = s.start_ts ? fmtTime(s.start_ts) : "";
     const dur = s.duration_s ? fmtDuration(s.duration_s) : "";
     const canFly = (s.lat != null && s.lon != null);
+    const kind = _stopKind(s);
+    const label = kind === "stopped" ? "Stopped" : "Stationary";
     return `<div class="debrief-stop">
       <div class="debrief-stop-head">
         <span class="debrief-stop-seq">Stop ${s.seq || i + 1}</span>
+        <span class="debrief-stop-kind ${kind}">${label}</span>
         <span class="debrief-stop-meta">${when}${dur ? ` · ${dur}` : ""}</span>
         ${canFly ? `<button type="button" class="btn small" onclick="_debriefFly(${i})">Map</button>` : ""}
       </div>
-      <input type="text" class="debrief-stop-tag" placeholder="tag (refuel, break, stop…)" value="${esc(s.tag || "")}" oninput="_debriefStops[${i}].tag=this.value">
-      <textarea class="debrief-stop-note" rows="1" placeholder="What happened here?" oninput="_debriefStops[${i}].note=this.value">${esc(s.note || "")}</textarea>
+      <input type="text" class="debrief-stop-tag" placeholder="tag (refuel, break, ${kind === "stopped" ? "errand" : "wait"}…)" value="${esc(s.tag || "")}" oninput="_debriefStops[${i}].tag=this.value">
+      <textarea class="debrief-stop-note" rows="1" placeholder="${kind === "stopped" ? "What did you stop for?" : "What were you waiting for?"}" oninput="_debriefStops[${i}].note=this.value">${esc(s.note || "")}</textarea>
     </div>`;
   }).join("");
 }
@@ -2847,7 +2891,8 @@ function _exportDebrief() {
     lines.push(`- Distance: ${fmtDistance(s.dist)}`);
     if (s.duration > 0) lines.push(`- Total time: ${fmtDuration(s.duration)}`);
     if (s.movingTime > 0) lines.push(`- Moving: ${fmtDuration(s.movingTime)}`);
-    if (s.stoppedTime > 0) lines.push(`- Stopped: ${fmtDuration(s.stoppedTime)} (${s.stops} stop${s.stops !== 1 ? "s" : ""})`);
+    if (s.stationaryTime > 0) lines.push(`- Stationary: ${fmtDuration(s.stationaryTime)} (${s.stationaryStops} short halt${s.stationaryStops !== 1 ? "s" : ""})`);
+    if (s.stoppedTime > 0) lines.push(`- Stopped: ${fmtDuration(s.stoppedTime)} (${s.stoppedStops} stop${s.stoppedStops !== 1 ? "s" : ""})`);
     if (s.maxKmh > 0) lines.push(`- Max speed: ${s.maxKmh.toFixed(0)} km/h`);
     if (s.startTs) lines.push(`- Start: ${fmtDateTime(s.startTs)}`);
     lines.push("");

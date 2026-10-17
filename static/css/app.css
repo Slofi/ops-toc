@@ -2578,6 +2578,14 @@ a.menu-item {
 }
 .debrief-stop-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .debrief-stop-seq { font-weight: 700; color: var(--accent); font-size: 12px; }
+/* Kind badge: stationary = short halt, part of the drive; stopped = 10 min or more,
+   an event of its own (Filip, 2026-10-17). */
+.debrief-stop-kind {
+  font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 1px 5px; border-radius: 4px; border: 1px solid var(--border);
+}
+.debrief-stop-kind.stationary { color: var(--muted); background: transparent; }
+.debrief-stop-kind.stopped { color: #e8b04f; border-color: #e8b04f66; background: #e8b04f1a; }
 .debrief-stop-meta { color: var(--muted); font-size: 11px; flex: 1; }
 .debrief-stop-tag { margin-bottom: 6px; }
 .debrief-stop-note { min-height: 34px; }

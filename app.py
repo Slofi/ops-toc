@@ -1118,23 +1118,63 @@ def line_distance_m(points: list[dict[str, float]]) -> float:
 
 
 # --- Track stops / debrief -------------------------------------------------
-# A "stop" = a contiguous at-rest run (<STOP_KMH) lasting at least MIN_STOP_S.
-# STOP_KMH is 1 (not 0) because a parked GPS blips <1 km/h of Doppler noise;
-# MIN_STOP_S filters out momentary halts (traffic lights). Mirrors the moving/
-# stopped logic in app.js trackStats so counts agree.
+# A halt = a contiguous at-rest run lasting at least MIN_STOP_S. Halts are split into
+# two kinds by duration (Filip, 2026-10-17):
+#   "stationary" — a short halt that is part of the drive (traffic light, junction,
+#                  waiting to turn). Never an event of its own.
+#   "stopped"    — a halt of STOPPED_MIN_S or longer: an errand, a shop, parking.
+#                  The WHOLE halt is "stopped", not a stationary prefix + a stopped tail
+#                  (the category describes the event, and the two totals never overlap).
+# STOP_KMH is 1 (not 0) because a parked GPS blips <1 km/h of Doppler noise.
+# Mirrors the moving/stationary/stopped logic in app.js trackStats so counts agree.
 STOP_KMH = 1.0
 MIN_STOP_S = 60.0
+# 10 min: traffic lights and junctions stay "stationary", a grocery run does not.
+# Env override so the line can move without a code edit; nothing is stored per track,
+# every stop's kind is DERIVED from its duration (so a change reclassifies history).
+STOPPED_MIN_S = float(os.environ.get("OPS_TOC_STOPPED_MIN_S", "600"))
 REPORT_FIELDS = ("purpose", "summary", "outcome", "followup", "activity")
 
 
+def stop_kind(duration_s: Any) -> str:
+    """Classify a halt by its duration: 'stationary' (short) or 'stopped' (long)."""
+    try:
+        dur = float(duration_s or 0)
+    except (TypeError, ValueError):
+        dur = 0.0
+    return "stopped" if dur >= STOPPED_MIN_S else "stationary"
+
+
+def _seg_geo_kmh(a: dict[str, Any], b: dict[str, Any]) -> float:
+    """Speed implied by the POSITIONS alone (never the stored speed field)."""
+    dt = max((b.get("ts") or 0) - (a.get("ts") or 0), 1)
+    return haversine_m(a, b) / dt * 3.6
+
+
 def _seg_speed_kmh(a: dict[str, Any], b: dict[str, Any]) -> float:
+    """Stored-speed estimate when both ends carry one, else the geometric one."""
     sa, sb = a.get("speed"), b.get("speed")
     if isinstance(sa, (int, float)) and isinstance(sb, (int, float)):
         return (sa + sb) / 2
     if isinstance(sb, (int, float)):
         return float(sb)
-    dt = max((b.get("ts") or 0) - (a.get("ts") or 0), 1)
-    return haversine_m(a, b) / dt * 3.6
+    return _seg_geo_kmh(a, b)
+
+
+def _pair_halt_kmh(a: dict[str, Any], b: dict[str, Any]) -> float:
+    """Best evidence of at-rest for one pair: position-derived speed OR stored speed.
+
+    The stored-speed average on its own is what silently lost every long stop
+    (fixed 2026-10-17, S455). A ~24-minute halt was in the data as a single pair with
+    zero metres moved, but its two ends carried 2.5 and 2.6 km/h — the speed the car
+    had *before* stopping and *after* resuming — so the mean, 2.55, read as a slow
+    crawl and the stop vanished. Those are exactly the halts where the receiver drops
+    out (garage, indoor parking, <REC_MIN_SATS): no samples arrive, so no closing
+    at-rest marker is written and the pair bridges the whole halt. Taking the MINIMUM
+    of the two estimates keeps the old jitter tolerance (a parked GPS with real drift
+    still shows ~0 stored speed) and adds the geometry that recovers the long stops.
+    """
+    return min(_seg_geo_kmh(a, b), _seg_speed_kmh(a, b))
 
 
 def _mk_stop(points: list[dict[str, Any]], s: int, e: int, run: float, seq: int) -> dict[str, Any]:
@@ -1144,6 +1184,7 @@ def _mk_stop(points: list[dict[str, Any]], s: int, e: int, run: float, seq: int)
         "start_ts": points[s].get("ts"),
         "end_ts": points[e].get("ts"),
         "duration_s": int(round(run)),
+        "kind": stop_kind(run),
         "lat": p.get("lat"),
         "lon": p.get("lon"),
         "note": "",
@@ -1163,7 +1204,7 @@ def _detect_stops(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for k in range(1, n):
         a, b = points[k - 1], points[k]
         dt = max((b.get("ts") or 0) - (a.get("ts") or 0), 0)
-        if _seg_speed_kmh(a, b) < STOP_KMH:
+        if _pair_halt_kmh(a, b) < STOP_KMH:
             if start_idx is None:
                 start_idx = k - 1
             run += dt
@@ -1192,7 +1233,12 @@ def _clean_report(raw: Any) -> dict[str, str]:
 
 
 def _clean_stops(raw: Any) -> list[dict[str, Any]]:
-    """Sanitize a client-edited stops array — geometry/time kept, note+tag clamped."""
+    """Sanitize a client-edited stops array — geometry/time kept, note+tag clamped.
+
+    `kind` is always RECOMPUTED from the duration, never taken from the client: it is
+    derived data, so a stale client (or an older stored row) cannot persist a stop
+    whose label disagrees with its own length.
+    """
     out: list[dict[str, Any]] = []
     if not isinstance(raw, list):
         return out
@@ -1200,11 +1246,13 @@ def _clean_stops(raw: Any) -> list[dict[str, Any]]:
         if not isinstance(s, dict):
             continue
         try:
+            dur = _int(s.get("duration_s", 0), "duration_s")
             out.append({
                 "seq": _int(s.get("seq", i + 1), "seq"),
                 "start_ts": _int(s["start_ts"], "start_ts") if s.get("start_ts") is not None else None,
                 "end_ts": _int(s["end_ts"], "end_ts") if s.get("end_ts") is not None else None,
-                "duration_s": _int(s.get("duration_s", 0), "duration_s"),
+                "duration_s": dur,
+                "kind": stop_kind(dur),
                 "lat": _coord(s["lat"], "lat") if s.get("lat") is not None else None,
                 "lon": _coord(s["lon"], "lon") if s.get("lon") is not None else None,
                 "note": _clean_text(s.get("note"), 500),
