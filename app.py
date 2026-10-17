@@ -709,6 +709,19 @@ def _git_update_info(fetch: bool = False, cwd: Path | None = None) -> dict[str, 
     return info
 
 
+def _change_needs_restart(paths: set[str]) -> bool:
+    """Same rule as newest_code_mtime(): Python at the root and Jinja templates.
+
+    static JS/CSS only needs a page reload, and tests/docs need nothing — saying
+    "Restart required" for a tests-only update was wrong (found by the S455 sweep
+    while updating with a tests-only commit).
+    """
+    return any(
+        ("/" not in p and p.endswith(".py")) or p.startswith("templates/")
+        for p in paths
+    )
+
+
 def _clear_skip_worktree_flags(cwd: Path) -> int:
     """Drop stale skip-worktree / assume-unchanged flags before a reset.
 
@@ -812,11 +825,17 @@ def _update_run_job(target: Path | None = None) -> None:
                 raise RuntimeError((pip.stderr or pip.stdout or "pip install failed").strip()[-600:])
             _update_append("Dependencies updated.")
         final = _git_update_info(fetch=False, cwd=root)
-        _update_append(f"Update complete ({final['commit']}). Restart required.")
+        needs_restart = _change_needs_restart(changed)
+        message = (f"Updated to {final['commit']}. Restart required."
+                   if needs_restart else
+                   f"Updated to {final['commit']}. Reload the page — no restart needed.")
+        _update_append(f"Update complete ({final['commit']})."
+                       + (" Restart required." if needs_restart else " No restart needed."))
         with _update_lock:
             _update_state.update({
                 "running": False, "ok": True,
-                "message": f"Updated to {final['commit']}. Restart required.",
+                "message": message,
+                "restart_needed": needs_restart,
                 "updated_at": int(time.time()),
             })
         _refresh_update_check(fetch=False, cwd=root)

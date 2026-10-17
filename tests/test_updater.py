@@ -177,6 +177,42 @@ def test_update_available_coalesces_refreshes() -> None:
     finally:
         app._set_refresh_inflight(False)
 
+
+def test_restart_rule_matches_what_the_process_runs() -> None:
+    for paths, expected in (
+        ({"app.py"}, True),
+        ({"gps.py"}, True),
+        ({"templates/index.html"}, True),
+        ({"requirements.txt"}, False),   # pip install happens in the job
+        ({"static/js/app.js"}, False),   # reload only
+        ({"tests/run_all.py"}, False),
+        ({"scripts/redetect-stops.py"}, False),
+        (set(), False),
+    ):
+        assert app._change_needs_restart(paths) is expected, (paths, expected)
+
+
+def test_tests_only_update_asks_for_no_restart() -> None:
+    base, work = make_repos()
+    seed = base / "seed"
+    (seed / "tests").mkdir(exist_ok=True)
+    (seed / "tests" / "test_x.py").write_text("# a test change\n")
+    git(seed, "add", "-A")
+    git(seed, "commit", "-q", "-m", "tests only")
+    git(seed, "push", "-q", "origin", "HEAD:refs/heads/master")
+    state = run_job(work)
+    assert state["ok"] is True, state
+    assert state["restart_needed"] is False, state
+    assert "no restart needed" in state["message"].lower(), state["message"]
+
+
+def test_app_py_update_asks_for_a_restart() -> None:
+    base, work = make_repos()
+    publish_commit(base / "origin.git", base, "print('v2')\n")
+    state = run_job(work)
+    assert state["ok"] is True and state["restart_needed"] is True, state
+    assert "Restart required" in state["message"], state["message"]
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
