@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
   <title>OPS-TOC{% if hd_lite %} LITE{% endif %}</title>
   <link rel="stylesheet" href="/static/leaflet/leaflet.css">
-  <link rel="stylesheet" href="/static/css/app.css">
-  {% if hd_lite %}<link rel="stylesheet" href="/static/css/lite.css">{% endif %}
+  <link rel="stylesheet" href="/static/css/app.css?v={{ asset_v }}">
+  {% if hd_lite %}<link rel="stylesheet" href="/static/css/lite.css?v={{ asset_v }}">{% endif %}
 </head>
 <body{% if hd_lite %} class="hd-lite"{% endif %}>
   <div id="service-splash" class="service-splash" hidden data-mode="restart">
@@ -1143,7 +1143,7 @@
 
   <script src="/static/leaflet/leaflet.js"></script>
   {% if hd_lite %}<script>window.OPS_TOC_LITE = true;</script>{% endif %}
-  <script src="/static/js/app.js"></script>
-  <script src="/static/js/toc.js"></script>
+  <script src="/static/js/app.js?v={{ asset_v }}"></script>
+  <script src="/static/js/toc.js?v={{ asset_v }}"></script>
 </body>
 </html>

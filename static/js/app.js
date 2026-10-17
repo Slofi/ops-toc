@@ -3277,6 +3277,7 @@ async function pushToOverMesh() {
 
 async function loadLayers() {
   const data = await api("/api/tile-layers");
+  state.layerData = data;
   const select = el("layer-select");
   select.innerHTML = "";
   const panelList = el("layers-panel-list");
@@ -3356,7 +3357,26 @@ async function loadLayers() {
     ? saved
     : (select.options[0]?.value || "online:voyager");
   setLayer(select.value);
+  switchToLocalIfOffline();
 }
+
+// Offline field use: an ONLINE layer while the network is down means every tile request waits for a
+// TCP timeout (about 30 s of black map) before failing, and nothing tells the user why. When the browser
+// reports offline and a local MBTiles layer exists, switch to it instead. Never switches back on its own:
+// the operator's chosen layer is theirs once the network returns.
+function switchToLocalIfOffline() {
+  if (typeof navigator !== "undefined" && navigator.onLine) return false;
+  const select = el("layer-select");
+  if (!select || !select.value.startsWith("online:")) return false;
+  const local = [...select.options].find((o) => o.value.startsWith("local:"));
+  if (!local) return false;
+  select.value = local.value;
+  setLayer(local.value);
+  setBanner(`Offline: using local map ${local.textContent.replace(/^Local:\s*/, "")}`);
+  return true;
+}
+
+window.addEventListener("offline", () => { switchToLocalIfOffline(); });
 
 function resolveTileUrl(url, layerName = "selected layer") {
   if (url.includes("{apikey}")) {
@@ -3751,7 +3771,7 @@ async function pollOfflineJob(jobId) {
     pauseBtn.hidden = true;
     resumeBtn.hidden = true;
     if (job.status === "done") {
-      el("offline-status").textContent = `Done. Saved ${job.saved} tiles.`;
+      el("offline-status").textContent = `Done. Saved ${job.saved} tiles. Switched to the downloaded map.`;
     } else if (job.status === "cancelled") {
       el("offline-status").textContent = "Download cancelled.";
     } else {
@@ -3759,6 +3779,24 @@ async function pollOfflineJob(jobId) {
     }
     await loadTilesets();
     await loadDownloadQueue();
+    if (job.status === "done") await useNewestLocalLayer();
+  }
+}
+
+// A finished download becomes the visible map: it is the copy that works without a network.
+async function useNewestLocalLayer() {
+  try {
+    const data = await api("/api/tile-layers");
+    const locals = (data.local || []).slice().sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
+    if (!locals.length) return;
+    await loadLayers();
+    const value = `local:${locals[0].id}`;
+    const select = el("layer-select");
+    if (![...select.options].some((o) => o.value === value)) return;
+    select.value = value;
+    setLayer(value);
+  } catch (e) {
+    // the download itself succeeded; switching the view is best-effort
   }
 }
 

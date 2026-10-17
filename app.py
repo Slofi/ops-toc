@@ -75,6 +75,23 @@ def newest_code_mtime() -> float:
     return newest
 
 
+def asset_version() -> int:
+    """Cache-buster for static JS/CSS, from the newest file mtime.
+
+    The app has no VERSION file, and without `?v=` a normal reload can keep serving an old bundle after
+    a deploy. That is how a just-shipped fix can look broken (and did, 2026-10-17). Integer epoch seconds
+    is enough: any change to a .js/.css file moves it.
+    """
+    newest = 0.0
+    for pattern in ("static/js/*.js", "static/css/*.css"):
+        for f in APP_ROOT.glob(pattern):
+            try:
+                newest = max(newest, f.stat().st_mtime)
+            except OSError:
+                pass
+    return int(newest)
+
+
 def app_state_payload() -> dict[str, Any]:
     synced_root = find_syncthing_root(APP_ROOT)
     newest = newest_code_mtime()
@@ -1620,13 +1637,13 @@ def import_gpx_bytes(raw: bytes) -> dict[str, int]:
 
 @app.route("/")
 def index():
-    return render_template("index.html", **app_state_payload())
+    return render_template("index.html", asset_v=asset_version(), **app_state_payload())
 
 
 @app.route("/lite")
 def lite():
     # OPS-TOC Lite — same template/backend, compact HD 5" (1024x600) frontend
-    return render_template("index.html", hd_lite=True, **app_state_payload())
+    return render_template("index.html", hd_lite=True, asset_v=asset_version(), **app_state_payload())
 
 
 @app.route("/api/health")
