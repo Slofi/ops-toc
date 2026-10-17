@@ -124,6 +124,19 @@ _LOG_CATS   = {'NOTE', 'PLAN', 'SITREP', 'ALERT', 'ACTION', 'COMMS', 'CONTACT', 
 
 app = Flask(__name__)
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0  # no static-file caching during active development
+
+
+@app.errorhandler(OverflowError)
+def _handle_overflow(_exc):
+    """An integer too large for SQLite is a bad id, not a server fault.
+
+    `<int:track_id>` accepts arbitrarily long digits, and binding e.g.
+    999999999999999999999999 to a column raises OverflowError deep in sqlite3 — which
+    turned `GET /api/tracks/<huge>` into a 500 (S455 re-sweep). No such row can exist,
+    so every id route answers 404 without each one needing its own guard.
+    """
+    return jsonify({"error": "Value out of range"}), 404
+
 download_jobs: dict[str, dict[str, Any]] = {}
 download_lock = threading.Lock()
 download_condition = threading.Condition(download_lock)
@@ -796,13 +809,17 @@ def enqueue_download_job(job: dict[str, Any], payload: dict[str, Any]) -> dict[s
         # the "does it exist" loop sees nothing. Two jobs then write one file —
         # interleaved SQLite writes at best, a corrupt pack at worst. Reserve
         # against the jobs we already hold, under the lock that guards them.
+        #
+        # ONLY for kind="download" (a NEW pack). Repair and extend jobs carry the
+        # path of the pack they operate on by definition — renaming that would write
+        # a second pack instead of repairing the first (caught in the S455 re-sweep).
         taken = {
             other.get("path")
             for other in download_jobs.values()
             if other.get("status") not in {"done", "error", "cancelled"}
         }
         path = Path(job.get("path") or "")
-        if job.get("path") in taken:
+        if job.get("kind") == "download" and job.get("path") in taken:
             n = 2
             stem, suffix = path.name[: -len(path.suffix)], path.suffix
             candidate = path
@@ -2128,6 +2145,12 @@ def serve_tile(layer_id: str, z: int, x: int, y: int):
     layer = find_mbtiles(layer_id)
     if not layer:
         return Response(status=204)
+    # Validate the tile address BEFORE doing arithmetic on it. `2**z - 1 - y` with an
+    # absurd zoom (z=99) produced an integer SQLite cannot bind, which raised
+    # OverflowError outside the sqlite3.Error catch below -> HTTP 500. Anything out of
+    # range is simply "no tile" (204), which is what the map already expects.
+    if z < 0 or z > 30 or x < 0 or y < 0 or x >= 2**z or y >= 2**z:
+        return Response(status=204)
     y_tms = (2**z - 1) - y
     try:
         with sqlite3.connect(f"file:{layer['path']}?mode=ro", uri=True) as conn:
@@ -3003,9 +3026,15 @@ def api_resume_download(job_id):
             return jsonify({"error": "This job has no retained tile list — start a new download."}), 400
         _paused_jobs.discard(job_id)
         if job.get("status") in {"paused", "error"}:
-            if job_id in _active_jobs:
+            if job.get("status") == "paused" and job_id in _active_jobs:
+                # a live worker is parked on this job — just un-pause it
                 job["status"] = "running"
             else:
+                # An ERRORED job has no live worker (the run already returned), and
+                # leaving it in _active_jobs between update_job(error) and the worker's
+                # finally-block made this branch set "running" with nothing running:
+                # a job stuck forever. Discard and enqueue it for real.
+                _active_jobs.discard(job_id)
                 job["status"] = "queued"
                 if job_id not in download_queue:
                     download_queue.append(job_id)
