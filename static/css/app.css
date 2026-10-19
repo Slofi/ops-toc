@@ -658,7 +658,20 @@ select {
 #map-wrap { position: relative; min-width: 0; min-height: 0; }
 #map { position: absolute; inset: 0; background: var(--bg); }
 #map.tool-crosshair, #map.tool-crosshair * { cursor: crosshair !important; }
-.leaflet-control-attribution { font-size: 9px !important; }
+.leaflet-bottom.leaflet-right { width: 100%; }
+.leaflet-control-attribution {
+  font-size: 9px !important;
+  max-width: calc(100% - 70px);
+  white-space: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  line-height: 1.25;
+}
+.leaflet-control-attribution::-webkit-scrollbar { display: none; }
 .leaflet-bar {
   border: 1px solid var(--border) !important;
   border-radius: 6px !important;

@@ -308,6 +308,27 @@ def init_db() -> None:
             pass
 
 
+_ESRI_TOPO_FULL = 'Esri, HERE, Garmin, Intermap, increment P Corp., GEBCO, USGS, FAO, NPS, NRCAN, GeoBase, IGN, Kadaster NL, Ordnance Survey, Esri Japan, METI, Esri China (Hong Kong), (c) OpenStreetMap contributors, and the GIS User Community'
+_ESRI_STREETS_FULL = 'Esri, HERE, Garmin, USGS, Intermap, INCREMENT P, NRCan, Esri Japan, METI, Esri China (Hong Kong), Esri Korea, Esri (Thailand), NGCC, (c) OpenStreetMap contributors, and the GIS User Community'
+_ESRI_HILLSHADE_FULL = 'Esri, Vantor, Airbus DS, USGS, NGA, NASA, CGIAR, N Robinson, NCEAS, NLS, OS, NMA, Geodatastyrelsen, Rijkswaterstaat, GSA, Geoland, FEMA, Intermap, and the GIS user community'
+ESRI_TOPO_SHORT = f'Esri, HERE, Garmin, © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, and the GIS User Community <span title="{_ESRI_TOPO_FULL}">ⓘ</span>'
+ESRI_STREETS_SHORT = f'Esri, HERE, Garmin, © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, and the GIS User Community <span title="{_ESRI_STREETS_FULL}">ⓘ</span>'
+ESRI_HILLSHADE_SHORT = f'Esri, USGS, NGA, NASA, and the GIS User Community <span title="{_ESRI_HILLSHADE_FULL}">ⓘ</span>'
+
+
+def _compact_credit(credit: str) -> str:
+    """Short visible provider line; the full service text stays in the title."""
+    if not credit:
+        return credit
+    if "increment P Corp." in credit or "GEBCO" in credit or "Kadaster NL" in credit:
+        return ESRI_TOPO_SHORT
+    if "INCREMENT P" in credit or "NRCan" in credit or "NGCC" in credit:
+        return ESRI_STREETS_SHORT
+    if "Airbus DS" in credit or "Robinson" in credit or "NCEAS" in credit:
+        return ESRI_HILLSHADE_SHORT
+    return credit
+
+
 def _clean_text(value: Any, max_len: int, default: str = "") -> str:
     text = str(value if value is not None else default).strip()
     return text[:max_len]
@@ -470,7 +491,7 @@ def list_mbtiles() -> list[dict[str, Any]]:
                 "size": path.stat().st_size if path.exists() else 0,
                 "tile_count": tile_count,
                 "description": meta.get("description") or "",
-                "attribution": meta.get("attribution") or "",
+                "attribution": _compact_credit(meta.get("attribution") or ""),
                 "source_url": meta.get("source_url") or "",
                 "source_layer_name": meta.get("source_layer_name") or "",
                 "source_min_zoom": meta.get("source_min_zoom") or meta.get("minzoom") or "",
@@ -2200,14 +2221,14 @@ def api_tile_layers():
             "id": "esri_streets",
             "name": "Esri Streets",
             "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
-            "attribution": 'Esri, HERE, Garmin, USGS, Intermap, INCREMENT P, NRCan, Esri Japan, METI, Esri China (Hong Kong), Esri Korea, Esri (Thailand), NGCC, (c) OpenStreetMap contributors, and the GIS User Community',
+            "attribution": ESRI_STREETS_SHORT,
             "maxzoom": 19,
         },
         {
             "id": "esri_topo",
             "name": "Esri Topo",
             "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
-            "attribution": 'Esri, HERE, Garmin, Intermap, increment P Corp., GEBCO, USGS, FAO, NPS, NRCAN, GeoBase, IGN, Kadaster NL, Ordnance Survey, Esri Japan, METI, Esri China (Hong Kong), (c) OpenStreetMap contributors, and the GIS User Community',
+            "attribution": ESRI_TOPO_SHORT,
             "maxzoom": 18,
         },
         {
@@ -2229,7 +2250,7 @@ def api_tile_layers():
             "id": "esri_hillshade",
             "name": "Esri Hillshade",
             "url": "https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}",
-            "attribution": 'Esri, Vantor, Airbus DS, USGS, NGA, NASA, CGIAR, N Robinson, NCEAS, NLS, OS, NMA, Geodatastyrelsen, Rijkswaterstaat, GSA, Geoland, FEMA, Intermap, and the GIS user community',
+            "attribution": ESRI_HILLSHADE_SHORT,
             "maxzoom": 16,
         },
         {
