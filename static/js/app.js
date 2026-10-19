@@ -3346,6 +3346,7 @@ async function loadLayers() {
       opt.textContent = `Local: ${layer.name}`;
       opt.dataset.minzoom = layer.minzoom;
       opt.dataset.maxzoom = layer.maxzoom;
+      opt.dataset.attr = layer.attribution || "";
       select.appendChild(opt);
       addPanelBtn(opt.value, layer.name);
     }
@@ -3478,7 +3479,7 @@ function createTileLayer(value, magnifier = false) {
       minZoom: minNative,
       maxNativeZoom: maxNative,
       maxZoom: 21,
-      attribution: "Local MBTiles",
+      attribution: opt?.dataset.attr || "Local tiles",
       detectRetina: !magnifier,
       errorTileUrl: TRANSPARENT_TILE_URL,
     });
@@ -4868,6 +4869,8 @@ function initMap() {
   const saved = JSON.parse(localStorage.getItem("mapAppView") || "null");
   state.map = L.map("map", { zoomSnap: 0.5, zoomDelta: 0.5 })
     .setView(saved ? [saved.lat, saved.lon] : [46.05, 14.5], saved ? saved.zoom : 9);
+  // Provider credits only; the Leaflet flag/wordmark is courtesy, not a licence term.
+  state.map.attributionControl.setPrefix(false);
   state.map.on("moveend", () => {
     const c = state.map.getCenter();
     safeSetItem("mapAppView", JSON.stringify({ lat: c.lat, lon: c.lng, zoom: state.map.getZoom() }));
