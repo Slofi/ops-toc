@@ -5128,12 +5128,12 @@ async function loadTilesets() {
           <code class="tileset-url">${esc(l.map_app_tile_url || `/tiles/${l.id}/{z}/{x}/{y}.png`)}</code>
         </div>
         <div class="tileset-actions">
-          <button class="btn small" data-action="use" data-id="${esc(l.id)}">Use</button>
-          <button class="btn small" data-action="rename" data-id="${esc(l.id)}" data-name="${esc(l.name)}">Rename</button>
-          <button class="btn small" data-action="extend" data-id="${esc(l.id)}" data-name="${esc(l.name)}" data-minzoom="${l.minzoom}" data-maxzoom="${l.maxzoom}">Edit Zoom</button>
-          <button class="btn small" data-action="repair" data-id="${esc(l.id)}" data-name="${esc(l.name)}">Repair</button>
-          <button class="btn small" data-action="refresh" data-id="${esc(l.id)}" data-name="${esc(l.name)}">Refresh</button>
-          <button class="btn small danger" data-action="delete" data-id="${esc(l.id)}" data-name="${esc(l.name)}">Delete</button>
+          <button type="button" class="btn small" data-action="use" data-id="${esc(l.id)}">Use</button>
+          <button type="button" class="btn small" data-action="rename" data-id="${esc(l.id)}" data-name="${esc(l.name)}">Rename</button>
+          <button type="button" class="btn small" data-action="extend" data-id="${esc(l.id)}" data-name="${esc(l.name)}" data-minzoom="${l.minzoom}" data-maxzoom="${l.maxzoom}">Edit Zoom</button>
+          <button type="button" class="btn small" data-action="repair" data-id="${esc(l.id)}" data-name="${esc(l.name)}">Repair</button>
+          <button type="button" class="btn small" data-action="refresh" data-id="${esc(l.id)}" data-name="${esc(l.name)}">Refresh</button>
+          <button type="button" class="btn small danger" data-action="delete" data-id="${esc(l.id)}" data-name="${esc(l.name)}">Delete</button>
         </div>
       </div>`;
     }).join("");
@@ -5373,9 +5373,9 @@ async function loadDownloadQueue() {
           <div class="queue-progress"><span style="width:${pct}%"></span></div>
         </div>
         <div class="tileset-actions">
-          <button class="btn small" data-job-action="pause" data-id="${esc(j.id)}" ${["running", "queued"].includes(j.status) ? "" : "disabled"}>Pause</button>
-          <button class="btn small" data-job-action="resume" data-id="${esc(j.id)}" ${["paused", "error"].includes(j.status) ? "" : "disabled"}>Resume</button>
-          <button class="btn small danger" data-job-action="cancel" data-id="${esc(j.id)}">Cancel</button>
+          <button type="button" class="btn small" data-job-action="pause" data-id="${esc(j.id)}" ${["running", "queued"].includes(j.status) ? "" : "disabled"}>Pause</button>
+          <button type="button" class="btn small" data-job-action="resume" data-id="${esc(j.id)}" ${["paused", "error"].includes(j.status) ? "" : "disabled"}>Resume</button>
+          <button type="button" class="btn small danger" data-job-action="cancel" data-id="${esc(j.id)}">Cancel</button>
         </div>
       </div>`;
     }).join("");
