@@ -4208,6 +4208,7 @@ function _overlayMarkerMap(source) {
 function _clearOverlaySource(source) {
   state.overlayGroups.get(source)?.clearLayers();
   state.overlayMarkers.get(source)?.clear();
+  if (source === "adsb") _adsbTraceClear(); // trails live in their own group, not the marker group
   // Reset the poll throttle so a re-enable fetches immediately — otherwise
   // toggling a source off then on inside its min-age window (15s for OM) left
   // the just-cleared layer empty until the next natural poll. Sonde data
@@ -4243,6 +4244,13 @@ function renderOverlayControls() {
         <label class="overlay-sub"><span>MeshCore traces</span><span class="overlay-toggle"><input type="checkbox" data-om-trace ${_mcTracesOn ? "checked" : ""} ${state.omNets.mc ? "" : "disabled"}><span></span></span></label>
       </div>`;
     }
+    // When ADS-B is on, offer its aircraft trails — same sub-row style as the
+    // Meshtastic / MeshCore toggles under OM.
+    if (source === "adsb" && checked) {
+      row += `<div class="overlay-subrow">
+        <label class="overlay-sub"><span>Aircraft traces</span><span class="overlay-toggle"><input type="checkbox" data-adsb-trace ${_adsbTracesOn ? "checked" : ""}><span></span></span></label>
+      </div>`;
+    }
     return row;
   }).join("");
   box.querySelectorAll("[data-overlay-source]").forEach((input) => {
@@ -4253,6 +4261,9 @@ function renderOverlayControls() {
   });
   box.querySelectorAll("[data-om-trace]").forEach((input) => {
     input.onchange = () => setMcTraces(input.checked);
+  });
+  box.querySelectorAll("[data-adsb-trace]").forEach((input) => {
+    input.onchange = () => setAdsbTraces(input.checked);
   });
 }
 
@@ -4490,7 +4501,73 @@ function _reflowOverlayCulling() {
   }
 }
 
+// ── ADS-B aircraft traces (ported from the ADS-B app's trails) ───────────────
+// The ADS-B app draws each aircraft's recent path in its altitude colour, weight
+// 1.8, opacity 0.65; a gone aircraft turns dark grey and dashed. Same style here,
+// so the two maps read the same way. The paths come from the feed's `track_points`,
+// which the slim payload only carries while this toggle is on (`&traces=1`).
+const ADSB_TRACE_STYLE = { weight: 1.8, opacity: 0.65 };
+let _adsbTracesOn = false;
+let _adsbTraceGroup = null;
+const _adsbTraceLines = new Map();
+try { _adsbTracesOn = localStorage.getItem("ops_toc_adsb_traces") === "1"; } catch (_) {}
+
+function _adsbTraceLayer() {
+  if (!state.map) return null;
+  if (!_adsbTraceGroup) _adsbTraceGroup = L.layerGroup();
+  if (!state.map.hasLayer(_adsbTraceGroup)) _adsbTraceGroup.addTo(state.map);
+  return _adsbTraceGroup;
+}
+
+function _adsbTraceClear() {
+  if (_adsbTraceGroup) _adsbTraceGroup.clearLayers();
+  _adsbTraceLines.clear();
+}
+
+// In-place per-aircraft lines: setLatLngs + setStyle rather than a full redraw,
+// so a 1 s refresh does not rebuild ~20 polylines of up to 300 points each.
+function _adsbTraceDraw(data) {
+  const group = _adsbTraceLayer();
+  if (!group) return 0;
+  const seen = new Set();
+  let drawn = 0;
+  for (const ac of data.active || []) {
+    if (!ac || !ac.hex) continue;
+    if (!Array.isArray(ac.track_points) || ac.track_points.length < 2) continue;
+    seen.add(ac.hex);
+    const latlngs = ac.track_points.map((p) => [p[0], p[1]]);
+    const style = {
+      color: ac.gone ? "#445" : _adsbColor(ac),
+      weight: ADSB_TRACE_STYLE.weight,
+      opacity: ac.gone ? 0.4 : ADSB_TRACE_STYLE.opacity,
+      dashArray: ac.gone ? "4 6" : null,
+    };
+    const line = _adsbTraceLines.get(ac.hex);
+    if (line) { line.setLatLngs(latlngs); line.setStyle(style); }
+    else _adsbTraceLines.set(ac.hex, L.polyline(latlngs, { ...style, interactive: false }).addTo(group));
+    drawn++;
+  }
+  for (const [hex, line] of _adsbTraceLines) {
+    if (seen.has(hex)) continue;
+    group.removeLayer(line);
+    _adsbTraceLines.delete(hex);
+  }
+  return drawn;
+}
+
+function setAdsbTraces(on) {
+  _adsbTracesOn = !!on;
+  try { safeSetItem("ops_toc_adsb_traces", _adsbTracesOn ? "1" : "0"); } catch (_) {}
+  _adsbTraceClear();
+  if (!_adsbTracesOn) { renderOverlayControls(); return; }
+  if (state.adsbLastData) _adsbTraceDraw(state.adsbLastData);
+  // The slim feed drops track points unless traces are on, so fetch once now.
+  loadOverlaySource("adsb");
+  renderOverlayControls();
+}
+
 function renderAdsbOverlay(data) {
+  state.adsbLastData = data;
   const items = [];
   for (const ac of data.active || []) {
     if (ac.lat == null || ac.lon == null) continue;
@@ -4504,6 +4581,7 @@ function renderAdsbOverlay(data) {
     items.push({ id, lat: ac.lat, lon: ac.lon, icon: _adsbIcon(ac), iconSig, popup, updatedTs: ac.last_seen, zIndexOffset: 300 });
   }
   _syncOverlayMarkers("adsb", items);
+  if (_adsbTracesOn) _adsbTraceDraw(data);
 }
 
 function renderAisOverlay(data) {
@@ -4728,9 +4806,11 @@ async function loadOverlaySource(source) {
   if (now - Number(state.overlayLastLoad.get(source) || 0) < minAge) return;
   state.overlayLastLoad.set(source, now);
   try {
-    // `slim=1` drops the history and per-aircraft track points the overlay never
-    // draws: 233 KB -> ~13 KB per poll, which is what makes a 1 s cadence cheap.
-    const data = await api(source === "adsb" ? "/api/overlays/adsb?slim=1" : `/api/overlays/${source}`);
+    // `slim=1` drops the history the overlay never draws: 233 KB -> ~13 KB per
+    // poll. Track points are dropped too unless the traces toggle needs them,
+    // which is why enabling traces re-fetches with `&traces=1`.
+    const adsbUrl = `/api/overlays/adsb?slim=1${_adsbTracesOn ? "&traces=1" : ""}`;
+    const data = await api(source === "adsb" ? adsbUrl : `/api/overlays/${source}`);
     if (source === "adsb") renderAdsbOverlay(data); else if (source === "ais") renderAisOverlay(data); else if (source === "om") renderOmOverlay(data);
   } catch (_) { if (state.overlayStatus[source]) state.overlayStatus[source].detail = "feed unavailable"; renderOverlayControls(); }
 }

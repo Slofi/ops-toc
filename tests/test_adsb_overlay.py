@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""ADS-B overlay contract (S463).
+"""ADS-B overlay contract (S463, extended for the traces toggle).
 
-Four behaviours that were each broken in the live app, so they get a guard:
+Five behaviours that were each broken in the live app, so they get a guard:
 
 1. `/api/overlays/adsb?slim=1` returns only what the map draws (no history,
    no per-aircraft track points) — the payload that makes a 1 s poll cheap.
@@ -78,6 +78,10 @@ def test_slim_payload() -> None:
         assert row["airline"] == "Test Air" and row["country"] == "Slovenia"
         assert "history" not in data
 
+        with_tracks = client.get("/api/overlays/adsb?slim=1&traces=1").get_json()
+        assert with_tracks["active"][0].get("track_points"), "traces=1 lost the track points"
+        assert "history" not in with_tracks
+
         full = client.get("/api/overlays/adsb")
         assert full.status_code == 200, full.status_code
         body = full.get_json()
@@ -117,6 +121,35 @@ def test_open_popup_age_stays_honest() -> None:
         "the open popup's Updated row is never refreshed; its age freezes")
     assert "_ageCell(ac.last_seen)" in _function_body("renderAdsbOverlay"), (
         "the ADS-B Updated row lost its refreshable timestamp")
+
+
+def test_traces_toggle_wired() -> None:
+    controls = _function_body("renderOverlayControls")
+    assert 'type="checkbox" data-adsb-trace' in controls, "no ADS-B traces toggle under the ADS-B row"
+    assert "setAdsbTraces(input.checked)" in controls, "the traces toggle is not wired"
+    setter = _function_body("setAdsbTraces")
+    assert '"ops_toc_adsb_traces"' in setter, "the traces toggle is not persisted"
+    assert "_adsbTraceClear()" in setter, "turning traces off does not clear the lines"
+
+
+def test_traces_style_matches_the_adsb_app() -> None:
+    # The ADS-B app: weight 1.8, opacity 0.65, gone -> #445 + dashed 4 6.
+    assert "ADSB_TRACE_STYLE = { weight: 1.8, opacity: 0.65 }" in JS
+    draw = _function_body("_adsbTraceDraw")
+    assert 'color: ac.gone ? "#445" : _adsbColor(ac)' in draw
+    assert 'dashArray: ac.gone ? "4 6" : null' in draw
+    assert "setLatLngs(latlngs)" in draw, "traces are rebuilt instead of updated in place"
+
+
+def test_traces_follow_the_adsb_overlay() -> None:
+    source_clear = _function_body("_clearOverlaySource")
+    assert 'if (source === "adsb") _adsbTraceClear()' in source_clear, (
+        "turning the ADS-B overlay off leaves its traces on the map")
+    assert 'const adsbUrl = `/api/overlays/adsb?slim=1${_adsbTracesOn ? "&traces=1" : ""}`;' in JS, (
+        "the feed never asks for track points when traces are on")
+    render = _function_body("renderAdsbOverlay")
+    assert "if (_adsbTracesOn) _adsbTraceDraw(data)" in render, (
+        "the traces layer is not refreshed with the aircraft feed")
 
 
 def test_poll_cadence_constant() -> None:

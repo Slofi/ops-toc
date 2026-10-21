@@ -3585,9 +3585,12 @@ def api_overlay_data(source: str):
             data = _overlay_request_json(f'{OVERLAY_URLS["adsb"]}/api/aircraft')
             # The map overlay draws only `active`; the 165 KB history and the
             # per-aircraft track points (55 KB) are dead weight at a 1 s poll.
-            # Opt-in so the documented full payload stays available.
+            # Opt-in so the documented full payload stays available. `traces=1`
+            # keeps the track points for the aircraft-traces layer (same style
+            # as the ADS-B app's trails) and still drops the history.
             if request.args.get("slim") == "1" and isinstance(data, dict):
-                active = [{k: v for k, v in ac.items() if k != "track_points"}
+                with_tracks = request.args.get("traces") == "1"
+                active = [{k: v for k, v in ac.items() if with_tracks or k != "track_points"}
                           for ac in data.get("active", []) if isinstance(ac, dict)]
                 return jsonify({"active": active, "timestamp": data.get("timestamp"), "slim": True})
             return jsonify(data)
