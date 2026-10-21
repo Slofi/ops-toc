@@ -3631,6 +3631,54 @@ def api_overlay_data(source: str):
         return jsonify({"error": str(exc), "source": source, "offline": True}), 503
 
 
+@app.route("/api/overlays/om/traces")
+def api_overlay_om_traces():
+    """MeshCore overheard packet paths, proxied from OM (read-only, passive data).
+
+    OM records the hop path of every MeshCore packet a radio overhears (a passive
+    capture — nothing is transmitted). This forwards those rows so the OPS-TOC map can
+    draw them with the same colours OM uses; the specialist app stays the owner.
+    """
+    try:
+        limit = max(1, min(int(request.args.get("limit", 200)), 500))
+    except (TypeError, ValueError):
+        limit = 200
+    try:
+        mc_status = _overlay_request_json(f'{OVERLAY_URLS["om"]}/api/mc/status')
+        radios = [radio for radio in mc_status.get("mc_nodes", []) if radio.get("id")]
+
+        def fetch_radio_traces(radio: dict[str, Any]) -> list[dict[str, Any]]:
+            radio_id = str(radio.get("id") or "")
+            try:
+                rows = _overlay_request_json(
+                    f'{OVERLAY_URLS["om"]}/api/mc/{urllib.parse.quote(radio_id, safe="")}'
+                    f'/passive_obs?obs_types=rx&limit={limit}'
+                )
+            except RuntimeError:
+                return []
+            if not isinstance(rows, list):
+                return []
+            items = []
+            for row in rows:
+                # A row with an empty path is OM's "heard direct" case (no relay hops);
+                # it is kept on purpose and drawn as a ring at our own radio.
+                if not isinstance(row, dict):
+                    continue
+                item = dict(row)
+                item["radio_id"] = row.get("radio_id") or radio_id
+                item["radio_name"] = radio.get("name") or radio_id
+                items.append(item)
+            return items
+
+        traces: list[dict[str, Any]] = []
+        with ThreadPoolExecutor(max_workers=max(1, min(4, len(radios)))) as pool:
+            for items in pool.map(fetch_radio_traces, radios):
+                traces.extend(items)
+        return jsonify({"traces": traces})
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc), "source": "om", "offline": True}), 503
+
+
 @app.route("/api/overlays/om/action", methods=["POST"])
 def api_overlay_om_action():
     data = request.get_json(silent=True) or {}
