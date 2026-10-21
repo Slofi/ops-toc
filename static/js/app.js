@@ -4242,7 +4242,9 @@ function renderOverlayControls() {
         <label class="overlay-sub"><span>MeshCore</span><span class="overlay-toggle"><input type="checkbox" data-om-net="mc" ${state.omNets.mc ? "checked" : ""}><span></span></span></label>
       </div>
       <div class="overlay-subrow">
-        <label class="overlay-sub"><span>MeshCore traces</span><span class="overlay-toggle"><input type="checkbox" data-om-trace ${_mcTracesOn ? "checked" : ""} ${state.omNets.mc ? "" : "disabled"}><span></span></span></label>
+        <div class="overlay-subnest">
+          <label class="overlay-sub"><span>MeshCore traces</span><span class="overlay-toggle"><input type="checkbox" data-om-trace ${_mcTracesOn ? "checked" : ""} ${state.omNets.mc ? "" : "disabled"}><span></span></span></label>
+        </div>
       </div>`;
     }
     // When ADS-B is on, offer its aircraft trails — same sub-row style as the
@@ -4289,11 +4291,13 @@ async function setOverlayEnabled(source, enabled) {
   if (enabled) {
     state.overlayEnabled.add(source);
     group.addTo(state.map);
+    if (source === "adsb") _adsbLegendShow();
     if (source === "sonde") { initSondeOverlayStream(); renderSondeOverlay(); } // redraw retained sondes at once on re-enable
     if (source === "om" && _mcTracesOn && state.omNets.mc) _mcTracesStart();
     else await loadOverlaySource(source);
   } else {
     state.overlayEnabled.delete(source);
+    if (source === "adsb") _adsbLegendHide();
     _clearOverlaySource(source);
     if (source === "om") _mcTracesStop();
     if (state.map.hasLayer(group)) state.map.removeLayer(group);
@@ -4349,15 +4353,63 @@ const _ADSB_ICON_DEFS = {
   generic: { path: "m 32,1 2,1 2,3 0,18 4,1 0,-4 3,0 0,5 17,6 0,3 -15,-2 -9,0 0,12 -2,6 7,3 0,2 -8,-1 -1,2 -1,-2 -8,1 0,-2 7,-3 -2,-6 0,-12 -9,0 -15,2 0,-3 17,-6 0,-5 3,0 0,4 4,-1 0,-18 2,-3 2,-1z", vb: "0 0 64 64", w: 28, h: 28, anchor: [14, 12] },
 };
 
+// One source for the marker colours and the map legend, so the two cannot drift.
+// Bands match the ADS-B app's ALT_COLORS exactly.
+const ADSB_ALT_BANDS = [
+  { max: 0,        color: "#ff5533", label: "Ground / below 0 ft" },
+  { max: 5000,     color: "#ff6633", label: "0 – 5,000 ft" },
+  { max: 18000,    color: "#f0c040", label: "5,000 – 18,000 ft" },
+  { max: 30000,    color: "#9fda50", label: "18,000 – 30,000 ft" },
+  { max: Infinity, color: "#3ddc84", label: "30,000 ft +" },
+];
+const ADSB_MILITARY_COLOR = "#38bdf8";
+const ADSB_EMERGENCY_COLOR = "#ff2222";
+const ADSB_NO_ALT_COLOR = "#7a8aaa";
+
 function _adsbColor(ac) {
-  if (ac.emergency) return "#ff2222";
-  if (ac.is_military) return "#38bdf8";
-  if (ac.altitude == null) return "#7a8aaa";
-  if (ac.altitude < 0) return "#ff5533";
-  if (ac.altitude < 5000) return "#ff6633";
-  if (ac.altitude < 18000) return "#f0c040";
-  if (ac.altitude < 30000) return "#9fda50";
-  return "#3ddc84";
+  if (ac.emergency) return ADSB_EMERGENCY_COLOR;
+  if (ac.is_military) return ADSB_MILITARY_COLOR;
+  if (ac.altitude == null) return ADSB_NO_ALT_COLOR;
+  for (const band of ADSB_ALT_BANDS) if (ac.altitude < band.max) return band.color;
+  return ADSB_ALT_BANDS[ADSB_ALT_BANDS.length - 1].color;
+}
+
+// Map legend, shown while the ADS-B overlay is on. Dismissable with the X for
+// this enable only: turning the overlay off and on again re-shows it.
+let _adsbLegendCtl = null;
+
+function _adsbLegendRows() {
+  return [
+    ...ADSB_ALT_BANDS.map((band) => [band.label, band.color]),
+    ["Military", ADSB_MILITARY_COLOR],
+    ["Emergency", ADSB_EMERGENCY_COLOR],
+    ["No altitude", ADSB_NO_ALT_COLOR],
+  ];
+}
+
+function _adsbLegendShow() {
+  if (!state.map) return;
+  if (!_adsbLegendCtl) {
+    _adsbLegendCtl = L.control({ position: "bottomleft" });
+    _adsbLegendCtl.onAdd = () => {
+      const div = L.DomUtil.create("div", "adsb-legend");
+      div.innerHTML = `<div class="adsb-legend-head"><span class="adsb-legend-title">ADS-B altitude</span>`
+        + `<button type="button" class="adsb-legend-close" title="Hide legend">✕</button></div>`
+        + _adsbLegendRows().map(([label, color]) =>
+            `<div class="adsb-legend-row"><span class="adsb-legend-dot" style="background:${color}"></span>${esc(label)}</div>`).join("");
+      L.DomEvent.disableClickPropagation(div);
+      L.DomEvent.disableScrollPropagation(div);
+      div.querySelector(".adsb-legend-close").onclick = () => { div.style.display = "none"; };
+      return div;
+    };
+  }
+  _adsbLegendCtl.addTo(state.map);
+  const node = _adsbLegendCtl.getContainer();
+  if (node) node.style.display = "";
+}
+
+function _adsbLegendHide() {
+  if (_adsbLegendCtl) _adsbLegendCtl.remove();
 }
 
 function _adsbIcon(ac) {
@@ -5050,6 +5102,7 @@ async function initLiveOverlays() {
   state.map.on("zoomend", _reflowOverlayCulling);
   await loadOverlayStatus();
   for (const source of [...state.overlayEnabled]) if (state.overlayStatus[source]?.online) _overlayGroup(source).addTo(state.map);
+  if (state.overlayEnabled.has("adsb")) _adsbLegendShow();
   await pollEnabledOverlays(); clearInterval(state.overlayPoll); state.overlayPoll = setInterval(pollEnabledOverlays, OVERLAY_TICK_MS); setInterval(loadOverlayStatus, 12000);
   // Sondes stream in; sweep TTL + refresh ages even when no new telemetry arrives.
   setInterval(() => { if (state.overlayEnabled.has("sonde")) renderSondeOverlay(); }, 30000);

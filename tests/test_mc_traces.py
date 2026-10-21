@@ -97,6 +97,22 @@ def test_cold_start_retries_without_contacts() -> None:
     assert guard < mark, "rows are marked seen before the contacts guard"
 
 
+def test_traces_toggle_nests_under_the_network_toggle() -> None:
+    # MeshCore traces belongs to the MeshCore toggle: one level deeper than the nets.
+    marker = '<div class="overlay-subnest">'
+    assert marker in JS, "the traces toggle is not wrapped as a nested sub-toggle"
+    seg = JS[JS.index(marker):]
+    seg = seg[:seg.index("</div>")]
+    assert "<span>MeshCore traces</span>" in seg, "the nest does not contain the traces label"
+    css = (ROOT / "static" / "css" / "app.css").read_text()
+    assert ".overlay-subnest {" in css, "the second-level style is missing"
+    nest = css[css.index(".overlay-subnest {"):]
+    nest = nest[:nest.index("}")]
+    assert "border-left: 1px solid var(--border);" in nest
+    assert "padding-left: 10px" in nest
+    assert "padding-right: 22px" in nest, "the nested switch must sit left of the network switches"
+
+
 def test_poll_stops_when_off() -> None:
     setter = _function_body("setMcTraces")
     assert "_mcTracesStop()" in setter

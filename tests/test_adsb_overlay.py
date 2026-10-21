@@ -158,6 +158,33 @@ def test_poll_cadence_constant() -> None:
     assert "OVERLAY_TICK_MS = 1000" in JS
 
 
+def test_legend_single_source_and_dismissable() -> None:
+    # The legend must come from the same data as the marker colours.
+    assert "const ADSB_ALT_BANDS = [" in JS
+    for band in ('"Ground / below 0 ft"', '"0 – 5,000 ft"', '"5,000 – 18,000 ft"',
+                 '"18,000 – 30,000 ft"', '"30,000 ft +"'):
+        assert band in JS, f"legend band label missing: {band}"
+    color = _function_body("_adsbColor")
+    assert "for (const band of ADSB_ALT_BANDS)" in color, "marker colours no longer come from the band table"
+    rows = _function_body("_adsbLegendRows")
+    assert "...ADSB_ALT_BANDS.map((band) => [band.label, band.color])" in rows, (
+        "the legend is hard-coded instead of using the band table")
+    assert "ADSB_MILITARY_COLOR" in rows and "ADSB_EMERGENCY_COLOR" in rows and "ADSB_NO_ALT_COLOR" in rows
+
+    show = _function_body("_adsbLegendShow")
+    assert 'div.querySelector(".adsb-legend-close").onclick = () => { div.style.display = "none"; }' in show, (
+        "the X does not dismiss the legend")
+    assert 'node.style.display = "";' in show, "re-enabling would not bring a dismissed legend back"
+    assert 'title="Hide legend"' in show
+
+    toggle = _function_body("setOverlayEnabled")
+    assert 'if (source === "adsb") _adsbLegendShow();' in toggle, "enabling ADS-B does not show the legend"
+    assert 'if (source === "adsb") _adsbLegendHide();' in toggle, "disabling ADS-B leaves the legend on the map"
+    init = _function_body("initLiveOverlays")
+    assert 'if (state.overlayEnabled.has("adsb")) _adsbLegendShow();' in init, (
+        "a page load with ADS-B already enabled shows no legend")
+
+
 def main() -> int:
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0
