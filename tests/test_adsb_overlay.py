@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ADS-B overlay contract (S463).
 
-Three behaviours that were each broken in the live app, so they get a guard:
+Four behaviours that were each broken in the live app, so they get a guard:
 
 1. `/api/overlays/adsb?slim=1` returns only what the map draws (no history,
    no per-aircraft track points) — the payload that makes a 1 s poll cheap.
@@ -93,15 +93,30 @@ def test_popup_has_airline_and_country() -> None:
     assert '["Country", ac.country]' in body, "ADS-B popup lost the Country row"
 
 
+def _find(body: str, needle: str) -> int:
+    try:
+        return body.index(needle)
+    except ValueError:
+        raise AssertionError(f"missing {needle!r}") from None
+
+
 def test_open_popup_marker_still_moves() -> None:
     body = _function_body("_syncOverlayMarkers")
-    move = body.index("marker.setLatLng([it.lat, it.lon])")
-    guard = body.index("if (marker === open) continue")
+    move = _find(body, "marker.setLatLng([it.lat, it.lon])")
+    guard = _find(body, "if (marker === open)")
     assert move < guard, (
         "the open-popup guard runs before setLatLng; a plane will freeze under its popup")
     # The guard must still exist: moving the marker is wanted, rebuilding the
     # popup DOM under the operator is not.
     assert "marker._popupHtml !== it.popup" in body, "open popups are no longer protected from rebuilds"
+
+
+def test_open_popup_age_stays_honest() -> None:
+    body = _function_body("_syncOverlayMarkers")
+    assert "_refreshPopupAge(marker, it.updatedTs)" in body, (
+        "the open popup's Updated row is never refreshed; its age freezes")
+    assert "_ageCell(ac.last_seen)" in _function_body("renderAdsbOverlay"), (
+        "the ADS-B Updated row lost its refreshable timestamp")
 
 
 def test_poll_cadence_constant() -> None:

@@ -4390,7 +4390,24 @@ function _fmtOverlayAge(ts) {
 }
 
 function _popupGrid(rows) {
-  return `<div class="live-popup-grid">${rows.filter(([, value]) => value !== null && value !== undefined && value !== "").map(([label, value]) => `<span>${esc(label)}</span><span>${esc(value)}</span>`).join("")}</div>`;
+  const cell = (value) => (value && typeof value === "object" && value.html != null) ? value.html : esc(value);
+  return `<div class="live-popup-grid">${rows.filter(([, value]) => value !== null && value !== undefined && value !== "").map(([label, value]) => `<span>${esc(label)}</span><span>${cell(value)}</span>`).join("")}</div>`;
+}
+
+// Age cell that can be refreshed in place while its popup is open. The timestamp
+// travels with the node, so no popup DOM rebuild is needed to keep it honest.
+function _ageCell(ts) {
+  const n = Number(ts) || 0;
+  return { html: `<span data-live-age="${n}">${_fmtOverlayAge(n)} ago</span>` };
+}
+
+function _refreshPopupAge(marker, ts) {
+  const node = marker.getPopup?.()?.getElement?.();
+  const cell = node?.querySelector?.("[data-live-age]");
+  if (!cell) return;
+  const fresh = Number(ts);
+  if (Number.isFinite(fresh) && fresh > 0) cell.dataset.liveAge = String(fresh);
+  cell.textContent = `${_fmtOverlayAge(Number(cell.dataset.liveAge))} ago`;
 }
 
 function _genericLivePopup(kind, name, rows, logData = null) {
@@ -4425,7 +4442,7 @@ function _syncOverlayMarkers(source, items) {
     if (marker) {
       marker.setLatLng([it.lat, it.lon]);
       _setOverlayIcon(marker, it);
-      if (marker === open) continue; // move under the popup, never rebuild its DOM
+      if (marker === open) { _refreshPopupAge(marker, it.updatedTs); continue; } // move under the popup; refresh only the age cell
       if (marker._popupHtml !== it.popup) { marker.setPopupContent(it.popup); marker._popupHtml = it.popup; }
       if (inView && !group.hasLayer(marker)) marker.addTo(group);
       else if (!inView && group.hasLayer(marker)) group.removeLayer(marker);
@@ -4481,10 +4498,10 @@ function renderAdsbOverlay(data) {
     if (!id) continue;
     const name = ac.flight || ac.registration || ac.hex || "Aircraft";
     const popup = _genericLivePopup("ADS-B aircraft", name, [
-      ["Registration", ac.registration], ["Type", ac.type_name || ac.type_code], ["Airline", ac.airline], ["Country", ac.country], ["Altitude", ac.altitude != null ? `${Math.round(ac.altitude)} ft` : null], ["Speed", ac.speed != null ? `${Math.round(ac.speed)} kt` : null], ["Heading", ac.track != null ? `${Math.round(ac.track)}°` : null], ["Distance", ac.distance != null ? `${ac.distance} km` : null], ["Squawk", ac.squawk], ["Updated", `${_fmtOverlayAge(ac.last_seen)} ago`],
+      ["Registration", ac.registration], ["Type", ac.type_name || ac.type_code], ["Airline", ac.airline], ["Country", ac.country], ["Altitude", ac.altitude != null ? `${Math.round(ac.altitude)} ft` : null], ["Speed", ac.speed != null ? `${Math.round(ac.speed)} kt` : null], ["Heading", ac.track != null ? `${Math.round(ac.track)}°` : null], ["Distance", ac.distance != null ? `${ac.distance} km` : null], ["Squawk", ac.squawk], ["Updated", _ageCell(ac.last_seen)],
     ], { kind: "ADS-B aircraft", name, lat: ac.lat, lon: ac.lon, details: `Altitude: ${ac.altitude ?? "—"} ft\nSpeed: ${ac.speed ?? "—"} kt\nAirline: ${ac.airline || "—"}\nCountry: ${ac.country || "—"}\nSquawk: ${ac.squawk || "—"}` });
     const iconSig = `${ac.icon_type || "generic"}|${ac.size || ""}|${Math.round(ac.track ?? 0)}|${_adsbColor(ac)}|${ac.emergency ? 1 : 0}`;
-    items.push({ id, lat: ac.lat, lon: ac.lon, icon: _adsbIcon(ac), iconSig, popup, zIndexOffset: 300 });
+    items.push({ id, lat: ac.lat, lon: ac.lon, icon: _adsbIcon(ac), iconSig, popup, updatedTs: ac.last_seen, zIndexOffset: 300 });
   }
   _syncOverlayMarkers("adsb", items);
 }
@@ -4497,9 +4514,9 @@ function renderAisOverlay(data) {
     if (!id) continue;
     const name = ship.name || ship.callsign || ship.mmsi || "Vessel";
     const popup = _genericLivePopup("AIS vessel", name, [
-      ["MMSI", ship.mmsi], ["Callsign", ship.callsign], ["Type", ship.ship_type_text || ship.station_type], ["Speed", ship.speed != null ? `${ship.speed} kn` : null], ["Course", ship.course != null ? `${ship.course}°` : null], ["Distance", ship.distance != null ? `${ship.distance} km` : null], ["Destination", ship.destination], ["Updated", `${_fmtOverlayAge(ship.last_seen)} ago`],
+      ["MMSI", ship.mmsi], ["Callsign", ship.callsign], ["Type", ship.ship_type_text || ship.station_type], ["Speed", ship.speed != null ? `${ship.speed} kn` : null], ["Course", ship.course != null ? `${ship.course}°` : null], ["Distance", ship.distance != null ? `${ship.distance} km` : null], ["Destination", ship.destination], ["Updated", _ageCell(ship.last_seen)],
     ], { kind: "AIS vessel", name, lat: ship.lat, lon: ship.lon, details: `MMSI: ${ship.mmsi || "—"}\nSpeed/course: ${ship.speed ?? "—"} kn / ${ship.course ?? "—"}°` });
-    items.push({ id, lat: ship.lat, lon: ship.lon, icon: _aisIcon(ship), popup, zIndexOffset: 250 });
+    items.push({ id, lat: ship.lat, lon: ship.lon, icon: _aisIcon(ship), popup, updatedTs: ship.last_seen, zIndexOffset: 250 });
   }
   _syncOverlayMarkers("ais", items);
 }
@@ -4782,8 +4799,8 @@ function renderSondeOverlay() {
   const items = [];
   for (const [sondeId, s] of state.sondeObjects.entries()) {
     if (s.lat == null || s.lon == null) continue;
-    items.push({ id: sondeId, lat: s.lat, lon: s.lon, icon: _sondeIcon(sondeId), zIndexOffset: 350,
-      popup: _genericLivePopup("Radiosonde", sondeId, [["Type", s.type], ["Frequency", s.freq != null ? `${s.freq} MHz` : null], ["Altitude", s.alt != null ? `${Math.round(s.alt)} m` : null], ["Climb", s.vel_v != null ? `${Number(s.vel_v).toFixed(1)} m/s` : null], ["Speed", s.vel_h != null ? `${(Number(s.vel_h) * 3.6).toFixed(1)} km/h` : null], ["Temperature", s.temp != null ? `${Number(s.temp).toFixed(1)} °C` : null], ["Updated", `${_fmtOverlayAge(s._updated_at)} ago`]], { kind: "Radiosonde", name: sondeId, lat: s.lat, lon: s.lon, details: `Type: ${s.type || "—"}\nAltitude: ${s.alt ?? "—"} m\nFrequency: ${s.freq ?? "—"} MHz` }) });
+    items.push({ id: sondeId, lat: s.lat, lon: s.lon, icon: _sondeIcon(sondeId), updatedTs: s._updated_at, zIndexOffset: 350,
+      popup: _genericLivePopup("Radiosonde", sondeId, [["Type", s.type], ["Frequency", s.freq != null ? `${s.freq} MHz` : null], ["Altitude", s.alt != null ? `${Math.round(s.alt)} m` : null], ["Climb", s.vel_v != null ? `${Number(s.vel_v).toFixed(1)} m/s` : null], ["Speed", s.vel_h != null ? `${(Number(s.vel_h) * 3.6).toFixed(1)} km/h` : null], ["Temperature", s.temp != null ? `${Number(s.temp).toFixed(1)} °C` : null], ["Updated", _ageCell(s._updated_at)]], { kind: "Radiosonde", name: sondeId, lat: s.lat, lon: s.lon, details: `Type: ${s.type || "—"}\nAltitude: ${s.alt ?? "—"} m\nFrequency: ${s.freq ?? "—"} MHz` }) });
   }
   _syncOverlayMarkers("sonde", items);
 }
