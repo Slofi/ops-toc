@@ -4171,6 +4171,12 @@ const OVERLAY_META = {
 const OVERLAY_CULL = true;
 const OVERLAY_CULL_PAD = 0.6;
 const SONDE_TTL_SEC = 1800; // drop radiosondes with no telemetry for 30 min (landed/dead)
+// Per-source refresh floor. ADS-B matches the aircraft feed itself (its own app
+// polls at 2 s, its backend updates at 1 s); 1 s here removes the systematic lag
+// behind the ADS-B app's display. AIS stays at 2 s, OM at 15 s. The scheduler
+// ticks once a second; `loadOverlaySource` enforces the floor.
+const OVERLAY_TICK_MS = 1000;
+const OVERLAY_POLL_MS = { adsb: 1000, ais: 2000, om: 15000 };
 
 function _overlaySaveEnabled() {
   safeSetItem("ops_toc_live_overlays", JSON.stringify([...state.overlayEnabled]));
@@ -4400,12 +4406,12 @@ function _overlayInView(lat, lon) {
 
 // In-place marker sync for one overlay source: update existing markers rather
 // than destroying/recreating the whole group each poll (was the ADS-B lag cause;
-// now shared by every source). `items`: [{id, lat, lon, icon, popup, popupOpts?,
-// zIndexOffset?}]. The marker whose popup is currently open is left completely
-// untouched (no restyle, no removal) so an operator reading it or typing a DM is
-// never interrupted — this replaces the old global "freeze all overlays while any
-// popup is open" workaround. Off-view markers stay in the registry but out of the
-// map layer (viewport culling); _reflowOverlayCulling re-adds them on pan/zoom.
+// now shared by every source). `items`: [{id, lat, lon, icon, iconSig?, popup,
+// popupOpts?, zIndexOffset?}]. A marker whose popup is open still MOVES and
+// rotates with the feed; only its popup content is left alone (an operator may
+// be reading it or typing a DM). That is the fix for "the plane freezes while
+// its popup is open" — the old code skipped the marker entirely. `iconSig` and
+// `_popupHtml` skip needless icon/popup DOM churn on every poll.
 function _syncOverlayMarkers(source, items) {
   const group = _overlayGroup(source);
   const markers = _overlayMarkerMap(source);
@@ -4417,15 +4423,17 @@ function _syncOverlayMarkers(source, items) {
     const inView = _overlayInView(it.lat, it.lon);
     let marker = markers.get(it.id);
     if (marker) {
-      if (marker === open) continue; // leave an open popup fully untouched
       marker.setLatLng([it.lat, it.lon]);
-      if (it.icon) marker.setIcon(it.icon);
-      marker.setPopupContent(it.popup);
+      _setOverlayIcon(marker, it);
+      if (marker === open) continue; // move under the popup, never rebuild its DOM
+      if (marker._popupHtml !== it.popup) { marker.setPopupContent(it.popup); marker._popupHtml = it.popup; }
       if (inView && !group.hasLayer(marker)) marker.addTo(group);
       else if (!inView && group.hasLayer(marker)) group.removeLayer(marker);
     } else {
       marker = L.marker([it.lat, it.lon], { icon: it.icon, zIndexOffset: it.zIndexOffset || 0 });
       marker.bindPopup(it.popup, it.popupOpts || {});
+      marker._iconSig = it.iconSig;
+      marker._popupHtml = it.popup;
       markers.set(it.id, marker);
       if (inView) marker.addTo(group);
     }
@@ -4435,6 +4443,16 @@ function _syncOverlayMarkers(source, items) {
     group.removeLayer(marker);
     markers.delete(id);
   }
+}
+
+// Rebuild a marker's icon only when the caller supplies a signature that changed.
+// Sources without `iconSig` keep the old set-every-poll behaviour.
+function _setOverlayIcon(marker, it) {
+  if (!it.icon) return;
+  if (it.iconSig == null) { marker.setIcon(it.icon); return; }
+  if (it.iconSig === marker._iconSig) return;
+  marker.setIcon(it.icon);
+  marker._iconSig = it.iconSig;
 }
 
 // Re-evaluate which registry markers are within the padded viewport (on pan/zoom).
@@ -4463,9 +4481,10 @@ function renderAdsbOverlay(data) {
     if (!id) continue;
     const name = ac.flight || ac.registration || ac.hex || "Aircraft";
     const popup = _genericLivePopup("ADS-B aircraft", name, [
-      ["Registration", ac.registration], ["Type", ac.type_name || ac.type_code], ["Altitude", ac.altitude != null ? `${Math.round(ac.altitude)} ft` : null], ["Speed", ac.speed != null ? `${Math.round(ac.speed)} kt` : null], ["Heading", ac.track != null ? `${Math.round(ac.track)}°` : null], ["Distance", ac.distance != null ? `${ac.distance} km` : null], ["Squawk", ac.squawk], ["Updated", `${_fmtOverlayAge(ac.last_seen)} ago`],
-    ], { kind: "ADS-B aircraft", name, lat: ac.lat, lon: ac.lon, details: `Altitude: ${ac.altitude ?? "—"} ft\nSpeed: ${ac.speed ?? "—"} kt\nSquawk: ${ac.squawk || "—"}` });
-    items.push({ id, lat: ac.lat, lon: ac.lon, icon: _adsbIcon(ac), popup, zIndexOffset: 300 });
+      ["Registration", ac.registration], ["Type", ac.type_name || ac.type_code], ["Airline", ac.airline], ["Country", ac.country], ["Altitude", ac.altitude != null ? `${Math.round(ac.altitude)} ft` : null], ["Speed", ac.speed != null ? `${Math.round(ac.speed)} kt` : null], ["Heading", ac.track != null ? `${Math.round(ac.track)}°` : null], ["Distance", ac.distance != null ? `${ac.distance} km` : null], ["Squawk", ac.squawk], ["Updated", `${_fmtOverlayAge(ac.last_seen)} ago`],
+    ], { kind: "ADS-B aircraft", name, lat: ac.lat, lon: ac.lon, details: `Altitude: ${ac.altitude ?? "—"} ft\nSpeed: ${ac.speed ?? "—"} kt\nAirline: ${ac.airline || "—"}\nCountry: ${ac.country || "—"}\nSquawk: ${ac.squawk || "—"}` });
+    const iconSig = `${ac.icon_type || "generic"}|${ac.size || ""}|${Math.round(ac.track ?? 0)}|${_adsbColor(ac)}|${ac.emergency ? 1 : 0}`;
+    items.push({ id, lat: ac.lat, lon: ac.lon, icon: _adsbIcon(ac), iconSig, popup, zIndexOffset: 300 });
   }
   _syncOverlayMarkers("adsb", items);
 }
@@ -4686,13 +4705,15 @@ function setOmNet(net, enabled) {
 
 async function loadOverlaySource(source) {
   if (!state.map || !state.overlayEnabled.has(source) || !state.overlayStatus[source]?.online || source === "sonde") return;
-  // No global freeze needed: _syncOverlayMarkers leaves the open-popup marker untouched.
+  // No global freeze needed: _syncOverlayMarkers moves an open-popup marker but leaves its DOM alone.
   const now = Date.now();
-  const minAge = source === "om" ? 15000 : 4000;
+  const minAge = OVERLAY_POLL_MS[source] || 4000;
   if (now - Number(state.overlayLastLoad.get(source) || 0) < minAge) return;
   state.overlayLastLoad.set(source, now);
   try {
-    const data = await api(`/api/overlays/${source}`);
+    // `slim=1` drops the history and per-aircraft track points the overlay never
+    // draws: 233 KB -> ~13 KB per poll, which is what makes a 1 s cadence cheap.
+    const data = await api(source === "adsb" ? "/api/overlays/adsb?slim=1" : `/api/overlays/${source}`);
     if (source === "adsb") renderAdsbOverlay(data); else if (source === "ais") renderAisOverlay(data); else if (source === "om") renderOmOverlay(data);
   } catch (_) { if (state.overlayStatus[source]) state.overlayStatus[source].detail = "feed unavailable"; renderOverlayControls(); }
 }
@@ -4793,7 +4814,7 @@ async function initLiveOverlays() {
   state.map.on("zoomend", _reflowOverlayCulling);
   await loadOverlayStatus();
   for (const source of [...state.overlayEnabled]) if (state.overlayStatus[source]?.online) _overlayGroup(source).addTo(state.map);
-  await pollEnabledOverlays(); clearInterval(state.overlayPoll); state.overlayPoll = setInterval(pollEnabledOverlays, 4000); setInterval(loadOverlayStatus, 12000);
+  await pollEnabledOverlays(); clearInterval(state.overlayPoll); state.overlayPoll = setInterval(pollEnabledOverlays, OVERLAY_TICK_MS); setInterval(loadOverlayStatus, 12000);
   // Sondes stream in; sweep TTL + refresh ages even when no new telemetry arrives.
   setInterval(() => { if (state.overlayEnabled.has("sonde")) renderSondeOverlay(); }, 30000);
 }

@@ -3582,7 +3582,15 @@ def api_overlay_status():
 def api_overlay_data(source: str):
     try:
         if source == "adsb":
-            return jsonify(_overlay_request_json(f'{OVERLAY_URLS["adsb"]}/api/aircraft'))
+            data = _overlay_request_json(f'{OVERLAY_URLS["adsb"]}/api/aircraft')
+            # The map overlay draws only `active`; the 165 KB history and the
+            # per-aircraft track points (55 KB) are dead weight at a 1 s poll.
+            # Opt-in so the documented full payload stays available.
+            if request.args.get("slim") == "1" and isinstance(data, dict):
+                active = [{k: v for k, v in ac.items() if k != "track_points"}
+                          for ac in data.get("active", []) if isinstance(ac, dict)]
+                return jsonify({"active": active, "timestamp": data.get("timestamp"), "slim": True})
+            return jsonify(data)
         if source == "ais":
             return jsonify(_overlay_request_json(f'{OVERLAY_URLS["ais"]}/api/vessels'))
         if source == "om":
