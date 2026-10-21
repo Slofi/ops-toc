@@ -4209,6 +4209,7 @@ function _clearOverlaySource(source) {
   state.overlayGroups.get(source)?.clearLayers();
   state.overlayMarkers.get(source)?.clear();
   if (source === "adsb") _adsbTraceClear(); // trails live in their own group, not the marker group
+  if (source === "om") _mcTracesStop();     // an offline OM must not keep a trace poll running
   // Reset the poll throttle so a re-enable fetches immediately — otherwise
   // toggling a source off then on inside its min-age window (15s for OM) left
   // the just-cleared layer empty until the next natural poll. Sonde data
@@ -4294,7 +4295,7 @@ async function setOverlayEnabled(source, enabled) {
   } else {
     state.overlayEnabled.delete(source);
     _clearOverlaySource(source);
-    if (source === "om") _mcTraceClear();
+    if (source === "om") _mcTracesStop();
     if (state.map.hasLayer(group)) state.map.removeLayer(group);
   }
   _overlaySaveEnabled();
@@ -4615,9 +4616,12 @@ function _omPopup(node, network) {
     <div class="live-action-status" id="live-status-${key}"></div></div>`;
 }
 
-// ── MeshCore traces (overheard packet paths, ported from OM) ─────────────────
-// OM records the hop path of every MeshCore packet a radio overhears. This draws those
-// paths with OM's own colours so the two apps read the same way. Passive data: nothing
+// ── MeshCore traces (overheard packet paths, animated like OM) ───────────────
+// OM records the hop path of every MeshCore packet a radio overhears and plays
+// each newly-heard packet as a moving dot with a fading tail, hop to hop, at
+// 420 ms per hop. A direct arrival (0 hops) pulses as an expanding ring at our
+// radio. This is a port of OM Lite's animated "Traces (MC)" layer — same pacing,
+// colours and tooltips — reading OPS-TOC's read-only proxy. Passive data: nothing
 // here transmits, and OM stays the radio owner.
 const MC_TRACE_COLORS = {
   TEXT_MSG: "#8b5cf6", GRP_TXT: "#a855f7", ADVERT: "#3b82f6", ACK: "#22c55e",
@@ -4625,11 +4629,23 @@ const MC_TRACE_COLORS = {
   PATH: "#14b8a6", GRP_DATA: "#a855f7", MULTIPART: "#64748b", CONTROL: "#64748b",
   UNK: "#94a3b8",
 };
-const MC_TRACE_REFRESH_MS = 5000;
+const MC_TRACE_FETCH_LIMIT = 30;   // recent packets per poll
+const MC_TRACE_REFRESH_MS = 6000;  // OM's passive-capture flush cadence
+const MC_TRACE_HOP_MS = 420;       // travel time per hop (same as OM)
+const MC_TRACE_FADE_MS = 900;      // tail fade once the packet arrives
+const MC_TRACE_TAIL_LEN = 0.35;    // tail length as a fraction of the whole path
+const MC_TRACE_DIRECT_MS = 1400;   // expanding-ring duration for a direct arrival
+const MC_TRACE_DIRECT_R = 26;      // ring growth in pixels
+const MC_TRACE_MAX_ANIM = 40;      // concurrent packets in flight
+const MC_TRACE_SEED_CNT = 8;       // recent packets replayed on enable (staggered)
+const MC_TRACE_SEED_MS = 300;      // stagger between replayed packets
+
 let _mcTracesOn = false;
 let _mcTraceGroup = null;
 let _mcTraceTimer = null;
-let _mcTraceStamp = null;
+let _mcTraceSeen = new Set();
+let _mcTraceAnims = [];
+let _mcTraceRaf = null;
 try { _mcTracesOn = localStorage.getItem("ops_toc_mc_traces") === "1"; } catch (_) {}
 
 function _mcTraceColor(type) { return MC_TRACE_COLORS[type] || "#94a3b8"; }
@@ -4642,28 +4658,36 @@ function _mcTraceLayer() {
 }
 
 function _mcTraceClear() {
+  if (_mcTraceRaf !== null) { cancelAnimationFrame(_mcTraceRaf); _mcTraceRaf = null; }
+  _mcTraceAnims.forEach(_mcTraceRemoveAnim);
+  _mcTraceAnims = [];
+  _mcTraceSeen = new Set();
   if (_mcTraceGroup) _mcTraceGroup.clearLayers();
-  _mcTraceStamp = null;
+}
+
+function _mcTracesStop() {
+  if (_mcTraceTimer) { clearInterval(_mcTraceTimer); _mcTraceTimer = null; }
+  _mcTraceClear();
 }
 
 function _mcTracesStart() {
   if (_mcTraceTimer) return;          // already polling
-  _mcTracesRefresh();
-  _mcTraceTimer = setInterval(_mcTracesRefresh, MC_TRACE_REFRESH_MS);
+  _mcTraceRefresh(true);
+  _mcTraceTimer = setInterval(() => _mcTraceRefresh(false), MC_TRACE_REFRESH_MS);
 }
 
 function setMcTraces(on) {
   _mcTracesOn = !!on;
   try { safeSetItem("ops_toc_mc_traces", _mcTracesOn ? "1" : "0"); } catch (_) {}
-  if (_mcTraceTimer) { clearInterval(_mcTraceTimer); _mcTraceTimer = null; }
-  if (!_mcTracesOn) { _mcTraceClear(); renderOverlayControls(); return; }
-  _mcTraceClear();
-  _mcTracesStart();
+  _mcTracesStop();
+  if (_mcTracesOn) _mcTracesStart();
   renderOverlayControls();
 }
 
-// Split OM's stored hex path into per-hop hashes. path_hash_size is 1, 2 or 3 bytes and
-// all three occur in real traffic, so it must never be assumed to be 1.
+const _mcTraceKey = (r) => `${r.ts}|${r.path}|${r.payload_type}|${r.rssi}`;
+
+// Split OM's stored hex path into per-hop hashes. path_hash_size is 1, 2 or 3 bytes
+// and all three occur in real traffic, so it must never be assumed to be 1.
 function _mcTraceHops(row) {
   const hex = String(row.path || "").replace(/[^0-9a-fA-F]/g, "").toLowerCase();
   if (!hex) return [];
@@ -4695,78 +4719,193 @@ function _mcTraceResolve(hash, contacts, prev) {
   return best ? { pt: [Number(best.latitude), Number(best.longitude)], name: nameOf(best) } : null;
 }
 
-function _mcTraceDraw(rows) {
-  const group = _mcTraceLayer();
-  if (!group) return null;
-  group.clearLayers();
-  const data = state.omLastData || {};
-  const contacts = data.mc_contacts || [];
-  const radios = data.mc_radios || [];
-  let drawn = 0;
-  let direct = 0;
-  for (const row of rows) {
-    const rid = String(row.radio_id || "");
-    const radio = radios.find((r) => String(r.id) === rid && r.status === "connected")
-      || radios.find((r) => String(r.id) === rid);
-    const radioPt = (radio && radio.lat != null && radio.lon != null)
-      ? [Number(radio.lat), Number(radio.lon)] : null;
-    const radiusName = (radio && (radio.name || radio.node_name)) || rid || "radio";
-    const pts = [];
-    const names = [];
-    let prev = radioPt;
-    for (const hash of _mcTraceHops(row)) {
-      const hit = _mcTraceResolve(hash, contacts, prev);
-      if (!hit) continue;               // unresolvable hop: skip, never guess
-      pts.push(hit.pt);
-      names.push(hit.name);
-      prev = hit.pt;
-    }
-    // Our radio is the receiver, so it terminates the path (OM draws it the same way).
-    if (pts.length && radioPt) {
-      pts.push(radioPt);
-      names.push(radiusName);
-    }
-    const color = _mcTraceColor(row.payload_type);
-    const age = row.ts ? _fmtOverlayAge(row.ts) : "";
-    const label = `${esc(row.payload_type || "PACKET")}${age ? " · " + esc(age) : ""}`;
-    if (pts.length >= 2) {
-      group.addLayer(L.polyline(pts, {
-        color, weight: 3, opacity: 0.9, lineCap: "round", lineJoin: "round", interactive: false,
-      }));
-      const start = L.circleMarker(pts[0], {
-        radius: 4, color: "#fff", weight: 1.5, fillColor: color, fillOpacity: 1,
-      });
-      start.bindTooltip(`${label}<br>${esc(names[0] || "")} → ${esc(names[names.length - 1] || "")}`, { sticky: true });
-      group.addLayer(start);
-      drawn++;
-    } else if (radioPt) {
-      // Heard with no resolvable relay hops: "heard here, direct". OM shows this as a
-      // pulse; here it is a ring at our own radio, which carries the same information.
-      const ring = L.circleMarker(radioPt, { radius: 7, color, weight: 2, opacity: 0.9, fill: false });
-      ring.bindTooltip(`${label}<br>direct — heard at ${esc(radiusName)}`, { sticky: true });
-      group.addLayer(ring);
-      direct++;
-    }
-  }
-  return { drawn, direct };
+// The radio that heard the packet anchors the trace: it terminates the path. A radio
+// without a position is allowed — hop-to-hop is still drawn (OM does the same).
+function _mcTraceRadioFor(row) {
+  const radios = state.omLastData?.mc_radios || [];
+  const rid = String(row.radio_id || "");
+  const radio = radios.find((r) => String(r.id) === rid && r.status === "connected")
+    || radios.find((r) => String(r.id) === rid);
+  if (!radio) return null;
+  const lat = radio.lat, lon = radio.lon;
+  if (lat == null || lon == null) return null;
+  if (Math.abs(lat) < 1e-6 && Math.abs(lon) < 1e-6) return null;  // 0,0 = "not set" in MC
+  return { pt: [Number(lat), Number(lon)], name: radio.name || radio.node_name || rid || "radio" };
 }
 
-async function _mcTracesRefresh() {
+function _mcTraceResolveRow(row, radio, contacts, cache) {
+  const radioPt = radio ? radio.pt : null;
+  const hashes = _mcTraceHops(row);
+  const points = [];
+  const hopMeta = [];
+  let prev = radioPt;
+  for (const hash of hashes) {
+    let hop = cache.get(hash);
+    if (hop === undefined) { hop = _mcTraceResolve(hash, contacts, prev); cache.set(hash, hop); }
+    if (!hop) continue;               // unresolvable hop: skip, never guess
+    points.push(hop.pt);
+    hopMeta.push({ hash, name: hop.name });
+    prev = hop.pt;
+  }
+  if (radioPt) points.push(radioPt);
+  if (points.length < 2) {
+    if (!radioPt) return null;
+    return { points: [radioPt], hopMeta, row, radio, direct: true,
+             resolvedHops: hopMeta.length, totalHops: hashes.length };
+  }
+  return { points, hopMeta, row, radio, direct: false,
+           resolvedHops: hopMeta.length, totalHops: hashes.length };
+}
+
+// ── Animation (ported from OM, same pacing) ─────────────────────────────────
+function _mcTraceGeometry(points) {
+  const segs = [];
+  let total = 0;
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i], b = points[i + 1];
+    const d = Math.hypot(b[0] - a[0], (b[1] - a[1]) * Math.cos(a[0] * Math.PI / 180)) || 1e-9;
+    segs.push({ a, b, d, start: total });
+    total += d;
+  }
+  return { segs, total };
+}
+
+function _mcTracePointAt(geom, frac) {
+  const target = Math.max(0, Math.min(1, frac)) * geom.total;
+  for (const s of geom.segs) {
+    if (target <= s.start + s.d) {
+      const t = s.d ? (target - s.start) / s.d : 0;
+      return [s.a[0] + (s.b[0] - s.a[0]) * t, s.a[1] + (s.b[1] - s.a[1]) * t];
+    }
+  }
+  const last = geom.segs[geom.segs.length - 1];
+  return last ? last.b : null;
+}
+
+// Points between two fractions — the visible tail behind the dot.
+function _mcTraceSlice(geom, fromFrac, toFrac) {
+  const out = [_mcTracePointAt(geom, fromFrac)];
+  const from = fromFrac * geom.total, to = toFrac * geom.total;
+  for (const s of geom.segs) {
+    const end = s.start + s.d;
+    if (end > from && end < to) out.push(s.b);
+  }
+  out.push(_mcTracePointAt(geom, toFrac));
+  return out.filter(Boolean);
+}
+
+function _mcTraceLaunch(res) {
+  const group = _mcTraceLayer();
+  if (!group || !_mcTracesOn || _mcTraceAnims.length >= MC_TRACE_MAX_ANIM) return;
+  const color = _mcTraceColor(res.row.payload_type);
+  if (res.direct) return _mcTraceLaunchDirect(res, color, group);
+  const geom = _mcTraceGeometry(res.points);
+  if (!geom.segs.length) return;
+  const tail = L.polyline([], { color, weight: 3, opacity: 0.9, lineCap: "round", lineJoin: "round", interactive: false });
+  const dot = L.circleMarker(res.points[0], { radius: 4, color: "#fff", weight: 1.5, fillColor: color, fillOpacity: 1, interactive: true });
+  group.addLayer(tail);
+  group.addLayer(dot);
+  const hops = res.hopMeta.map((h) => h.name).join(" → ");
+  const when = res.row.ts ? new Date(res.row.ts * 1000).toLocaleTimeString() : "";
+  dot.bindTooltip(
+    `<b>${esc(res.row.payload_type || "UNK")}</b> · ${esc(res.row.route_type || "")}<br>`
+    + `${res.totalHops} hop(s)`
+    + (res.resolvedHops < res.totalHops ? ` (${res.totalHops - res.resolvedHops} unresolved)` : "") + "<br>"
+    + (hops ? `${esc(hops)} → us<br>` : "")
+    + `${res.row.rssi != null ? res.row.rssi + " dBm" : ""} ${res.row.snr != null ? "/ " + res.row.snr + " SNR" : ""}<br>`
+    + `${esc(when)}`, { sticky: true });
+  _mcTraceAnims.push({
+    geom, tail, dot, color,
+    // Longer paths take longer, so hop count reads as distance travelled.
+    duration: Math.max(MC_TRACE_HOP_MS, geom.segs.length * MC_TRACE_HOP_MS),
+    startedAt: null, done: false,
+  });
+  _mcTraceStartLoop();
+}
+
+// Direct arrival: an expanding, fading ring on our own radio.
+function _mcTraceLaunchDirect(res, color, group) {
+  const ring = L.circleMarker(res.points[0], { radius: 3, color, weight: 2.5, opacity: 1, fill: false, interactive: true });
+  group.addLayer(ring);
+  const when = res.row.ts ? new Date(res.row.ts * 1000).toLocaleTimeString() : "";
+  ring.bindTooltip(
+    `<b>${esc(res.row.payload_type || "UNK")}</b> · ${esc(res.row.route_type || "")}<br>`
+    + `heard <b>direct</b>, no relay hops<br>`
+    + `${res.row.rssi != null ? res.row.rssi + " dBm" : ""} ${res.row.snr != null ? "/ " + res.row.snr + " SNR" : ""}<br>`
+    + `${esc(when)}`, { sticky: true });
+  _mcTraceAnims.push({ direct: true, ring, color, duration: MC_TRACE_DIRECT_MS, startedAt: null, done: false });
+  _mcTraceStartLoop();
+}
+
+function _mcTraceStep(ts) {
+  _mcTraceRaf = null;
+  for (const a of _mcTraceAnims) {
+    if (a.startedAt === null) a.startedAt = ts;
+    const elapsed = ts - a.startedAt;
+    if (a.direct) {
+      const t = elapsed / a.duration;
+      if (t >= 1) { a.done = true; continue; }
+      a.ring.setRadius(3 + t * MC_TRACE_DIRECT_R);
+      a.ring.setStyle({ opacity: 1 - t });
+      continue;
+    }
+    if (elapsed <= a.duration) {
+      const head = elapsed / a.duration;
+      const from = Math.max(0, head - MC_TRACE_TAIL_LEN);
+      const pt = _mcTracePointAt(a.geom, head);
+      if (pt) a.dot.setLatLng(pt);
+      a.tail.setLatLngs(_mcTraceSlice(a.geom, from, head));
+    } else {
+      // Arrived: hold the full path briefly, then fade both out together.
+      const fade = (elapsed - a.duration) / MC_TRACE_FADE_MS;
+      if (fade >= 1) { a.done = true; continue; }
+      const o = 1 - fade;
+      a.tail.setLatLngs(_mcTraceSlice(a.geom, Math.max(0, 1 - MC_TRACE_TAIL_LEN), 1));
+      a.tail.setStyle({ opacity: 0.9 * o });
+      a.dot.setStyle({ fillOpacity: o, opacity: o });
+    }
+  }
+  const finished = _mcTraceAnims.filter((a) => a.done);
+  finished.forEach(_mcTraceRemoveAnim);
+  if (finished.length) _mcTraceAnims = _mcTraceAnims.filter((a) => !a.done);
+  if (_mcTraceAnims.length) _mcTraceStartLoop();
+}
+
+function _mcTraceStartLoop() {
+  if (_mcTraceRaf === null && _mcTraceAnims.length) _mcTraceRaf = requestAnimationFrame(_mcTraceStep);
+}
+
+function _mcTraceRemoveAnim(a) {
+  if (_mcTraceGroup) {
+    [a.tail, a.dot, a.ring].forEach((l) => l && _mcTraceGroup.removeLayer(l));
+  }
+}
+
+async function _mcTraceRefresh(seed) {
   if (!_mcTracesOn || !state.map) return;
   if (!state.overlayEnabled.has("om") || !state.omNets.mc) { _mcTraceClear(); return; }
   try {
-    const data = await api("/api/overlays/om/traces?limit=200");
-    const rows = data.traces || [];
-    // At a few packets a minute most polls return exactly what is already drawn.
-    const stamp = `${rows.length}:${rows[0] && rows[0].ts}:${rows[0] && rows[0].path}`;
-    if (stamp === _mcTraceStamp) return;
-    const stats = _mcTraceDraw(rows);
-    // Only remember the stamp once something was actually drawn. The first tick can land
-    // before OM's contact/radio payload (state.omLastData) has arrived, which resolves no
-    // hop and draws nothing — without this the unchanged-rows check would then skip every
-    // later attempt and the layer would stay empty until the traffic itself changed.
-    if (stats && (stats.drawn || stats.direct)) _mcTraceStamp = stamp;
-  } catch (_) { /* OM offline: keep the last drawing; the overlay status shows it */ }
+    const data = await api(`/api/overlays/om/traces?limit=${MC_TRACE_FETCH_LIMIT}`);
+    const rows = Array.isArray(data.traces) ? data.traces : [];
+    const contacts = state.omLastData?.mc_contacts || [];
+    // OM's contact list can arrive a moment after the trace poll on a cold start.
+    // Resolving without it would mark every row as seen and miss that traffic
+    // forever, so wait for the contacts and retry on the next poll.
+    if (!contacts.length && rows.length) return;
+    const fresh = rows.filter((r) => !_mcTraceSeen.has(_mcTraceKey(r)));
+    rows.forEach((r) => _mcTraceSeen.add(_mcTraceKey(r)));
+    if (_mcTraceSeen.size > 3000) _mcTraceSeen = new Set([..._mcTraceSeen].slice(-1000));
+    // Rows arrive newest-first; play oldest-first so motion reads chronologically.
+    // On first enable (seed) replay the most recent few, staggered.
+    const play = (seed ? fresh.slice(0, MC_TRACE_SEED_CNT) : fresh).reverse();
+    const cache = new Map();
+    play.forEach((row, i) => {
+      const res = _mcTraceResolveRow(row, _mcTraceRadioFor(row), contacts, cache);
+      if (!res) return;
+      if (seed) setTimeout(() => { if (_mcTracesOn) _mcTraceLaunch(res); }, i * MC_TRACE_SEED_MS);
+      else _mcTraceLaunch(res);
+    });
+  } catch (_) { /* OM offline: keep what is on screen; the overlay status shows it */ }
 }
 
 function renderOmOverlay(data) {
@@ -4793,7 +4932,7 @@ function renderOmOverlay(data) {
 // Per-network sub-toggle (Meshtastic / MeshCore) under the OM overlay.
 function setOmNet(net, enabled) {
   state.omNets[net] = enabled;
-  if (net === "mc") { if (enabled && _mcTracesOn) _mcTracesStart(); else _mcTraceClear(); }
+  if (net === "mc") { if (enabled && _mcTracesOn) _mcTracesStart(); else _mcTracesStop(); }
   try { safeSetItem("ops_toc_om_nets", JSON.stringify(state.omNets)); } catch (_) {}
   if (state.omLastData) renderOmOverlay(state.omLastData); // instant re-filter from cache
 }
