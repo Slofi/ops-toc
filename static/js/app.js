@@ -4208,7 +4208,9 @@ function _overlayMarkerMap(source) {
 function _clearOverlaySource(source) {
   state.overlayGroups.get(source)?.clearLayers();
   state.overlayMarkers.get(source)?.clear();
-  if (source === "adsb") _adsbTraceClear(); // trails live in their own group, not the marker group
+  if (source === "adsb") _adsbTraceClear(); // trails live in their own groups, not the marker groups
+  if (source === "ais") _aisTraceClear();
+  if (source === "sonde") _sondeTraceClear();
   if (source === "om") _mcTracesStop();     // an offline OM must not keep a trace poll running
   // Reset the poll throttle so a re-enable fetches immediately — otherwise
   // toggling a source off then on inside its min-age window (15s for OM) left
@@ -4254,6 +4256,16 @@ function renderOverlayControls() {
         <label class="overlay-sub"><span>Aircraft traces</span><span class="overlay-toggle"><input type="checkbox" data-adsb-trace ${_adsbTracesOn ? "checked" : ""}><span></span></span></label>
       </div>`;
     }
+    if (source === "ais" && checked) {
+      row += `<div class="overlay-subrow">
+        <label class="overlay-sub"><span>AIS traces</span><span class="overlay-toggle"><input type="checkbox" data-ais-trace ${_aisTracesOn ? "checked" : ""}><span></span></span></label>
+      </div>`;
+    }
+    if (source === "sonde" && checked) {
+      row += `<div class="overlay-subrow">
+        <label class="overlay-sub"><span>Radiosonde traces</span><span class="overlay-toggle"><input type="checkbox" data-sonde-trace ${_sondeTracesOn ? "checked" : ""}><span></span></span></label>
+      </div>`;
+    }
     return row;
   }).join("");
   box.querySelectorAll("[data-overlay-source]").forEach((input) => {
@@ -4267,6 +4279,12 @@ function renderOverlayControls() {
   });
   box.querySelectorAll("[data-adsb-trace]").forEach((input) => {
     input.onchange = () => setAdsbTraces(input.checked);
+  });
+  box.querySelectorAll("[data-ais-trace]").forEach((input) => {
+    input.onchange = () => setAisTraces(input.checked);
+  });
+  box.querySelectorAll("[data-sonde-trace]").forEach((input) => {
+    input.onchange = () => setSondeTraces(input.checked);
   });
 }
 
@@ -4437,9 +4455,12 @@ function _aisIcon(v) {
 }
 
 const _SONDE_COLORS = ["#deaf4a", "#56b6c2", "#c678dd", "#98c379", "#e06c75", "#61afef", "#d19a66", "#e5c07b"];
-function _sondeIcon(id) {
+function _sondeColor(id) {
   let hash = 0; for (const c of String(id)) hash = (hash * 31 + c.charCodeAt(0)) & 0xffffffff;
-  const color = _SONDE_COLORS[Math.abs(hash) % _SONDE_COLORS.length];
+  return _SONDE_COLORS[Math.abs(hash) % _SONDE_COLORS.length];
+}
+function _sondeIcon(id) {
+  const color = _sondeColor(id);
   const html = `<svg width="26" height="34" viewBox="0 0 26 34"><circle cx="13" cy="13" r="10" fill="${color}" opacity="0.92" stroke="#0a0a12" stroke-width="2"/><line x1="13" y1="23" x2="13" y2="34" stroke="${color}" stroke-width="2" opacity="0.6"/><text x="13" y="17" text-anchor="middle" font-size="10" fill="#0a0a12" font-weight="700">↑</text></svg>`;
   return L.divIcon({ className: "sonde-marker-icon", html, iconSize: [26, 34], iconAnchor: [13, 34], popupAnchor: [0, -36] });
 }
@@ -4649,6 +4670,8 @@ function renderAisOverlay(data) {
     ], { kind: "AIS vessel", name, lat: ship.lat, lon: ship.lon, details: `MMSI: ${ship.mmsi || "—"}\nSpeed/course: ${ship.speed ?? "—"} kn / ${ship.course ?? "—"}°` });
     items.push({ id, lat: ship.lat, lon: ship.lon, icon: _aisIcon(ship), popup, updatedTs: ship.last_seen, zIndexOffset: 250 });
   }
+  state.aisLastData = data;
+  if (_aisTracesOn) _aisTraceDraw(data);
   _syncOverlayMarkers("ais", items);
 }
 
@@ -4666,6 +4689,69 @@ function _omPopup(node, network) {
     <button class="btn small" onclick="logOverlayObject('${payload}')">Log</button></div>
     ${!node.is_local && !node.archived_only ? `<div class="live-dm-box" id="live-dm-${key}" hidden><textarea id="live-dm-text-${key}" maxlength="200" placeholder="Direct message to ${esc(name)}"></textarea><button class="btn small primary" onclick="sendOmOverlayDm('${network}','${encodeURIComponent(node.radio_id || "")}','${encodeURIComponent(target)}','${key}')">Send</button></div>` : ""}
     <div class="live-action-status" id="live-status-${key}"></div></div>`;
+}
+
+// ── AIS vessel trails (ported from the AIS app) ─────────────────────────────
+// The AIS app already draws one trail per vessel from track_points (weight 1.8,
+// opacity 0.65; a gone vessel 0.35, dashed "4 6") in the same colour as its
+// marker. Same here, updated in place; `&traces=1` keeps the track points the
+// slim payload drops.
+const AIS_TRACE_STYLE = { weight: 1.8 };
+let _aisTracesOn = false;
+let _aisTraceGroup = null;
+const _aisTraceLines = new Map();
+try { _aisTracesOn = localStorage.getItem("ops_toc_ais_traces") === "1"; } catch (_) {}
+
+function _aisTraceLayer() {
+  if (!state.map) return null;
+  if (!_aisTraceGroup) _aisTraceGroup = L.layerGroup();
+  if (!state.map.hasLayer(_aisTraceGroup)) _aisTraceGroup.addTo(state.map);
+  return _aisTraceGroup;
+}
+
+function _aisTraceDraw(data) {
+  const group = _aisTraceLayer();
+  if (!group) return;
+  const seen = new Set();
+  const vessels = [...(data?.active || []), ...(data?.history || [])];
+  for (const v of vessels) {
+    if (!v || !Array.isArray(v.track_points)) continue;
+    const mmsi = String(v.mmsi || "");
+    if (!mmsi) continue;
+    const pts = v.track_points
+      .filter((pt) => Array.isArray(pt) && pt.length >= 2 && Number.isFinite(pt[0]) && Number.isFinite(pt[1]))
+      .map((pt) => [pt[0], pt[1]]);
+    if (pts.length < 2) continue;
+    seen.add(mmsi);
+    const style = {
+      ...AIS_TRACE_STYLE, color: _aisColor(v),
+      opacity: v.gone ? 0.35 : 0.65,
+      dashArray: v.gone ? "4 6" : null,
+      interactive: false,
+    };
+    let line = _aisTraceLines.get(mmsi);
+    if (line) { line.setLatLngs(pts); line.setStyle(style); }
+    else { line = L.polyline(pts, style); group.addLayer(line); _aisTraceLines.set(mmsi, line); }
+  }
+  for (const [mmsi, line] of _aisTraceLines) {
+    if (!seen.has(mmsi)) { group.removeLayer(line); _aisTraceLines.delete(mmsi); }
+  }
+}
+
+function _aisTraceClear() {
+  if (_aisTraceGroup) _aisTraceGroup.clearLayers();
+  _aisTraceLines.clear();
+}
+
+function setAisTraces(on) {
+  _aisTracesOn = !!on;
+  try { safeSetItem("ops_toc_ais_traces", _aisTracesOn ? "1" : "0"); } catch (_) {}
+  _aisTraceClear();
+  if (!_aisTracesOn) { renderOverlayControls(); return; }
+  if (state.aisLastData) _aisTraceDraw(state.aisLastData);
+  // The slim feed drops the track points unless traces are on, so fetch once now.
+  loadOverlaySource("ais");
+  renderOverlayControls();
 }
 
 // ── MeshCore traces (overheard packet paths, animated like OM) ───────────────
@@ -5001,7 +5087,8 @@ async function loadOverlaySource(source) {
     // poll. Track points are dropped too unless the traces toggle needs them,
     // which is why enabling traces re-fetches with `&traces=1`.
     const adsbUrl = `/api/overlays/adsb?slim=1${_adsbTracesOn ? "&traces=1" : ""}`;
-    const data = await api(source === "adsb" ? adsbUrl : `/api/overlays/${source}`);
+    const aisUrl = `/api/overlays/ais?slim=1${_aisTracesOn ? "&traces=1" : ""}`;
+    const data = await api(source === "adsb" ? adsbUrl : source === "ais" ? aisUrl : `/api/overlays/${source}`);
     if (source === "adsb") renderAdsbOverlay(data); else if (source === "ais") renderAisOverlay(data); else if (source === "om") renderOmOverlay(data);
   } catch (_) { if (state.overlayStatus[source]) state.overlayStatus[source].detail = "feed unavailable"; renderOverlayControls(); }
 }
@@ -5050,8 +5137,65 @@ function logOverlayObject(encoded) {
 
 function _renderSondeObject(data) {
   const id = data.id || data.callsign; if (!id || data.lat == null || data.lon == null) return;
-  state.sondeObjects.set(id, { ...data, _updated_at: Date.now() / 1000 });
+  const prev = state.sondeObjects.get(id) || {};
+  const path = Array.isArray(prev.path) ? prev.path.slice() : [];
+  const last = path[path.length - 1];
+  // A sonde reports ~1 Hz for hours; keep a flight path, not one point per frame.
+  // Append when it has moved ~50 m or climbed 100 m, and cap the length.
+  if (!last || Math.abs(data.lat - last[0]) + Math.abs(data.lon - last[1]) > 0.0005
+      || (data.alt != null && last[2] != null && Math.abs(Number(data.alt) - Number(last[2])) > 100)) {
+    path.push([data.lat, data.lon, data.alt ?? null]);
+    if (path.length > SONDE_TRACE_MAX) path.shift();
+  }
+  state.sondeObjects.set(id, { ...data, path, _updated_at: Date.now() / 1000 });
   renderSondeOverlay();
+}
+
+// ── Radiosonde traces ───────────────────────────────────────────────────────
+// The sonde overlay used to draw only the current position; the accumulated
+// flight path is the useful part of a sounding, so keep it per sonde.
+const SONDE_TRACE_MAX = 1500;
+let _sondeTracesOn = false;
+let _sondeTraceGroup = null;
+const _sondeTraceLines = new Map();
+try { _sondeTracesOn = localStorage.getItem("ops_toc_sonde_traces") === "1"; } catch (_) {}
+
+function _sondeTraceLayer() {
+  if (!state.map) return null;
+  if (!_sondeTraceGroup) _sondeTraceGroup = L.layerGroup();
+  if (!state.map.hasLayer(_sondeTraceGroup)) _sondeTraceGroup.addTo(state.map);
+  return _sondeTraceGroup;
+}
+
+function _sondeTraceDraw() {
+  const group = _sondeTraceLayer();
+  if (!group) return;
+  const seen = new Set();
+  for (const [id, s] of state.sondeObjects.entries()) {
+    seen.add(id);
+    const pts = (s.path || []).map((pt) => [pt[0], pt[1]]);
+    if (pts.length < 2) continue;
+    const color = _sondeColor(id);
+    let line = _sondeTraceLines.get(id);
+    if (line) { line.setLatLngs(pts); line.setStyle({ color }); }
+    else { line = L.polyline(pts, { color, weight: 2, opacity: 0.75, interactive: false }); group.addLayer(line); _sondeTraceLines.set(id, line); }
+  }
+  for (const [id, line] of _sondeTraceLines) {
+    if (!seen.has(id)) { group.removeLayer(line); _sondeTraceLines.delete(id); }
+  }
+}
+
+function _sondeTraceClear() {
+  if (_sondeTraceGroup) _sondeTraceGroup.clearLayers();
+  _sondeTraceLines.clear();
+}
+
+function setSondeTraces(on) {
+  _sondeTracesOn = !!on;
+  try { safeSetItem("ops_toc_sonde_traces", _sondeTracesOn ? "1" : "0"); } catch (_) {}
+  _sondeTraceClear();
+  if (_sondeTracesOn) _sondeTraceDraw();
+  renderOverlayControls();
 }
 
 // Sondes arrive as an accumulating telemetry stream (unlike the poll-based feeds,
@@ -5073,6 +5217,7 @@ function renderSondeOverlay() {
     items.push({ id: sondeId, lat: s.lat, lon: s.lon, icon: _sondeIcon(sondeId), updatedTs: s._updated_at, zIndexOffset: 350,
       popup: _genericLivePopup("Radiosonde", sondeId, [["Type", s.type], ["Frequency", s.freq != null ? `${s.freq} MHz` : null], ["Altitude", s.alt != null ? `${Math.round(s.alt)} m` : null], ["Climb", s.vel_v != null ? `${Number(s.vel_v).toFixed(1)} m/s` : null], ["Speed", s.vel_h != null ? `${(Number(s.vel_h) * 3.6).toFixed(1)} km/h` : null], ["Temperature", s.temp != null ? `${Number(s.temp).toFixed(1)} °C` : null], ["Updated", _ageCell(s._updated_at)]], { kind: "Radiosonde", name: sondeId, lat: s.lat, lon: s.lon, details: `Type: ${s.type || "—"}\nAltitude: ${s.alt ?? "—"} m\nFrequency: ${s.freq ?? "—"} MHz` }) });
   }
+  if (_sondeTracesOn) _sondeTraceDraw();
   _syncOverlayMarkers("sonde", items);
 }
 

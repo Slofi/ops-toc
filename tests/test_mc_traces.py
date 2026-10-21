@@ -51,7 +51,9 @@ def test_no_static_path_drawing_left() -> None:
     assert "_mcTraceDraw" not in JS, "the old static trace draw is still present"
     refresh = _function_body("_mcTraceRefresh")
     assert "_mcTraceLaunch(" in refresh, "new rows are not launched as animations"
-    assert "L.polyline(pts" not in JS, "a static full-path polyline is still drawn"
+    # Scoped to the MC layer: AIS legitimately draws track polylines.
+    for name in ("_mcTraceLaunch", "_mcTraceRefresh", "_mcTraceStep"):
+        assert "L.polyline(pts" not in _function_body(name), "MC draws a static full-path polyline"
 
 
 def test_dot_and_tail_move() -> None:

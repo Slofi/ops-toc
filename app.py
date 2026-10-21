@@ -3595,7 +3595,25 @@ def api_overlay_data(source: str):
                 return jsonify({"active": active, "timestamp": data.get("timestamp"), "slim": True})
             return jsonify(data)
         if source == "ais":
-            return jsonify(_overlay_request_json(f'{OVERLAY_URLS["ais"]}/api/vessels'))
+            data = _overlay_request_json(f'{OVERLAY_URLS["ais"]}/api/vessels')
+            if request.args.get("slim") == "1" and isinstance(data, dict):
+                # The overlay draws markers plus, when asked, per-vessel trails.
+                # The full payload (history + track points) can be tens of KB per
+                # poll, so drop what this view does not use unless traces need it.
+                with_tracks = request.args.get("traces") == "1"
+
+                def strip_vessel(vessel: Any) -> Any:
+                    if not isinstance(vessel, dict):
+                        return vessel
+                    return {k: v for k, v in vessel.items() if with_tracks or k != "track_points"}
+
+                out = dict(data)
+                out["active"] = [strip_vessel(v) for v in data.get("active", [])]
+                if isinstance(data.get("history"), list):
+                    out["history"] = [strip_vessel(v) for v in data["history"]]
+                out["slim"] = True
+                return jsonify(out)
+            return jsonify(data)
         if source == "om":
             mt_nodes = _overlay_request_json(f'{OVERLAY_URLS["om"]}/api/nodes')
             mc_status = _overlay_request_json(f'{OVERLAY_URLS["om"]}/api/mc/status')
