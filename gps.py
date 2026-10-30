@@ -461,39 +461,54 @@ def _reader(port, stop_event, gen):
     with gps_lock:
         _gps_runtime.update({"running": True, "port_present": True, "error": ""})
 
+    def _handle(raw: bytes) -> None:
+        """Parse ONE complete line. Called only with a line that ended in \\n."""
+        text = raw.decode("ascii", errors="ignore").strip()
+        if not text:
+            return
+        if not _nmea_ok(text):
+            # Torn/garbled sentence: count it, never parse it. Keep the last few
+            # raw samples so a climbing counter can be read, not guessed.
+            with gps_lock:
+                _gps_runtime["bad_lines"] = int(_gps_runtime.get("bad_lines") or 0) + 1
+                samples = _gps_runtime.get("bad_samples")
+                if not isinstance(samples, list):
+                    samples = []
+                samples.append(text[:70])
+                del samples[:-5]
+                _gps_runtime["bad_samples"] = samples
+            return
+        if text.startswith(("$GPGGA", "$GNGGA")):
+            _parse_gga(text)
+        elif text.startswith(("$GPRMC", "$GNRMC")):
+            _parse_rmc(text)
+        elif text.startswith(("$GPVTG", "$GNVTG")):
+            _parse_vtg(text)
+        elif text.startswith(("$GPGSV", "$GNGSV")):
+            _parse_gsv(text)
+
+    # Own line buffering, NOT ser.readline(): readline() returns a PARTIAL line
+    # when its 1 s timeout fires mid-sentence, and that fragment used to enter
+    # the parsers as if it were a sentence (measured on CD 2026-10-30: ~1 per
+    # minute, which is exactly the rate the old code could invent a wild fix).
+    # Buffering means a line split across two USB reads is stitched back
+    # together; only a line that really ended is parsed. It also cuts the syscall
+    # rate from ~500 reads/s to a handful.
+    buf = b""
     while not stop_event.is_set() and gen == _reader_gen:
         try:
-            raw = ser.readline()
-            if not raw:
-                continue
-            text = raw.decode("ascii", errors="ignore").strip()
-            if not text:
-                continue
-            if not _nmea_ok(text):
-                # Torn/garbled sentence: count it, never parse it. Keep the last
-                # few raw samples so a climbing counter can be read, not guessed
-                # (a healthy u-blox sits near zero; anything else needs evidence).
-                with gps_lock:
-                    _gps_runtime["bad_lines"] = int(_gps_runtime.get("bad_lines") or 0) + 1
-                    samples = _gps_runtime.get("bad_samples")
-                    if not isinstance(samples, list):
-                        samples = []
-                    samples.append(text[:70])
-                    del samples[:-5]
-                    _gps_runtime["bad_samples"] = samples
-                continue
-            line = text
-            if line.startswith(("$GPGGA", "$GNGGA")):
-                _parse_gga(line)
-            elif line.startswith(("$GPRMC", "$GNRMC")):
-                _parse_rmc(line)
-            elif line.startswith(("$GPVTG", "$GNVTG")):
-                _parse_vtg(line)
-            elif line.startswith(("$GPGSV", "$GNGSV")):
-                _parse_gsv(line)
+            chunk = ser.read(ser.in_waiting or 1)
+            if chunk:
+                buf += chunk
+                while b"\n" in buf:
+                    raw, buf = buf.split(b"\n", 1)
+                    _handle(raw)
+                if len(buf) > 4096:      # unterminated garbage: never grow forever
+                    buf = b""
         except Exception as e:
             log.warning(f"GPS read: {e}")
             time.sleep(1)
+            buf = b""
 
     try:
         ser.close()

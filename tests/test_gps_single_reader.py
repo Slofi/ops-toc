@@ -36,6 +36,7 @@ class FakeSerial:
     """Stands in for pyserial. Records every open() so leaks are countable."""
 
     instances: list["FakeSerial"] = []
+    script: list[bytes] = []      # chunks this port will deliver, in order
     lock = threading.Lock()
 
     def __init__(self):
@@ -63,7 +64,28 @@ class FakeSerial:
         return len(_data)
 
     def readline(self):
+        """Mimic pyserial: one line per call, and a PARTIAL line when the chunk
+        has no terminator yet (that is what its 1 s timeout does)."""
+        if FakeSerial.script:
+            chunk = FakeSerial.script.pop(0)
+            if b"\n" in chunk:
+                head, _, tail = chunk.partition(b"\n")
+                if tail:
+                    FakeSerial.script.insert(0, tail)
+                return head + b"\n"
+            return chunk
         # Park like a real silent port would, so the reader stays in its loop.
+        time.sleep(0.02)
+        return b""
+
+    @property
+    def in_waiting(self) -> int:
+        return 0
+
+    def read(self, _size: int = 1) -> bytes:
+        """Deliver the scripted chunks in order, then stay silent like a real port."""
+        if FakeSerial.script:
+            return FakeSerial.script.pop(0)
         time.sleep(0.02)
         return b""
 
@@ -113,6 +135,32 @@ def test_checksum_accepts_published_sentences() -> None:
     ]
     for line in good:
         assert mod._nmea_ok(line), f"rejected a valid sentence: {line}"
+
+
+def test_line_split_across_usb_reads_is_stitched() -> None:
+    """A sentence split by the USB layer must be re-joined, not rejected.
+
+    readline() returns a PARTIAL line when its 1 s timeout fires mid-sentence;
+    measured on CD that happened ~1 per minute, and the old parsers took the
+    fragment as a sentence. The buffered reader must stitch the chunks instead.
+    """
+    mod = _load_gps()
+    FakeSerial.instances.clear()
+    line = b"$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47\r\n"
+    FakeSerial.script[:] = [line[:15], line[15:40], line[40:]]   # split mid-sentence
+    try:
+        mod.gps_start("/dev/ttyFAKE0")
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline and mod.gps_state["lat"] is None:
+            time.sleep(0.02)
+        assert mod.gps_state["lat"] is not None, "the stitched sentence never parsed"
+        assert abs(mod.gps_state["lat"] - 48.11730) < 1e-4, mod.gps_state["lat"]
+        assert abs(mod.gps_state["lon"] - 11.51667) < 1e-4, mod.gps_state["lon"]
+        assert mod.gps_state["sats"] == 8
+        assert int(mod._gps_runtime.get("bad_lines") or 0) == 0, mod._gps_runtime.get("bad_samples")
+    finally:
+        FakeSerial.script.clear()
+        _stop_all(mod)
 
 
 def test_checksum_rejects_torn_sentences() -> None:
