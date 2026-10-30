@@ -4392,8 +4392,9 @@ function _adsbColor(ac) {
   return ADSB_ALT_BANDS[ADSB_ALT_BANDS.length - 1].color;
 }
 
-// Map legend, shown while the ADS-B overlay is on. Dismissable with the X for
-// this enable only: turning the overlay off and on again re-shows it.
+// Map legend, shown only when the ADS-B overlay is switched ON by hand (S477:
+// a page load with the overlay already restored shows no legend). Dismissable
+// with the X for this enable only: turning the overlay off and on re-shows it.
 let _adsbLegendCtl = null;
 
 function _adsbLegendRows() {
@@ -5247,7 +5248,9 @@ async function initLiveOverlays() {
   state.map.on("zoomend", _reflowOverlayCulling);
   await loadOverlayStatus();
   for (const source of [...state.overlayEnabled]) if (state.overlayStatus[source]?.online) _overlayGroup(source).addTo(state.map);
-  if (state.overlayEnabled.has("adsb")) _adsbLegendShow();
+  // No legend on boot (Filip, S477): it belongs to a deliberate activation of the
+  // ADS-B overlay, not to a page load with the overlay already restored. Turning
+  // the overlay on by hand shows it again (setOverlayEnabled).
   await pollEnabledOverlays(); clearInterval(state.overlayPoll); state.overlayPoll = setInterval(pollEnabledOverlays, OVERLAY_TICK_MS); setInterval(loadOverlayStatus, 12000);
   // Sondes stream in; sweep TTL + refresh ages even when no new telemetry arrives.
   setInterval(() => { if (state.overlayEnabled.has("sonde")) renderSondeOverlay(); }, 30000);

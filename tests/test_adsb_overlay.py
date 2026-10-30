@@ -180,9 +180,12 @@ def test_legend_single_source_and_dismissable() -> None:
     toggle = _function_body("setOverlayEnabled")
     assert 'if (source === "adsb") _adsbLegendShow();' in toggle, "enabling ADS-B does not show the legend"
     assert 'if (source === "adsb") _adsbLegendHide();' in toggle, "disabling ADS-B leaves the legend on the map"
+    # S477 (Filip): the legend belongs to a DELIBERATE activation of the overlay.
+    # A page load with ADS-B already restored from localStorage must not show it;
+    # this assertion used to demand the opposite and was flipped with the change.
     init = _function_body("initLiveOverlays")
-    assert 'if (state.overlayEnabled.has("adsb")) _adsbLegendShow();' in init, (
-        "a page load with ADS-B already enabled shows no legend")
+    assert "_adsbLegendShow" not in init, (
+        "a page load draws the ADS-B legend even though the overlay was only restored, not activated")
 
 
 def main() -> int:
