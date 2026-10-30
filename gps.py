@@ -470,9 +470,17 @@ def _reader(port, stop_event, gen):
             if not text:
                 continue
             if not _nmea_ok(text):
-                # Torn/garbled sentence: count it, never parse it.
+                # Torn/garbled sentence: count it, never parse it. Keep the last
+                # few raw samples so a climbing counter can be read, not guessed
+                # (a healthy u-blox sits near zero; anything else needs evidence).
                 with gps_lock:
                     _gps_runtime["bad_lines"] = int(_gps_runtime.get("bad_lines") or 0) + 1
+                    samples = _gps_runtime.get("bad_samples")
+                    if not isinstance(samples, list):
+                        samples = []
+                    samples.append(text[:70])
+                    del samples[:-5]
+                    _gps_runtime["bad_samples"] = samples
                 continue
             line = text
             if line.startswith(("$GPGGA", "$GNGGA")):
