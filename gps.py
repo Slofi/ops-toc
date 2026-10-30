@@ -30,9 +30,12 @@ gps_state = {
     "speed": None,   # speed over ground, km/h, from RMC/VTG (Doppler) — None if unknown
 }
 gps_lock      = threading.Lock()
+_start_lock   = threading.Lock()   # serialises start/stop — watchdog vs HTTP settings
+_reader_gen   = 0                  # bumped on every start/stop; a stale reader must exit
 _stop_event   = threading.Event()
 _gps_thread   = None
-_gps_runtime  = {"port": "", "running": False, "port_present": False, "error": "", "source": ""}
+_gps_runtime  = {"port": "", "running": False, "port_present": False, "error": "", "source": "",
+                 "bad_lines": 0}
 _config_path: Path | None = None
 
 _PROXY_FAIL_LIMIT = 5   # consecutive failures before falling back to serial
@@ -281,6 +284,31 @@ def _nmea_coord(val, hemi):
         return None
 
 
+def _nmea_ok(line: str) -> bool:
+    """True only for a complete NMEA sentence with a matching checksum.
+
+    WHY (S477, 2026-10-30): the parsers below trusted field POSITIONS and
+    ignored the checksum, so a torn line — one split across two read() calls —
+    was parsed as if valid. A single missing comma shifts lat/lon/sats into
+    absurd values, which is exactly what surfaced as "the position jumps far
+    away for a few seconds and comes back". Rejecting anything that does not
+    checksum cleanly costs one XOR loop per line and removes the whole class.
+    """
+    if not line.startswith("$"):
+        return False
+    star = line.rfind("*")
+    if star < 1 or star + 3 != len(line):
+        return False
+    try:
+        want = int(line[star + 1:], 16)
+    except ValueError:
+        return False
+    chk = 0
+    for ch in line[1:star]:
+        chk ^= ord(ch)
+    return chk == want
+
+
 def _parse_gga(line):
     try:
         if "*" in line:
@@ -383,9 +411,20 @@ def _init_device(ser):
 
 # ── Direct serial reader ──────────────────────────────────────────────────────
 
-def _reader(port, stop_event):
+def _reader(port, stop_event, gen):
+    """Read NMEA from one port. `gen` is the start generation this reader owns.
+
+    Only the CURRENT generation may hold the port (S477, 2026-10-30). Before
+    this guard, a watchdog restart racing an HTTP settings save could leave an
+    orphan reader holding a second fd on the same tty: the two threads then
+    split the byte stream, each assembling lines out of the other's halves, and
+    the parsers — which did not check NMEA checksums — turned those torn lines
+    into wild positions and a 18,150,846 km/h speed.
+    """
     import serial as _serial
     baud = _baud_for_port(port)
+    if gen != _reader_gen:
+        return                      # superseded before we even opened
     log.info(f"GPS: opening {port} at {baud}")
     with gps_lock:
         _gps_runtime.update({"port": port, "running": False, "port_present": port_present(port),
@@ -395,12 +434,22 @@ def _reader(port, stop_event):
         ser.port     = port
         ser.baudrate = baud
         ser.timeout  = 1
+        ser.write_timeout = 1       # a vanished USB device must not block a write forever
         ser.dtr      = False
         ser.open()
     except Exception as e:
         log.error(f"GPS: cannot open {port}: {e}")
         with gps_lock:
             _gps_runtime.update({"running": False, "port_present": port_present(port), "error": str(e)})
+        return
+
+    if gen != _reader_gen:
+        # A newer start() superseded us while opening — never become a second
+        # reader on the same tty.
+        try:
+            ser.close()
+        except Exception:
+            pass
         return
 
     if not _is_internal_uart(port):
@@ -412,9 +461,20 @@ def _reader(port, stop_event):
     with gps_lock:
         _gps_runtime.update({"running": True, "port_present": True, "error": ""})
 
-    while not stop_event.is_set():
+    while not stop_event.is_set() and gen == _reader_gen:
         try:
-            line = ser.readline().decode("ascii", errors="ignore").strip()
+            raw = ser.readline()
+            if not raw:
+                continue
+            text = raw.decode("ascii", errors="ignore").strip()
+            if not text:
+                continue
+            if not _nmea_ok(text):
+                # Torn/garbled sentence: count it, never parse it.
+                with gps_lock:
+                    _gps_runtime["bad_lines"] = int(_gps_runtime.get("bad_lines") or 0) + 1
+                continue
+            line = text
             if line.startswith(("$GPGGA", "$GNGGA")):
                 _parse_gga(line)
             elif line.startswith(("$GPRMC", "$GNRMC")):
@@ -484,7 +544,14 @@ def _stop_current():
     "Device or resource busy"/"cannot open" on a GPS settings change, leaving
     GPS down until the 5 s watchdog recovers it. Joining is deterministic:
     the reader closes the port on its way out (S404 sweep, 2026-08-11).
+
+    S477 (2026-10-30): the generation counter is the real guarantee. bumping
+    it first makes ANY earlier reader — including one whose own stop event was
+    already replaced — break out of its loop, so a timed-out join can no longer
+    leave a second reader on the tty. Caller holds _start_lock.
     """
+    global _reader_gen
+    _reader_gen += 1              # every older reader is now stale, not just _gps_thread
     _stop_event.set()
     t = _gps_thread
     if t is not None and t.is_alive():
@@ -492,7 +559,7 @@ def _stop_current():
 
 
 def gps_start(port):
-    global _gps_thread, _stop_event
+    global _gps_thread, _stop_event, _reader_gen
     port = str(port or "").strip()
     if not port:
         return
@@ -509,28 +576,32 @@ def gps_start(port):
             _gps_runtime.update({"port": port, "running": False, "port_present": False,
                                   "error": "Port not connected.", "source": "direct"})
         return
-    _stop_current()
-    _stop_event = threading.Event()
-    _gps_thread = threading.Thread(target=_reader, args=(port, _stop_event), daemon=True)
-    _gps_thread.start()
+    with _start_lock:
+        _stop_current()
+        _stop_event = threading.Event()
+        gen = _reader_gen
+        _gps_thread = threading.Thread(target=_reader, args=(port, _stop_event, gen), daemon=True)
+        _gps_thread.start()
 
 
 def _start_proxy(om_url, fallback_port=""):
     global _gps_thread, _stop_event
-    _stop_current()
-    _stop_event = threading.Event()
-    _gps_thread = threading.Thread(target=_proxy_reader,
-                                   args=(om_url, fallback_port, _stop_event), daemon=True)
-    _gps_thread.start()
+    with _start_lock:
+        _stop_current()
+        _stop_event = threading.Event()
+        _gps_thread = threading.Thread(target=_proxy_reader,
+                                       args=(om_url, fallback_port, _stop_event), daemon=True)
+        _gps_thread.start()
 
 
 def gps_stop():
     global _gps_thread
-    _stop_event.set()
-    with gps_lock:
-        gps_state.update({"lat": None, "lon": None, "alt": None, "sats": 0, "sats_view": 0, "fix": False, "speed": None})
-        _gps_runtime.update({"port": "", "running": False, "port_present": False, "error": "", "source": ""})
-    _gps_thread = None
+    with _start_lock:
+        _stop_current()
+        with gps_lock:
+            gps_state.update({"lat": None, "lon": None, "alt": None, "sats": 0, "sats_view": 0, "fix": False, "speed": None})
+            _gps_runtime.update({"port": "", "running": False, "port_present": False, "error": "", "source": ""})
+        _gps_thread = None
 
 
 def gps_set_manual(lat: float, lon: float):
