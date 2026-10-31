@@ -1715,6 +1715,22 @@ function speedPercentile(arr, p) {
   return s[Math.min(Math.floor(s.length * p), s.length - 1)];
 }
 
+// Top speed for the track stats: the highest speed HELD for ~3 s, not the 95th
+// percentile (S478, Filip: track 83 read "top 108" against a real 123.6 km/h
+// with 20 s at 120+; the percentile dates from June, when every speed came from
+// noisy position deltas). A 5-wide median drops a position that jumps out and
+// back (two high deltas in a row, which a 3-wide median lets through); anything
+// above 360 km/h — the recorder's REC_MAX_SPEED_MS cap — is dropped as garbage.
+function peakSpeed(speeds) {
+  const s = speeds.filter(v => Number.isFinite(v) && v <= 360);
+  let peak = 0;
+  for (let i = 0; i < s.length; i++) {
+    const win = s.slice(Math.max(0, i - 2), i + 3).sort((a, b) => a - b);
+    peak = Math.max(peak, win[Math.floor(win.length / 2)]);
+  }
+  return peak;
+}
+
 function _medianFilter3(arr) {
   return arr.map((v, i) => {
     if (i === 0 || i === arr.length - 1) return v;
@@ -1793,7 +1809,7 @@ function trackStats(track) {
   const dist = track.distance_m || trackDistance(pts);
   const avgKmh = duration > 0 ? dist / duration * 3.6 : 0;
   const rawSpeeds = segmentSpeeds(pts);
-  const maxKmh = speedPercentile(rawSpeeds, 0.95);
+  const maxKmh = peakSpeed(rawSpeeds);
 
   // Moving vs at-rest breakdown (after-action), split in two kinds by duration
   // (Filip, 2026-10-17) — mirrors app.py `_detect_stops`, so the numbers agree:
